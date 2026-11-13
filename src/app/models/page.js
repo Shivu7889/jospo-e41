@@ -354,8 +354,31 @@ export default function ModelsPage() {
               Configure cooler models, generate barcode/QR labels, and review stock availability.
             </p>
           </div>
-          <div className="flex items-center space-x-3">
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-primary-50 text-primary-700 border border-primary-200">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <a
+              href="/jospo-all-qr-codes.zip"
+              download="jospo-all-qr-codes.zip"
+              className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm hover:border-primary-300"
+              title="Download ZIP with all PNG and SVG QR codes"
+            >
+              <svg className="w-4 h-4 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span>Download All QR (.ZIP)</span>
+            </a>
+            <a
+              href="/qr-codes/printable-labels-sheet.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm hover:border-primary-300"
+              title="Open printable A4 sticker sheet in new tab"
+            >
+              <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+              </svg>
+              <span>Print A4 Label Sheet</span>
+            </a>
+            <span className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary-50 text-primary-700 border border-primary-200">
               Admin Protected
             </span>
           </div>
