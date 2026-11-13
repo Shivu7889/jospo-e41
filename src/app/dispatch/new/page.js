@@ -46,6 +46,7 @@ function NewDispatchContent() {
 
   // Live scan feedback banner
   const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' }
+  const [lastScannedModel, setLastScannedModel] = useState(null); // { model_id, model_code, model_name, timestamp }
 
   // Load models catalog and current stock
   const loadModelsAndStock = useCallback(async () => {
@@ -265,6 +266,61 @@ function NewDispatchContent() {
 
       return newItems;
     });
+
+    setLastScannedModel({
+      model_id: model.id,
+      model_code: model.code,
+      model_name: model.name,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Audio helper for Undo
+  const playUndoTone = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(550, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(320, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.12);
+    } catch (e) {}
+  };
+
+  // Undo Last Scan handler
+  const handleUndoLastScan = () => {
+    if (!lastScannedModel) return;
+
+    setItems((prev) => {
+      const existing = prev.find((item) => item.model_id === lastScannedModel.model_id);
+      if (!existing) return prev;
+
+      playUndoTone();
+      const newQty = existing.quantity - 1;
+
+      if (newQty <= 0) {
+        return prev.filter((item) => item.model_id !== lastScannedModel.model_id);
+      }
+      return prev.map((item) =>
+        item.model_id === lastScannedModel.model_id ? { ...item, quantity: newQty } : item
+      );
+    });
+
+    setLastScannedFeedback({
+      text: `Undid last scan: -1 ${lastScannedModel.model_code}`,
+      type: 'warning',
+    });
+
+    showToast(`↩️ Removed 1 unit of ${lastScannedModel.model_code}`, 'info');
+    setLastScannedModel(null);
   };
 
   // Manual Add Item
@@ -823,6 +879,32 @@ function NewDispatchContent() {
               onError={(err) => console.warn('QR Scanner reported:', err)}
             />
           </div>
+
+          {/* Quick Undo Button (One-tap fix for accidental double scans) */}
+          {lastScannedModel && (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 flex items-center justify-between shadow-sm animate-fadeIn">
+              <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                <span className="text-xl flex-shrink-0">↩️</span>
+                <div className="text-xs text-amber-950 truncate">
+                  <span>Scanned </span>
+                  <strong className="font-mono bg-amber-200/80 px-1.5 py-0.5 rounded font-bold">
+                    {lastScannedModel.model_code}
+                  </strong>
+                  <span className="text-amber-800 ml-1 hidden sm:inline truncate">
+                    ({lastScannedModel.model_name})
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleUndoLastScan}
+                className="btn-danger text-xs py-1.5 px-3.5 flex-shrink-0 font-bold shadow-xs active:scale-95 inline-flex items-center space-x-1"
+                title="Remove 1 unit of the last scanned cooler"
+              >
+                <span>Undo (-1)</span>
+              </button>
+            </div>
+          )}
 
           {/* Live Feedback Banner from Last Scan */}
           {lastScannedFeedback && (

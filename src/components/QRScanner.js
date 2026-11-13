@@ -6,11 +6,13 @@ export default function QRScanner({
   onScan,
   onError,
   isActive = true,
+  defaultCooldown = 3,
 }) {
   const containerIdRef = useRef(`qr-reader-container-${Math.random().toString(36).substring(2, 9)}`);
   const scannerRef = useRef(null);
   const isRunningRef = useRef(false);
   const lastScannedRef = useRef({ code: '', time: 0 });
+  const cooldownTimerRef = useRef(null);
 
   const [scannerStatus, setScannerStatus] = useState('initializing'); // 'initializing' | 'scanning' | 'paused' | 'error' | 'permission_denied'
   const [errorMessage, setErrorMessage] = useState('');
@@ -18,8 +20,11 @@ export default function QRScanner({
   const [flashActive, setFlashActive] = useState(false);
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [cooldownDuration, setCooldownDuration] = useState(defaultCooldown); // seconds
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+  const [duplicateBlocked, setDuplicateBlocked] = useState(false);
 
-  // Audio feedback using Web Audio API
+  // Audio feedback for successful scan
   const triggerAudioFeedback = useCallback(() => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -30,7 +35,7 @@ export default function QRScanner({
 
       osc.type = 'sine';
       osc.frequency.setValueAtTime(880, ctx.currentTime); // A5 note
-      osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.1);
 
       gain.gain.setValueAtTime(0.25, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
@@ -45,6 +50,31 @@ export default function QRScanner({
     }
   }, []);
 
+  // Audio & haptic feedback for rejected duplicate scan (cooldown active)
+  const triggerRejectFeedback = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate([150, 50, 150]);
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(260, ctx.currentTime); // Low warning buzz
+      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.15);
+    } catch (e) {}
+  }, []);
+
   // Haptic feedback
   const triggerHapticFeedback = useCallback(() => {
     try {
@@ -56,20 +86,48 @@ export default function QRScanner({
     }
   }, []);
 
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    };
+  }, []);
+
   // Handle successful scan from Html5Qrcode
   const handleDecodedText = useCallback((decodedText) => {
     const now = Date.now();
-    // Debounce identical scans within 1.2s to prevent single-frame spam,
-    // but allow different QR codes immediately, or same QR after 1.2s
-    if (lastScannedRef.current.code === decodedText && now - lastScannedRef.current.time < 1200) {
+    const cooldownMs = cooldownDuration * 1000;
+    const isSameCode = lastScannedRef.current.code === decodedText;
+    const elapsedSinceLastScan = now - lastScannedRef.current.time;
+
+    // If scanning the same QR code and cooldown is still active, ignore and alert
+    if (isSameCode && elapsedSinceLastScan < cooldownMs) {
+      setDuplicateBlocked(true);
+      triggerRejectFeedback();
+      setTimeout(() => setDuplicateBlocked(false), 900);
       return;
     }
 
+    // Valid scan! Update timestamp and trigger count
     lastScannedRef.current = { code: decodedText, time: now };
     setLastScannedItem({
       code: decodedText,
       timestamp: new Date().toLocaleTimeString(),
     });
+
+    // Start visual cooldown countdown
+    setCooldownRemaining(cooldownDuration);
+    if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+
+    cooldownTimerRef.current = setInterval(() => {
+      setCooldownRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(cooldownTimerRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
     // Visual flash
     setFlashActive(true);
@@ -82,7 +140,7 @@ export default function QRScanner({
     if (onScan) {
       onScan(decodedText);
     }
-  }, [onScan, triggerAudioFeedback, triggerHapticFeedback]);
+  }, [cooldownDuration, onScan, triggerAudioFeedback, triggerHapticFeedback, triggerRejectFeedback]);
 
   // Start the scanner
   const startScanning = useCallback(async (cameraIdToUse) => {
@@ -300,6 +358,27 @@ export default function QRScanner({
               {/* Animated Laser Scanning Line */}
               <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-primary-400 to-transparent shadow-[0_0_8px_#818cf8] animate-scanLine" />
             </div>
+
+            {/* Duplicate Scan Warning Banner */}
+            {duplicateBlocked && (
+              <div className="absolute top-4 inset-x-4 pointer-events-auto bg-amber-500 text-gray-950 font-bold text-xs py-2 px-3 rounded-xl shadow-xl flex items-center justify-center space-x-2 animate-bounce border-2 border-amber-300">
+                <span className="text-base">⚠️</span>
+                <span>Box already counted! Move camera to next box ({cooldownRemaining}s)</span>
+              </div>
+            )}
+
+            {/* Normal Active Cooldown Countdown Badge */}
+            {!duplicateBlocked && cooldownRemaining > 0 && (
+              <div className="absolute top-4 inset-x-4 pointer-events-none bg-gray-900/85 backdrop-blur-sm border border-emerald-500/40 text-emerald-300 text-xs py-1.5 px-3 rounded-xl flex items-center justify-between shadow-lg">
+                <span className="flex items-center space-x-2 truncate">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span>Counted <strong>{lastScannedItem?.code}</strong> (+1)</span>
+                </span>
+                <span className="font-mono text-emerald-400 text-[11px] bg-emerald-950/90 px-2 py-0.5 rounded border border-emerald-800 ml-2">
+                  Cooldown {cooldownRemaining}s
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -386,7 +465,26 @@ export default function QRScanner({
         </div>
 
         {/* Quick Action Toggle Buttons */}
-        <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center space-x-2 w-full sm:w-auto justify-end gap-1.5">
+          <div className="flex items-center space-x-1 bg-gray-900/90 border border-gray-700 rounded-lg p-0.5 text-[11px] text-gray-300">
+            <span className="px-1 text-gray-400 font-medium">Delay:</span>
+            {[2, 3, 5].map((sec) => (
+              <button
+                key={sec}
+                type="button"
+                onClick={() => setCooldownDuration(sec)}
+                className={`px-1.5 py-0.5 rounded font-mono font-semibold transition-colors ${
+                  cooldownDuration === sec
+                    ? 'bg-primary-600 text-white shadow-xs'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+                title={`Set ${sec} seconds cooldown on identical box scans`}
+              >
+                {sec}s
+              </button>
+            ))}
+          </div>
+
           {scannerStatus === 'scanning' ? (
             <button
               type="button"
