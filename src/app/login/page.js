@@ -112,6 +112,17 @@ export default function LoginPage() {
               </div>
             </div>
 
+            <div className="flex items-center justify-between text-xs">
+              <label className="flex items-center space-x-2 text-gray-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  defaultChecked
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="font-medium">Stay signed in on this device (1 Year)</span>
+              </label>
+            </div>
+
             <div>
               <button
                 type="submit"
