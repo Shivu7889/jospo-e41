@@ -14,6 +14,15 @@ export default function QRScanner({
   const isRunningRef = useRef(false);
   const lastScannedRef = useRef({ code: '', time: 0 });
   const cooldownTimerRef = useRef(null);
+  const onScanRef = useRef(onScan);
+  const activeInViewCodeRef = useRef(null);
+  const lastDetectionTimeRef = useRef(0);
+  const handleDecodedTextRef = useRef(null);
+
+  // Keep onScanRef always current to eliminate stale closure bugs
+  useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
 
   const [scannerStatus, setScannerStatus] = useState('initializing'); // 'initializing' | 'scanning' | 'paused' | 'error' | 'permission_denied'
   const [errorMessage, setErrorMessage] = useState('');
@@ -96,20 +105,25 @@ export default function QRScanner({
 
   // Handle successful scan from Html5Qrcode
   const handleDecodedText = useCallback((decodedText) => {
-    const now = Date.now();
-    const cooldownMs = cooldownDuration * 1000;
-    const isSameCode = lastScannedRef.current.code === decodedText;
-    const elapsedSinceLastScan = now - lastScannedRef.current.time;
+    const cleanText = (decodedText || '').trim();
+    if (!cleanText) return;
 
-    // If scanning the exact same QR code while camera is still hovering within cooldown, silently ignore
-    if (isSameCode && elapsedSinceLastScan < cooldownMs) {
+    const now = Date.now();
+
+    // 1. HARD CAMERA LOCK: If the camera is still pointing at the exact same QR code, DO NOT re-trigger!
+    // As long as the physical box stays in the viewfinder, it will NEVER scan again.
+    if (activeInViewCodeRef.current === cleanText) {
+      lastDetectionTimeRef.current = now;
       return;
     }
 
-    // Valid new or re-scanned code! Update timestamp
-    lastScannedRef.current = { code: decodedText, time: now };
+    // 2. A new box has entered the camera view!
+    activeInViewCodeRef.current = cleanText;
+    lastDetectionTimeRef.current = now;
+
+    lastScannedRef.current = { code: cleanText, time: now };
     setLastScannedItem({
-      code: decodedText,
+      code: cleanText,
       timestamp: new Date().toLocaleTimeString(),
     });
 
@@ -137,10 +151,16 @@ export default function QRScanner({
       triggerHapticFeedback();
     }
 
-    if (onScan) {
-      onScan(decodedText);
+    // Always trigger through onScanRef to ensure freshest handler
+    if (onScanRef.current) {
+      onScanRef.current(cleanText);
     }
-  }, [cooldownDuration, onScan, suppressAudio, triggerAudioFeedback, triggerHapticFeedback]);
+  }, [cooldownDuration, suppressAudio, triggerAudioFeedback, triggerHapticFeedback]);
+
+  // Keep handleDecodedTextRef synced
+  useEffect(() => {
+    handleDecodedTextRef.current = handleDecodedText;
+  }, [handleDecodedText]);
 
   // Start the scanner
   const startScanning = useCallback(async (cameraIdToUse) => {
@@ -204,10 +224,14 @@ export default function QRScanner({
         cameraConfig,
         scanConfig,
         (decodedText) => {
-          handleDecodedText(decodedText);
+          handleDecodedTextRef.current?.(decodedText);
         },
         (scanError) => {
-          // Frame-by-frame error (normal when no QR is in view)
+          // If no QR code has been in view for > 1200ms, unlock activeInViewCodeRef
+          // so another box (or this box after moving away) can scan cleanly
+          if (activeInViewCodeRef.current && Date.now() - lastDetectionTimeRef.current > 1200) {
+            activeInViewCodeRef.current = null;
+          }
         }
       );
 

@@ -41,7 +41,7 @@ function cleanAlphanumeric(str) {
 function getSignatures(str) {
   if (!str) return [];
   const base = cleanAlphanumeric(str);
-  const withoutBrand = base.replace(/^(?:jospo|jsp)/, '');
+  const withoutBrand = base.replace(/^(?:jospo|jopso|jsp)/, '');
   const withoutL = withoutBrand.replace(/(\d+)l([a-z]+)/, '$1$2');
   const withL = withoutBrand.replace(/(\d+)(cg|ncg)/, '$1l$2');
   return Array.from(new Set([base, withoutBrand, withoutL, withL])).filter(Boolean);
@@ -84,8 +84,13 @@ function NewDispatchContent() {
   // Live scan feedback banner & duplicate modal state
   const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' }
   const [lastScannedModel, setLastScannedModel] = useState(null); // { model_id, model_code, model_name, timestamp }
-  const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // Tracks unique box serials (e.g. 'MODEL_CODE::000001')
+  const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // State for UI rendering
   const [duplicateModalInfo, setDuplicateModalInfo] = useState(null); // { serial, modelName, modelCode }
+
+  // Synchronous duplicate protection store & scan mutex
+  const scannedUnitIdsRef = useRef(new Set());
+  const isProcessingScanRef = useRef(false);
+  const lastNonUniqueScanTimeRef = useRef(new Map());
 
   // Hardware barcode scanner gun input & buffer
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -375,7 +380,7 @@ function NewDispatchContent() {
     // e.g. JOSPO-ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG-000001, ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG000001
     const sortedCatalog = [...effectiveCatalog].sort((a, b) => b.code.length - a.code.length);
     const normInput = cleanAlphanumeric(clean);
-    const normInputNoBrand = normInput.replace(/^(?:jospo|jsp)/, '');
+    const normInputNoBrand = normInput.replace(/^(?:jospo|jopso|jsp)/, '');
 
     for (const m of sortedCatalog) {
       const mSigs = [
@@ -392,15 +397,16 @@ function NewDispatchContent() {
           : null;
 
         if (targetStr && targetStr.length > pref.length) {
-          const remainingNorm = targetStr.slice(pref.length);
-          if (remainingNorm.length >= 2 && /\d/.test(remainingNorm)) {
+          const rawRemainder = targetStr.slice(pref.length);
+          const remainingNorm = rawRemainder.replace(/^(?:sn|box|no|ser|serial)/, '');
+          if (remainingNorm.length >= 1 && /\d/.test(remainingNorm)) {
             let serialToDisplay = remainingNorm;
             const matchTrailingDigits = clean.match(/[-_#\s/:]*([A-Za-z0-9]+)$/);
             if (matchTrailingDigits && matchTrailingDigits[1]) {
-              serialToDisplay = matchTrailingDigits[1];
+              serialToDisplay = matchTrailingDigits[1].replace(/^(?:sn|box|no|ser|serial)/i, '');
             }
 
-            const cleanSerial = serialToDisplay.replace(/^[#\-_\s]+/, '').toUpperCase();
+            const cleanSerial = serialToDisplay.replace(/^[#\-_\s:]+/, '').toUpperCase();
             return {
               modelCode: m.code,
               matchedModel: m,
@@ -430,114 +436,135 @@ function NewDispatchContent() {
     const cleanQr = (qrData || '').trim();
     if (!cleanQr) return;
 
-    // Parse the QR code (extracts model and unique box serial)
-    const parsed = parseScannedQr(cleanQr, modelsCatalog);
-    if (!parsed || !parsed.matchedModel) {
-      playRejectTone();
-      setLastScannedFeedback({
-        text: `Unrecognized QR: "${cleanQr}". No matching cooler model found.`,
-        type: 'error',
-      });
-      showToast(`Unknown QR: ${cleanQr.slice(0, 32)}`, 'error');
+    // Mutex: Prevent concurrent / rapid double executions
+    if (isProcessingScanRef.current) {
       return;
     }
+    isProcessingScanRef.current = true;
 
-    const { matchedModel, modelCode, uniqueId, serialNumber, isUnique } = parsed;
-
-    // 1. DUPLICATE CHECK: Has this specific physical box already been scanned in this dispatch?
-    if (isUnique && uniqueId) {
-      if (scannedUnitIds.has(uniqueId)) {
+    try {
+      // Parse the QR code (extracts model and unique box serial)
+      const parsed = parseScannedQr(cleanQr, modelsCatalog);
+      if (!parsed || !parsed.matchedModel) {
         playRejectTone();
-        setDuplicateModalInfo({
-          serial: serialNumber,
-          modelName: matchedModel.name,
-          modelCode: matchedModel.code,
-        });
         setLastScannedFeedback({
-          text: `⚠️ DUPLICATE BOX! #${serialNumber} (${matchedModel.name}) is ALREADY LOADED in this truck!`,
+          text: `Unrecognized QR: "${cleanQr}". No matching cooler model found.`,
           type: 'error',
         });
-        showToast(`Duplicate: Box #${serialNumber} already scanned!`, 'error');
+        showToast(`Unknown QR: ${cleanQr.slice(0, 32)}`, 'error');
         return;
       }
-    }
 
-    // 2. Resolve database row (or matchedModel fallback)
-    let model = modelsCatalog.find((m) => m.code === modelCode || m.id === matchedModel.id);
-    if (!model) {
-      try {
-        const { data: dbModel } = await supabase
-          .from('cooler_models')
-          .select('*')
-          .eq('code', modelCode)
-          .single();
-        model = dbModel || matchedModel;
-      } catch (err) {
-        model = matchedModel;
-      }
-    }
+      const { matchedModel, modelCode, uniqueId, serialNumber, isUnique } = parsed;
 
-    // 3. Mark unique box as scanned for this session
-    if (isUnique && uniqueId) {
-      setScannedUnitIds((prev) => new Set(prev).add(uniqueId));
-    }
+      // 1. DUPLICATE CHECK: Has this specific physical box already been scanned in this dispatch?
+      if (isUnique && uniqueId) {
+        // SYNCHRONOUS REF CHECK: 100% immune to stale closures and asynchronous state batching!
+        if (scannedUnitIdsRef.current.has(uniqueId)) {
+          playRejectTone();
+          setDuplicateModalInfo({
+            serial: serialNumber,
+            modelName: matchedModel.name,
+            modelCode: matchedModel.code,
+          });
+          setLastScannedFeedback({
+            text: `⚠️ DUPLICATE BOX! #${serialNumber} (${matchedModel.name}) is ALREADY LOADED in this truck!`,
+            type: 'error',
+          });
+          showToast(`Duplicate: Box #${serialNumber} already scanned!`, 'error');
+          return;
+        }
 
-    // Get current stock
-    let currentStock = stockMap[model.id] ?? 0;
-
-    // 4. Play crisp positive confirmation chime
-    playScanTone();
-
-    // 5. Increment or Add item
-    setItems((prev) => {
-      const existing = prev.find(
-        (item) => item.model_id === model.id || item.model_code === model.code
-      );
-      let updatedCount = 1;
-      let newItems;
-
-      if (existing) {
-        updatedCount = existing.quantity + 1;
-        const currentSerials = existing.scanned_serials || [];
-        const updatedSerials = isUnique && serialNumber ? [...currentSerials, serialNumber] : currentSerials;
-        newItems = prev.map((item) =>
-          item.model_id === existing.model_id
-            ? { ...item, quantity: item.quantity + 1, scanned_serials: updatedSerials }
-            : item
-        );
+        // IMMEDIATELY register in ref synchronously BEFORE any async action or state dispatch!
+        scannedUnitIdsRef.current.add(uniqueId);
+        setScannedUnitIds(new Set(scannedUnitIdsRef.current));
       } else {
-        newItems = [
-          ...prev,
-          {
-            model_id: model.id || `temp-${model.code}`,
-            model_name: model.name,
-            model_code: model.code,
-            quantity: 1,
-            available_stock: currentStock,
-            scanned_serials: isUnique && serialNumber ? [serialNumber] : [],
-          },
-        ];
+        // NON-UNIQUE MODEL QR (e.g. bulk QR without serial):
+        // Enforce a strict minimum 2000ms rate-limit on the same model code to prevent camera dwell multiple increments
+        const lastScanTime = lastNonUniqueScanTimeRef.current.get(modelCode) || 0;
+        if (Date.now() - lastScanTime < 2000) {
+          return;
+        }
+        lastNonUniqueScanTimeRef.current.set(modelCode, Date.now());
       }
 
-      setLastScannedFeedback({
-        text: isUnique
-          ? `✅ ${model.name} — ${updatedCount} pcs (Box #${serialNumber})`
-          : `✅ ${model.name} — ${updatedCount} pcs`,
-        type: updatedCount > currentStock ? 'warning' : 'success',
+      // 2. Resolve database row (or matchedModel fallback)
+      let model = modelsCatalog.find((m) => m.code === modelCode || m.id === matchedModel.id);
+      if (!model) {
+        try {
+          const { data: dbModel } = await supabase
+            .from('cooler_models')
+            .select('*')
+            .eq('code', modelCode)
+            .single();
+          model = dbModel || matchedModel;
+        } catch (err) {
+          model = matchedModel;
+        }
+      }
+
+      // Get current stock
+      let currentStock = stockMap[model.id] ?? 0;
+
+      // 3. Play crisp positive confirmation chime
+      playScanTone();
+
+      // 4. Increment or Add item
+      setItems((prev) => {
+        const existing = prev.find(
+          (item) => item.model_id === model.id || item.model_code === model.code
+        );
+        let updatedCount = 1;
+        let newItems;
+
+        if (existing) {
+          updatedCount = existing.quantity + 1;
+          const currentSerials = existing.scanned_serials || [];
+          const updatedSerials = isUnique && serialNumber ? [...currentSerials, serialNumber] : currentSerials;
+          newItems = prev.map((item) =>
+            item.model_id === existing.model_id
+              ? { ...item, quantity: item.quantity + 1, scanned_serials: updatedSerials }
+              : item
+          );
+        } else {
+          newItems = [
+            ...prev,
+            {
+              model_id: model.id || `temp-${model.code}`,
+              model_name: model.name,
+              model_code: model.code,
+              quantity: 1,
+              available_stock: currentStock,
+              scanned_serials: isUnique && serialNumber ? [serialNumber] : [],
+            },
+          ];
+        }
+
+        setLastScannedFeedback({
+          text: isUnique
+            ? `✅ ${model.name} — ${updatedCount} pcs (Box #${serialNumber})`
+            : `✅ ${model.name} — ${updatedCount} pcs`,
+          type: updatedCount > currentStock ? 'warning' : 'success',
+        });
+
+        showToast(`${model.name} — ${updatedCount} pcs`, 'success');
+        return newItems;
       });
 
-      showToast(`${model.name} — ${updatedCount} pcs`, 'success');
-      return newItems;
-    });
-
-    setLastScannedModel({
-      model_id: model.id,
-      model_code: model.code,
-      model_name: model.name,
-      uniqueId: uniqueId || null,
-      serialNumber: serialNumber || null,
-      timestamp: Date.now(),
-    });
+      setLastScannedModel({
+        model_id: model.id,
+        model_code: model.code,
+        model_name: model.name,
+        uniqueId: uniqueId || null,
+        serialNumber: serialNumber || null,
+        timestamp: Date.now(),
+      });
+    } finally {
+      // Release mutex after short debounce
+      setTimeout(() => {
+        isProcessingScanRef.current = false;
+      }, 250);
+    }
   };
 
   // Remove an individual box serial number from an item
@@ -549,16 +576,13 @@ function NewDispatchContent() {
       const remainingSerials = (target.scanned_serials || []).filter((s) => s !== serialToRemove);
       const newQty = target.quantity - 1;
 
-      // Free from scannedUnitIds
+      // Free from scannedUnitIdsRef synchronously
       const boxKey = `${target.model_code}::${serialToRemove}`;
-      setScannedUnitIds((prevIds) => {
-        const next = new Set(prevIds);
-        next.delete(boxKey);
-        for (const id of prevIds) {
-          if (id.includes(serialToRemove)) next.delete(id);
-        }
-        return next;
-      });
+      scannedUnitIdsRef.current.delete(boxKey);
+      for (const id of scannedUnitIdsRef.current) {
+        if (id.includes(serialToRemove)) scannedUnitIdsRef.current.delete(id);
+      }
+      setScannedUnitIds(new Set(scannedUnitIdsRef.current));
 
       if (newQty <= 0) {
         return prev.filter((item) => item.model_id !== modelId);
@@ -599,13 +623,10 @@ function NewDispatchContent() {
   const handleUndoLastScan = () => {
     if (!lastScannedModel) return;
 
-    // Release unique ID from duplicate tracking if undone
+    // Release unique ID from duplicate tracking synchronously if undone
     if (lastScannedModel.uniqueId) {
-      setScannedUnitIds((prev) => {
-        const next = new Set(prev);
-        next.delete(lastScannedModel.uniqueId);
-        return next;
-      });
+      scannedUnitIdsRef.current.delete(lastScannedModel.uniqueId);
+      setScannedUnitIds(new Set(scannedUnitIdsRef.current));
     }
 
     setItems((prev) => {
@@ -731,7 +752,33 @@ function NewDispatchContent() {
         .map((item) => {
           if (item.model_id === modelId) {
             const nextQty = item.quantity + delta;
-            return nextQty > 0 ? { ...item, quantity: nextQty } : null;
+            if (nextQty <= 0) {
+              if (item.scanned_serials?.length) {
+                for (const s of item.scanned_serials) {
+                  scannedUnitIdsRef.current.delete(`${item.model_code}::${s}`);
+                }
+                for (const id of Array.from(scannedUnitIdsRef.current)) {
+                  if (item.scanned_serials.some((s) => id.includes(s))) {
+                    scannedUnitIdsRef.current.delete(id);
+                  }
+                }
+                setScannedUnitIds(new Set(scannedUnitIdsRef.current));
+              }
+              return null;
+            }
+
+            let nextSerials = item.scanned_serials || [];
+            if (delta < 0 && nextSerials.length > 0) {
+              const removedSerial = nextSerials[nextSerials.length - 1];
+              nextSerials = nextSerials.slice(0, -1);
+              scannedUnitIdsRef.current.delete(`${item.model_code}::${removedSerial}`);
+              for (const id of Array.from(scannedUnitIdsRef.current)) {
+                if (id.includes(removedSerial)) scannedUnitIdsRef.current.delete(id);
+              }
+              setScannedUnitIds(new Set(scannedUnitIdsRef.current));
+            }
+
+            return { ...item, quantity: nextQty, scanned_serials: nextSerials };
           }
           return item;
         })
@@ -753,15 +800,15 @@ function NewDispatchContent() {
     setItems((prev) => {
       const target = prev.find((item) => item.model_id === modelId);
       if (target?.scanned_serials?.length) {
-        setScannedUnitIds((prevIds) => {
-          const next = new Set(prevIds);
-          for (const id of prevIds) {
-            if (target.scanned_serials.some((s) => id.includes(s))) {
-              next.delete(id);
-            }
+        for (const s of target.scanned_serials) {
+          scannedUnitIdsRef.current.delete(`${target.model_code}::${s}`);
+        }
+        for (const id of Array.from(scannedUnitIdsRef.current)) {
+          if (target.scanned_serials.some((s) => id.includes(s))) {
+            scannedUnitIdsRef.current.delete(id);
           }
-          return next;
-        });
+        }
+        setScannedUnitIds(new Set(scannedUnitIdsRef.current));
       }
       return prev.filter((item) => item.model_id !== modelId);
     });
