@@ -212,47 +212,32 @@ function NewDispatchContent() {
     } catch (e) {}
   };
 
-  // Robust parser for QR codes (supports BarTender formats like JSP|J-100|000001 or J-100#000001 or legacy JOSPO-J100)
+  // Universal parser for BarTender & manufacturing QR codes
+  // Supports formats:
+  // - JOSPO-J50-000001 (Standard BarTender hyphenated serial)
+  // - JOSPO-J-50-000001 (Model with hyphen + serial)
+  // - JSP|J-50|000001 (BarTender pipe-delimited)
+  // - J-50#000001 (Hash delimited)
+  // - J-50-000001 or J50-000001 (Direct model prefix)
+  // - JOSPO-J50 (Legacy model-only QR fallback)
   const parseScannedQr = (rawQr, catalog = []) => {
     const clean = (rawQr || '').trim();
     if (!clean) return null;
 
-    // 1. Pipe format: JSP|J-100|000001 or J-100|000001
-    if (clean.includes('|')) {
-      const parts = clean.split('|');
-      if (parts.length >= 3) {
-        return {
-          modelCode: parts[1].trim(),
-          uniqueId: clean,
-          serialNumber: parts.slice(2).join('-').trim(),
-          isUnique: true,
-        };
-      } else if (parts.length === 2) {
-        return {
-          modelCode: parts[0].trim(),
-          uniqueId: clean,
-          serialNumber: parts[1].trim(),
-          isUnique: true,
-        };
-      }
+    // 1. Strip leading brand prefixes (JOSPO-, JSP|, JSP-, JOSPO/, JOSPO:)
+    let stripped = clean;
+    const brandPrefixMatch = clean.match(/^(?:JOSPO|JSP)[-_/|:\s]+/i);
+    if (brandPrefixMatch) {
+      stripped = clean.slice(brandPrefixMatch[0].length).trim();
     }
 
-    // 2. Hash format: J-100#000001
-    if (clean.includes('#')) {
-      const [mCode, sNum] = clean.split('#');
-      return {
-        modelCode: mCode.trim(),
-        uniqueId: clean,
-        serialNumber: sNum.trim(),
-        isUnique: true,
-      };
-    }
-
-    // 3. Direct match with existing model code or legacy qr_data
+    // 2. Direct match with existing model code or legacy qr_data (Model-only scan)
     const directModel = catalog.find(
       (m) =>
         m.code.toLowerCase() === clean.toLowerCase() ||
-        m.qr_data.toLowerCase() === clean.toLowerCase()
+        m.qr_data.toLowerCase() === clean.toLowerCase() ||
+        m.code.toLowerCase() === stripped.toLowerCase() ||
+        m.name.toLowerCase() === clean.toLowerCase()
     );
     if (directModel) {
       return {
@@ -263,21 +248,63 @@ function NewDispatchContent() {
       };
     }
 
-    // 4. Prefix match (e.g. J-100-000001 or JSP-J100-000001)
+    // 3. Match against known catalog models to extract model and unique serial number
     for (const m of catalog) {
-      if (clean.startsWith(m.code) && clean.length > m.code.length) {
-        const remainder = clean.slice(m.code.length).replace(/^[-_#:/]+/, '');
-        if (remainder) {
-          return {
-            modelCode: m.code,
-            uniqueId: clean,
-            serialNumber: remainder,
-            isUnique: true,
-          };
+      const codeClean = m.code.toLowerCase();
+      const codeAlphanum = codeClean.replace(/[^a-z0-9]/g, '');
+
+      // Check both original 'clean' and 'stripped' (after removing JOSPO-)
+      const candidates = [clean.toLowerCase(), stripped.toLowerCase()];
+
+      for (const cand of candidates) {
+        // Try matching with hyphenated code (e.g. j-50) or alphanum (j50)
+        const possiblePrefixes = [codeClean, codeAlphanum, m.qr_data.toLowerCase()];
+
+        for (const p of possiblePrefixes) {
+          if (cand.startsWith(p) && cand.length > p.length) {
+            const remainder = cand.slice(p.length).replace(/^[-_#|:/]+/, '').trim();
+            if (remainder) {
+              return {
+                modelCode: m.code,
+                uniqueId: clean, // Keep full scanned QR as the globally unique identifier
+                serialNumber: remainder.toUpperCase(),
+                isUnique: true,
+              };
+            }
+          }
         }
       }
     }
 
+    // 4. Pipe delimited format: JSP|J-50|000001 or J-50|000001
+    if (clean.includes('|')) {
+      const parts = clean.split('|').map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const potentialModel = parts[parts.length - 2];
+        const sNum = parts[parts.length - 1];
+        const matched = catalog.find((m) => m.code.toLowerCase() === potentialModel.toLowerCase());
+        return {
+          modelCode: matched ? matched.code : potentialModel,
+          uniqueId: clean,
+          serialNumber: sNum,
+          isUnique: true,
+        };
+      }
+    }
+
+    // 5. Hash delimited format: J-50#000001
+    if (clean.includes('#')) {
+      const [mCode, sNum] = clean.split('#');
+      const matched = catalog.find((m) => m.code.toLowerCase() === mCode.trim().toLowerCase());
+      return {
+        modelCode: matched ? matched.code : mCode.trim(),
+        uniqueId: clean,
+        serialNumber: sNum.trim(),
+        isUnique: true,
+      };
+    }
+
+    // Fallback: treated as non-unique model scan
     return {
       modelCode: clean,
       uniqueId: null,
