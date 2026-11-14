@@ -2,17 +2,28 @@ const QRCode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 
-// Models featuring actual Jospo factory models + serials
-const sampleSerials = [
-  { modelName: 'Rolex 35 CG WG', modelCode: 'ROLEX-35', serial: '000001', qrPayload: 'JSP|Rolex 35 CG WG|000001', batch: 'B-2026-11' },
-  { modelName: 'Rolex 35 CG WG', modelCode: 'ROLEX-35', serial: '000002', qrPayload: 'JSP|Rolex 35 CG WG|000002', batch: 'B-2026-11' },
-  { modelName: 'Defender 110', modelCode: 'DEFENDER-110', serial: '000001', qrPayload: 'JSP|Defender 110|000001', batch: 'B-2026-11' },
-  { modelName: 'Defender 110', modelCode: 'DEFENDER-110', serial: '000002', qrPayload: 'JSP|Defender 110|000002', batch: 'B-2026-11' },
-  { modelName: 'IceCool 65', modelCode: 'ICECOOL-65', serial: '000001', qrPayload: 'JSP|IceCool 65|000001', batch: 'B-2026-11' },
-  { modelName: 'Maxx 125', modelCode: 'MAXX-125', serial: '000001', qrPayload: 'JSP|Maxx 125|000001', batch: 'B-2026-11' },
-  { modelName: 'Neo 100', modelCode: 'NEO-100', serial: '000001', qrPayload: 'JSP|Neo 100|000001', batch: 'B-2026-11' },
-  { modelName: 'Jospo J-50', modelCode: 'J-50', serial: '000001', qrPayload: 'JOSPO-J50-000001', batch: 'B-2026-11' },
-  { modelName: 'Jospo J-50', modelCode: 'J-50', serial: '000002', qrPayload: 'JOSPO-J50-000002', batch: 'B-2026-11' },
+// EXACT 20 MODELS
+const exactModels = [
+  { code: 'ICECOOL-55-CG-WG', name: 'Jospo Icecool 55 CG WG', specs: '55L, CG', qrBase: 'JOSPO-ICECOOL55CGWG' },
+  { code: 'ICECOOL-55-NCG-WG', name: 'Jospo Icecool 55 NCG WG', specs: '55L, NCG', qrBase: 'JOSPO-ICECOOL55LNCGWG' },
+  { code: 'ICECOOL-65-CG-WG', name: 'Jospo Icecool 65 CG WG', specs: '65L, CG', qrBase: 'JOSPO-ICECOOL65LCGWG' },
+  { code: 'ICECOOL-65-NCG-WG', name: 'Jospo Icecool 65 NCG WG', specs: '65L, NCG', qrBase: 'JOSPO-ICECOOL65LNCGWG' },
+  { code: 'NEO-100-CG-WG', name: 'Jospo Neo 100 CG WG', specs: '100L, CG', qrBase: 'JOSPO-NEO100CGWG' },
+  { code: 'NEO-100-NCG-WG', name: 'Jospo Neo 100 NCG WG', specs: '100L, NCG', qrBase: 'JOSPO-NEO100NCGWG' },
+  { code: 'NEO-80-CG-WG', name: 'Jospo Neo 80 CG WG', specs: '80L, CG', qrBase: 'JOSPO-NEO80CGWG' },
+  { code: 'NEO-80-NCG-WG', name: 'Jospo Neo 80 NCG WG', specs: '80L, NCG', qrBase: 'JOSPO-NEO80NCGWG' },
+  { code: 'ROLEX-35-CG-DG', name: 'Jospo Rolex 35 CG DG', specs: '35L, CG', qrBase: 'JOSPO-ROLEX35CGDG' },
+  { code: 'ROLEX-35-CG-WG', name: 'Jospo Rolex 35 CG WG', specs: '35L, CG', qrBase: 'JOSPO-ROLEX35CGWG' },
+  { code: 'ROLEX-35-NCG-DG', name: 'Jospo Rolex 35 NCG DG', specs: '35L, NCG', qrBase: 'JOSPO-ROLEX35NCGDG' },
+  { code: 'ROLEX-35-NCG-WG', name: 'Jospo Rolex 35 NCG WG', specs: '35L, NCG', qrBase: 'JOSPO-ROLEX35NCGWG' },
+  { code: 'ROLEX-65-CG-DG', name: 'Jospo Rolex 65 CG DG', specs: '65L, CG', qrBase: 'JOSPO-ROLEX65CGDG' },
+  { code: 'ROLEX-65-CG-WG', name: 'Jospo Rolex 65 CG WG', specs: '65L, CG', qrBase: 'JOSPO-ROLEX65CGWG' },
+  { code: 'ROLEX-65-NCG-DG', name: 'Jospo Rolex 65 NCG DG', specs: '65L, DG', qrBase: 'JOSPO-ROLEX65NCGDG' },
+  { code: 'ROLEX-65-NCG-WG', name: 'Jopso Rolex 65 NCG WG', specs: '65L, NCG', qrBase: 'JOSPO-JOPSOROLEX65NCGWG' },
+  { code: 'SHINE-100-CG-WG', name: 'Jospo Shine 100 CG WG', specs: '100L, CG', qrBase: 'JOSPO-SHINE100CGWG' },
+  { code: 'SHINE-100-NCG-WG', name: 'Jospo Shine 100 NCG WG', specs: '100L, NCG', qrBase: 'JOSPO-SHINE100NCGWG' },
+  { code: 'SHINE-80-CG-WG', name: 'Jospo Shine 80 CG WG', specs: '80L, CG', qrBase: 'JOSPO-SHINE80CGWG' },
+  { code: 'SHINE-80-NCG-WG', name: 'Jospo Shine 80 NCG WG', specs: '80L, NCG', qrBase: 'JOSPO-SHINE80NCGWG' },
 ];
 
 async function generateBarTenderSamples() {
@@ -21,27 +32,21 @@ async function generateBarTenderSamples() {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  // Copy PDF from bartender_labels_100x50 if it exists
-  const srcPdf = path.join(__dirname, '..', 'bartender_labels_100x50', 'ALL_MODELS_100x50mm_LABELS.pdf');
-  const destPdf = path.join(outputDir, 'ALL_MODELS_100x50mm_LABELS.pdf');
-  if (fs.existsSync(srcPdf)) {
-    fs.copyFileSync(srcPdf, destPdf);
-    console.log(`✓ Copied master PDF to: ${destPdf}`);
-  }
-
   // 1. Generate CSV data template for BarTender
   const csvLines = [
-    'Model_Name,Model_Code,Serial_Number,QR_Payload,Batch_Number,Manufacturing_Unit,Created_Date',
+    'Model_Name,Model_Code,Serial_Number,QR_Payload,Specs,Manufacturing_Unit,Created_Date',
   ];
 
   const htmlCards = [];
 
-  for (const s of sampleSerials) {
-    const filenamePng = `QR_${s.modelCode}_${s.serial}.png`;
+  for (const m of exactModels) {
+    const serial = '000001';
+    const qrPayload = `JSP|${m.name}|${serial}`;
+    const filenamePng = `QR_${m.code}_${serial}.png`;
     const filePathPng = path.join(outputDir, filenamePng);
 
     // High res PNG for BarTender test
-    const pngBuffer = await QRCode.toBuffer(s.qrPayload, {
+    const pngBuffer = await QRCode.toBuffer(qrPayload, {
       type: 'png',
       width: 512,
       margin: 1,
@@ -51,39 +56,40 @@ async function generateBarTenderSamples() {
     fs.writeFileSync(filePathPng, pngBuffer);
 
     csvLines.push(
-      `"${s.modelName}","${s.modelCode}","${s.serial}","${s.qrPayload}","${s.batch}","Jospo E41","${new Date().toISOString().split('T')[0]}"`
+      `"${m.name}","${m.code}","${serial}","${qrPayload}","${m.specs}","Jospo E41","${new Date().toISOString().split('T')[0]}"`
     );
 
     const base64Data = pngBuffer.toString('base64');
     htmlCards.push(`
       <div class="label-card">
-        <div class="brand">JOSPO AIR COOLERS • UNIT E-41</div>
+        <div class="brand">JOSPO AIR COOLERS • ${m.specs}</div>
         <!-- 1. MODEL NAME IN BIG AND DARK FONT -->
-        <div class="model-title">${s.modelName}</div>
+        <div class="model-title">${m.name}</div>
+        <div class="model-code-tag">${m.code}</div>
         <div class="divider"></div>
         <!-- 2. QR CODE -->
-        <img class="qr-preview" src="data:image/png;base64,${base64Data}" alt="QR ${s.qrPayload}" />
+        <img class="qr-preview" src="data:image/png;base64,${base64Data}" alt="QR ${qrPayload}" />
         <!-- 3. SERIAL NUMBER IN DARK BOLD FONT -->
-        <div class="serial-badge">SN: ${s.serial}</div>
-        <div class="qr-payload-text">${s.qrPayload}</div>
-        <div class="footer-tag">GENUINE FACTORY PACKED</div>
+        <div class="serial-badge">SN: ${serial}</div>
+        <div class="qr-payload-text">${qrPayload}</div>
+        <div class="footer-tag">GENUINE FACTORY PACKED • UNIT E-41</div>
       </div>
     `);
 
-    console.log(`✓ Created unique QR: ${s.qrPayload}`);
+    console.log(`✓ Created unique QR for: ${m.code}`);
   }
 
   // Write CSV file
-  const csvPath = path.join(outputDir, 'jospo_bartender_template.csv');
+  const csvPath = path.join(outputDir, 'jospo_20_models_template.csv');
   fs.writeFileSync(csvPath, csvLines.join('\n'));
-  console.log(`✓ BarTender CSV template created at: ${csvPath}`);
+  console.log(`✓ BarTender 20 Models CSV template created at: ${csvPath}`);
 
   // Write HTML Interactive Preview Page
   const htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Jospo E41 - BarTender Labels with Big Dark Font & Serials</title>
+  <title>Jospo E41 - 20 Cooler Models BarTender Labels</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body {
@@ -94,7 +100,7 @@ async function generateBarTenderSamples() {
       color: #000000;
     }
     .container {
-      max-width: 1040px;
+      max-width: 1100px;
       margin: 0 auto;
     }
     .header-box {
@@ -171,7 +177,6 @@ async function generateBarTenderSamples() {
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 20px;
     }
-    /* LABEL CARD DESIGN: CRISP, INDUSTRIAL, THERMAL STICKER LOOK */
     .label-card {
       background: white;
       border: 3px solid #000000;
@@ -189,24 +194,29 @@ async function generateBarTenderSamples() {
     .brand {
       font-size: 10px;
       font-weight: 900;
-      letter-spacing: 1px;
+      letter-spacing: 0.5px;
       color: #ffffff;
       background: #000000;
-      padding: 3px 0;
+      padding: 3px 6px;
       border-radius: 4px;
       margin-bottom: 8px;
       text-transform: uppercase;
     }
-    /* BIG AND DARK FONT FOR MODEL NAME */
     .model-title {
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 900;
       color: #000000;
       text-transform: uppercase;
-      line-height: 1.1;
+      line-height: 1.15;
       letter-spacing: -0.5px;
-      margin: 8px 0;
+      margin: 6px 0 2px 0;
       word-break: break-word;
+    }
+    .model-code-tag {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 800;
+      color: #475569;
     }
     .divider {
       height: 2px;
@@ -215,14 +225,13 @@ async function generateBarTenderSamples() {
       margin: 6px 0 10px 0;
     }
     .qr-preview {
-      width: 170px;
-      height: 170px;
+      width: 160px;
+      height: 160px;
       margin: 0 auto;
       display: block;
       border: 1px solid #e2e8f0;
       background: white;
     }
-    /* SERIAL NUMBER IN DARK BOLD FONT */
     .serial-badge {
       margin-top: 10px;
       font-size: 18px;
@@ -264,31 +273,21 @@ async function generateBarTenderSamples() {
 <body>
   <div class="container">
     <div class="header-box">
-      <span class="badge">Jospo Air Coolers • Label Standard</span>
-      <h1>Production QR Labels: Big Dark Model Name & Serial Number</h1>
+      <span class="badge">Jospo Air Coolers • Exact 20 Models</span>
+      <h1>Production QR Labels for All 20 Active Models</h1>
       <p>
-        These labels are generated with <strong>Model Name in BIG, DARK, HEAVY font</strong>, large high-contrast <strong>QR code</strong>, and bold <strong>Serial Number</strong>.
+        These labels match your exact 20 production cooler models with <strong>BIG & DARK Model Names</strong>, <strong>high-contrast QR codes</strong>, and <strong>sequential Serial Numbers</strong>.
       </p>
 
-      <div class="test-instruction">
-        <strong>⚡ Live Duplicate Prevention Test:</strong>
-        <ol style="margin: 6px 0 0 0; padding-left: 20px; line-height: 1.6;">
-          <li>Open <strong>New Dispatch</strong> on your phone camera: <code>/dispatch/new</code></li>
-          <li>Scan <strong>Rolex 35 CG WG #000001</strong>: accepted as <strong>+1 unit</strong>!</li>
-          <li>Scan the <strong>same box #000001</strong> again: immediate <strong>DUPLICATE WARNING BUZZER</strong>!</li>
-          <li>Scan <strong>Rolex 35 CG WG #000002</strong>: accepted as a new unit!</li>
-        </ol>
-      </div>
-
       <div class="action-links">
-        <a href="ALL_MODELS_100x50mm_LABELS.pdf" target="_blank" class="btn">
-          📄 Open Multi-Page PDF (All 25 Models)
+        <a href="ALL_20_MODELS_100x50mm_LABELS.pdf" target="_blank" class="btn">
+          📄 Open Multi-Page PDF (All 20 Models)
         </a>
-        <a href="jospo_bartender_template.csv" download="jospo_bartender_template.csv" class="btn btn-secondary">
-          📥 Download BarTender CSV
+        <a href="/jospo_20_models_bartender_package.zip" download class="btn btn-secondary">
+          📦 Download 20 Models Complete Package (.ZIP)
         </a>
         <button onclick="window.print()" class="btn btn-secondary">
-          🖨️ Print This Sheet
+          🖨️ Print Labels Sheet
         </button>
       </div>
     </div>
@@ -302,7 +301,7 @@ async function generateBarTenderSamples() {
 
   const htmlPath = path.join(outputDir, 'sample-unique-labels.html');
   fs.writeFileSync(htmlPath, htmlContent);
-  console.log(`✓ Interactive sample page created at: ${htmlPath}`);
+  console.log(`✓ Interactive sample page updated at: ${htmlPath}`);
 }
 
 generateBarTenderSamples().catch(console.error);
