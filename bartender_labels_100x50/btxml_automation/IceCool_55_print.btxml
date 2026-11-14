@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="Print_IceCool_55">
+    <Print>
+      <Format>Jospo_IceCool_55.btw</Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>100</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="IceCool_55_Data" Type="btTextFile">
+        <Delimited Delimiter=",">
+          <TextDataFile File="individual_models/IceCool_55_100_labels.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="MODEL_NAME">
+        <Value>IceCool 55</Value>
+      </NamedSubString>
+      <NamedSubString Name="SERIAL_NO">
+        <Value>#000001</Value>
+      </NamedSubString>
+      <NamedSubString Name="QR_PAYLOAD">
+        <Value>JSP|IceCool 55|000001</Value>
+      </NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>

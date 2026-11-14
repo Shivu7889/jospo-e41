@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="Print_Maxx_155">
+    <Print>
+      <Format>Jospo_Maxx_155.btw</Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>100</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="Maxx_155_Data" Type="btTextFile">
+        <Delimited Delimiter=",">
+          <TextDataFile File="individual_models/Maxx_155_100_labels.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="MODEL_NAME">
+        <Value>Maxx 155</Value>
+      </NamedSubString>
+      <NamedSubString Name="SERIAL_NO">
+        <Value>#000001</Value>
+      </NamedSubString>
+      <NamedSubString Name="QR_PAYLOAD">
+        <Value>JSP|Maxx 155|000001</Value>
+      </NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>

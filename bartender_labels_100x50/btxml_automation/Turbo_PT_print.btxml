@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="Print_Turbo_PT">
+    <Print>
+      <Format>Jospo_Turbo_PT.btw</Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>100</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="Turbo_PT_Data" Type="btTextFile">
+        <Delimited Delimiter=",">
+          <TextDataFile File="individual_models/Turbo_PT_100_labels.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="MODEL_NAME">
+        <Value>Turbo PT</Value>
+      </NamedSubString>
+      <NamedSubString Name="SERIAL_NO">
+        <Value>#000001</Value>
+      </NamedSubString>
+      <NamedSubString Name="QR_PAYLOAD">
+        <Value>JSP|Turbo PT|000001</Value>
+      </NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>
