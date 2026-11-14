@@ -47,6 +47,7 @@ function NewDispatchContent() {
   // Live scan feedback banner
   const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' }
   const [lastScannedModel, setLastScannedModel] = useState(null); // { model_id, model_code, model_name, timestamp }
+  const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // Tracks unique box serials/QRs in this session
 
   // Load models catalog and current stock
   const loadModelsAndStock = useCallback(async () => {
@@ -170,7 +171,7 @@ function NewDispatchContent() {
     return () => clearInterval(timer);
   }, [submissionSuccess, router]);
 
-  // Audio/vibration helper for scan
+  // Audio/vibration helper for scan success
   const playScanTone = () => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -189,13 +190,132 @@ function NewDispatchContent() {
     } catch (e) {}
   };
 
+  // Audio/vibration helper for duplicate or rejected scan
+  const playRejectTone = () => {
+    try {
+      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate([180, 80, 180]);
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(220, ctx.currentTime); // Low warning buzz
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.22);
+    } catch (e) {}
+  };
+
+  // Robust parser for QR codes (supports BarTender formats like JSP|J-100|000001 or J-100#000001 or legacy JOSPO-J100)
+  const parseScannedQr = (rawQr, catalog = []) => {
+    const clean = (rawQr || '').trim();
+    if (!clean) return null;
+
+    // 1. Pipe format: JSP|J-100|000001 or J-100|000001
+    if (clean.includes('|')) {
+      const parts = clean.split('|');
+      if (parts.length >= 3) {
+        return {
+          modelCode: parts[1].trim(),
+          uniqueId: clean,
+          serialNumber: parts.slice(2).join('-').trim(),
+          isUnique: true,
+        };
+      } else if (parts.length === 2) {
+        return {
+          modelCode: parts[0].trim(),
+          uniqueId: clean,
+          serialNumber: parts[1].trim(),
+          isUnique: true,
+        };
+      }
+    }
+
+    // 2. Hash format: J-100#000001
+    if (clean.includes('#')) {
+      const [mCode, sNum] = clean.split('#');
+      return {
+        modelCode: mCode.trim(),
+        uniqueId: clean,
+        serialNumber: sNum.trim(),
+        isUnique: true,
+      };
+    }
+
+    // 3. Direct match with existing model code or legacy qr_data
+    const directModel = catalog.find(
+      (m) =>
+        m.code.toLowerCase() === clean.toLowerCase() ||
+        m.qr_data.toLowerCase() === clean.toLowerCase()
+    );
+    if (directModel) {
+      return {
+        modelCode: directModel.code,
+        uniqueId: null,
+        serialNumber: null,
+        isUnique: false,
+      };
+    }
+
+    // 4. Prefix match (e.g. J-100-000001 or JSP-J100-000001)
+    for (const m of catalog) {
+      if (clean.startsWith(m.code) && clean.length > m.code.length) {
+        const remainder = clean.slice(m.code.length).replace(/^[-_#:/]+/, '');
+        if (remainder) {
+          return {
+            modelCode: m.code,
+            uniqueId: clean,
+            serialNumber: remainder,
+            isUnique: true,
+          };
+        }
+      }
+    }
+
+    return {
+      modelCode: clean,
+      uniqueId: null,
+      serialNumber: null,
+      isUnique: false,
+    };
+  };
+
   // QR Scan Handler
   const handleScan = async (qrData) => {
     const cleanQr = (qrData || '').trim();
     if (!cleanQr) return;
 
-    // First check local models catalog
-    let model = modelsCatalog.find((m) => m.qr_data === cleanQr || m.code === cleanQr);
+    // Parse the QR code (extracts model and unique box serial)
+    const parsed = parseScannedQr(cleanQr, modelsCatalog);
+    const targetModelCode = parsed?.modelCode || cleanQr;
+    const uniqueId = parsed?.uniqueId;
+    const serialNumber = parsed?.serialNumber;
+    const isUnique = parsed?.isUnique;
+
+    // 1. DUPLICATE CHECK: Has this specific physical box already been scanned in this dispatch?
+    if (isUnique && uniqueId && scannedUnitIds.has(uniqueId)) {
+      playRejectTone();
+      setLastScannedFeedback({
+        text: `⚠️ DUPLICATE BOX! Unit #${serialNumber} has already been scanned in this truck!`,
+        type: 'error',
+      });
+      showToast(`Box #${serialNumber} already scanned in this dispatch!`, 'error');
+      return;
+    }
+
+    // 2. Find matching cooler model from local catalog (by code, name, or qr_data)
+    let model = modelsCatalog.find(
+      (m) =>
+        m.code.toLowerCase() === targetModelCode.toLowerCase() ||
+        m.name.toLowerCase() === targetModelCode.toLowerCase() ||
+        m.qr_data.toLowerCase() === targetModelCode.toLowerCase()
+    );
 
     // Fallback query if not in cache
     if (!model) {
@@ -203,15 +323,16 @@ function NewDispatchContent() {
         const { data: dbModel, error } = await supabase
           .from('cooler_models')
           .select('*')
-          .eq('qr_data', cleanQr)
+          .or(`code.ilike.${targetModelCode},name.ilike.${targetModelCode},qr_data.ilike.${targetModelCode}`)
           .single();
 
         if (error || !dbModel) {
+          playRejectTone();
           setLastScannedFeedback({
             text: `Unrecognized QR: "${cleanQr}". No matching cooler model found.`,
             type: 'error',
           });
-          showToast(`Unknown QR code: ${cleanQr}`, 'error');
+          showToast(`Unknown cooler model: ${targetModelCode}`, 'error');
           return;
         }
         model = dbModel;
@@ -219,6 +340,11 @@ function NewDispatchContent() {
         showToast('Error validating QR code', 'error');
         return;
       }
+    }
+
+    // 3. Mark unique box as scanned for this session
+    if (isUnique && uniqueId) {
+      setScannedUnitIds((prev) => new Set(prev).add(uniqueId));
     }
 
     // Get current stock
@@ -243,8 +369,12 @@ function NewDispatchContent() {
 
       if (existing) {
         updatedCount = existing.quantity + 1;
+        const currentSerials = existing.scanned_serials || [];
+        const updatedSerials = isUnique && serialNumber ? [...currentSerials, serialNumber] : currentSerials;
         newItems = prev.map((item) =>
-          item.model_id === model.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.model_id === model.id
+            ? { ...item, quantity: item.quantity + 1, scanned_serials: updatedSerials }
+            : item
         );
       } else {
         newItems = [
@@ -255,14 +385,19 @@ function NewDispatchContent() {
             model_code: model.code,
             quantity: 1,
             available_stock: currentStock,
+            scanned_serials: isUnique && serialNumber ? [serialNumber] : [],
           },
         ];
       }
 
       setLastScannedFeedback({
-        text: `+1 ${model.code} (${model.name}) added! Total: ${updatedCount}`,
+        text: isUnique
+          ? `✅ ${model.name} — ${updatedCount} pcs (Box #${serialNumber})`
+          : `✅ ${model.name} — ${updatedCount} pcs`,
         type: updatedCount > currentStock ? 'warning' : 'success',
       });
+
+      showToast(`${model.name} — ${updatedCount} pcs`, 'success');
 
       return newItems;
     });
@@ -271,6 +406,8 @@ function NewDispatchContent() {
       model_id: model.id,
       model_code: model.code,
       model_name: model.name,
+      uniqueId: uniqueId || null,
+      serialNumber: serialNumber || null,
       timestamp: Date.now(),
     });
   };
@@ -299,6 +436,15 @@ function NewDispatchContent() {
   const handleUndoLastScan = () => {
     if (!lastScannedModel) return;
 
+    // Release unique ID from duplicate tracking if undone
+    if (lastScannedModel.uniqueId) {
+      setScannedUnitIds((prev) => {
+        const next = new Set(prev);
+        next.delete(lastScannedModel.uniqueId);
+        return next;
+      });
+    }
+
     setItems((prev) => {
       const existing = prev.find((item) => item.model_id === lastScannedModel.model_id);
       if (!existing) return prev;
@@ -309,13 +455,19 @@ function NewDispatchContent() {
       if (newQty <= 0) {
         return prev.filter((item) => item.model_id !== lastScannedModel.model_id);
       }
+
+      // Pop last serial if present
+      const remainingSerials = (existing.scanned_serials || []).slice(0, -1);
+
       return prev.map((item) =>
-        item.model_id === lastScannedModel.model_id ? { ...item, quantity: newQty } : item
+        item.model_id === lastScannedModel.model_id
+          ? { ...item, quantity: newQty, scanned_serials: remainingSerials }
+          : item
       );
     });
 
     setLastScannedFeedback({
-      text: `Undid last scan: -1 ${lastScannedModel.model_code}`,
+      text: `Undid last scan: -1 ${lastScannedModel.model_code}${lastScannedModel.serialNumber ? ` (#${lastScannedModel.serialNumber})` : ''}`,
       type: 'warning',
     });
 
@@ -391,7 +543,21 @@ function NewDispatchContent() {
 
   // Remove item
   const handleRemoveItem = (modelId) => {
-    setItems((prev) => prev.filter((item) => item.model_id !== modelId));
+    setItems((prev) => {
+      const target = prev.find((item) => item.model_id === modelId);
+      if (target?.scanned_serials?.length) {
+        setScannedUnitIds((prevIds) => {
+          const next = new Set(prevIds);
+          for (const id of prevIds) {
+            if (target.scanned_serials.some((s) => id.includes(s))) {
+              next.delete(id);
+            }
+          }
+          return next;
+        });
+      }
+      return prev.filter((item) => item.model_id !== modelId);
+    });
   };
 
   // Total Items Count
@@ -968,24 +1134,32 @@ function NewDispatchContent() {
                     >
                       {/* Left info */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-mono font-bold text-sm text-primary-800 bg-primary-50 px-2 py-0.5 rounded border border-primary-200">
-                            {item.model_code}
-                          </span>
-                          <span className="text-sm font-semibold text-gray-900 truncate">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-base font-bold text-gray-900 tracking-tight">
                             {item.model_name}
                           </span>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium bg-gray-100 text-gray-700 border border-gray-200">
+                            {item.model_code}
+                          </span>
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            {item.quantity} pcs
+                          </span>
+                          {item.scanned_serials?.length > 0 && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary-50 text-primary-700 border border-primary-200">
+                              📦 {item.scanned_serials.length} unique boxes verified
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center space-x-3 text-xs mt-1">
                           <span className="text-gray-500">
                             Available in Stock:{' '}
                             <strong className={hasDeficit ? 'text-red-600' : 'text-gray-800'}>
-                              {item.available_stock}
+                              {item.available_stock} pcs
                             </strong>
                           </span>
                           {hasDeficit && (
                             <span className="badge-danger text-[10px]">
-                              Insufficient Stock (-{item.quantity - item.available_stock})
+                              Insufficient Stock (-{item.quantity - item.available_stock} pcs)
                             </span>
                           )}
                         </div>
@@ -1217,18 +1391,18 @@ function NewDispatchContent() {
                   return (
                     <tr key={item.model_id} className={deficit ? 'bg-rose-50/50' : ''}>
                       <td className="px-3 py-3">
-                        <span className="font-mono font-bold text-primary-800">{item.model_code}</span>
-                        <span className="block text-gray-600 text-[11px]">{item.model_name}</span>
+                        <span className="font-bold text-gray-900 text-sm block">{item.model_name}</span>
+                        <span className="font-mono text-gray-500 text-[11px]">{item.model_code}</span>
                       </td>
                       <td className="px-3 py-3 text-center text-gray-700 font-medium">
-                        {item.available_stock} units
+                        {item.available_stock} pcs
                       </td>
                       <td className="px-3 py-3 text-right font-bold text-gray-900">
-                        {item.quantity} units
+                        {item.quantity} pcs
                       </td>
                       <td className="px-3 py-3 text-right font-bold">
                         <span className={deficit ? 'text-red-600' : 'text-emerald-700'}>
-                          {remaining} units
+                          {remaining} pcs
                         </span>
                       </td>
                     </tr>
@@ -1237,11 +1411,11 @@ function NewDispatchContent() {
               </tbody>
               <tfoot className="bg-gray-50 border-t border-gray-200 font-bold text-xs text-gray-900">
                 <tr>
-                  <td colSpan={2} className="px-3 py-3 text-left">
-                    TOTAL UNITS TO DISPATCH
+                  <td colSpan={2} className="px-3 py-3 text-left uppercase tracking-wider">
+                    TOTAL DISPATCH QUANTITY
                   </td>
-                  <td colSpan={2} className="px-3 py-3 text-right text-base text-primary-700">
-                    {totalQuantity} units
+                  <td colSpan={2} className="px-3 py-3 text-right text-base font-extrabold text-primary-700">
+                    {totalQuantity} pcs
                   </td>
                 </tr>
               </tfoot>

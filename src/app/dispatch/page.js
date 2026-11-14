@@ -526,7 +526,7 @@ export default function DispatchListPage() {
                           {/* Total Quantity */}
                           <td className="whitespace-nowrap px-4 py-3.5 text-center">
                             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-800 border border-gray-200">
-                              {totalQty} units
+                              {totalQty} pcs
                             </span>
                             <span className="block text-[10px] text-gray-500 mt-0.5">
                               {itemCount} model{itemCount !== 1 ? 's' : ''}
@@ -631,11 +631,12 @@ export default function DispatchListPage() {
                                             <td className="py-2 px-3 font-mono font-bold text-primary-700">
                                               {item.cooler_models?.code || '—'}
                                             </td>
-                                            <td className="py-2 px-3 text-gray-800">
-                                              {item.cooler_models?.name || 'Cooler Model'}
+                                            <td className="py-2 px-3">
+                                              <span className="font-bold text-gray-900 block">{item.cooler_models?.name || 'Cooler Model'}</span>
+                                              <span className="font-mono text-gray-400 text-[10px]">{item.cooler_models?.code}</span>
                                             </td>
-                                            <td className="py-2 px-3 text-right font-bold text-gray-900">
-                                              {item.quantity} units
+                                            <td className="py-2 px-3 text-right font-extrabold text-gray-900">
+                                              {item.quantity} pcs
                                             </td>
                                           </tr>
                                         ))}
@@ -693,7 +694,7 @@ export default function DispatchListPage() {
                 <div className="flex justify-between">
                   <span className="text-gray-500">Total Coolers:</span>
                   <span className="font-bold text-primary-700">
-                    {calculateTotalQty(confirmModalData.dispatch_items)} units
+                    {calculateTotalQty(confirmModalData.dispatch_items)} pcs
                   </span>
                 </div>
               </div>
@@ -741,7 +742,7 @@ export default function DispatchListPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 mb-4">
                 <strong>Attention:</strong> Cancelling this confirmed dispatch will automatically return{' '}
-                <strong>{calculateTotalQty(cancelModalData.dispatch_items)} units</strong> back to inventory as a{' '}
+                <strong>{calculateTotalQty(cancelModalData.dispatch_items)} pcs</strong> back to inventory as a{' '}
                 <em>dispatch_reversal</em> audit entry.
               </div>
 
@@ -862,7 +863,7 @@ export default function DispatchListPage() {
                 <div>
                   <span className="text-gray-500 block">Total Quantity:</span>
                   <span className="font-bold text-primary-700">
-                    {calculateTotalQty(viewDetailsModal.dispatch_items)} units
+                    {calculateTotalQty(viewDetailsModal.dispatch_items)} pcs
                   </span>
                 </div>
               </div>
@@ -891,19 +892,19 @@ export default function DispatchListPage() {
                 <table className="min-w-full divide-y divide-gray-200 text-xs">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Model Code</th>
                       <th className="px-3 py-2 text-left font-semibold text-gray-600">Model Name</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Model Code</th>
                       <th className="px-3 py-2 text-right font-semibold text-gray-600">Quantity</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 bg-white">
                     {viewDetailsModal.dispatch_items?.map((item, idx) => (
                       <tr key={item.id || idx}>
-                        <td className="px-3 py-2 font-mono font-bold text-primary-700">
+                        <td className="px-3 py-2 font-bold text-gray-900">{item.cooler_models?.name}</td>
+                        <td className="px-3 py-2 font-mono text-gray-500 text-[11px]">
                           {item.cooler_models?.code}
                         </td>
-                        <td className="px-3 py-2 text-gray-800">{item.cooler_models?.name}</td>
-                        <td className="px-3 py-2 text-right font-bold text-gray-900">{item.quantity} units</td>
+                        <td className="px-3 py-2 text-right font-bold text-gray-900">{item.quantity} pcs</td>
                       </tr>
                     ))}
                   </tbody>
