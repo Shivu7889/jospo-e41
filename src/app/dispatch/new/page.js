@@ -81,11 +81,16 @@ function NewDispatchContent() {
   const [manualModelId, setManualModelId] = useState('');
   const [manualQuantity, setManualQuantity] = useState(1);
 
-  // Live scan feedback banner & duplicate modal state
-  const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' }
+  const DISPATCH_DRAFT_KEY = 'jospo_dispatch_draft_v1';
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [draftInfo, setDraftInfo] = useState(null); // { vehicle, destination, totalQty, itemCount, savedAt }
+  const isDraftInitializedRef = useRef(false);
+  const feedbackTimerRef = useRef(null);
+
+  // Live scan feedback banner
+  const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' | 'duplicate' }
   const [lastScannedModel, setLastScannedModel] = useState(null); // { model_id, model_code, model_name, timestamp }
   const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // State for UI rendering
-  const [duplicateModalInfo, setDuplicateModalInfo] = useState(null); // { serial, modelName, modelCode }
 
   // Synchronous duplicate protection store & scan mutex
   const scannedUnitIdsRef = useRef(new Set());
@@ -246,6 +251,110 @@ function NewDispatchContent() {
     }
     return () => clearInterval(timer);
   }, [submissionSuccess, router]);
+
+  // Restore persistent draft on mount (survives tab close / accidental navigation / battery death)
+  useEffect(() => {
+    if (editId) {
+      isDraftInitializedRef.current = true;
+      return;
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        const savedDraft = localStorage.getItem(DISPATCH_DRAFT_KEY);
+        if (savedDraft) {
+          const parsed = JSON.parse(savedDraft);
+          const hasItems = Array.isArray(parsed?.items) && parsed.items.length > 0;
+          const hasVehicle = Boolean(parsed?.vehicleNumber?.trim());
+
+          if (hasItems || hasVehicle) {
+            if (parsed.vehicleNumber) setVehicleNumber(parsed.vehicleNumber);
+            if (parsed.fromLocation) setFromLocation(parsed.fromLocation);
+            if (parsed.destination) setDestination(parsed.destination);
+            if (parsed.dispatchDate) setDispatchDate(parsed.dispatchDate);
+            if (parsed.remarks) setRemarks(parsed.remarks);
+
+            if (hasItems) {
+              setItems(parsed.items);
+              const restoredIds = Array.isArray(parsed.scannedUnitIds) && parsed.scannedUnitIds.length > 0
+                ? parsed.scannedUnitIds
+                : parsed.items.flatMap((i) => (i.scanned_serials || []).map((s) => `${i.model_code}::${s}`));
+
+              scannedUnitIdsRef.current = new Set(restoredIds);
+              setScannedUnitIds(new Set(restoredIds));
+              setCurrentStep(parsed.currentStep || 2);
+            } else {
+              setCurrentStep(parsed.currentStep || 1);
+            }
+
+            const totalLoadedQty = (parsed.items || []).reduce(
+              (sum, item) => sum + (Number(item.quantity) || 0),
+              0
+            );
+
+            setDraftRestored(true);
+            setDraftInfo({
+              vehicle: parsed.vehicleNumber || 'Unassigned Vehicle',
+              destination: parsed.destination || '',
+              totalQty: totalLoadedQty,
+              itemCount: parsed.items?.length || 0,
+              savedAt: parsed.savedAt
+                ? new Date(parsed.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '',
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not restore dispatch draft from storage:', err);
+    } finally {
+      isDraftInitializedRef.current = true;
+    }
+  }, [editId]);
+
+  // Auto-save active draft into localStorage on every change
+  useEffect(() => {
+    if (editId || !isDraftInitializedRef.current || submissionSuccess) return;
+
+    try {
+      if (typeof window !== 'undefined') {
+        const hasContent = Boolean(vehicleNumber.trim()) || items.length > 0;
+        if (hasContent) {
+          const snapshot = {
+            vehicleNumber,
+            fromLocation,
+            destination,
+            dispatchDate,
+            remarks,
+            items,
+            scannedUnitIds: Array.from(scannedUnitIdsRef.current),
+            currentStep,
+            savedAt: Date.now(),
+          };
+          localStorage.setItem(DISPATCH_DRAFT_KEY, JSON.stringify(snapshot));
+        }
+      }
+    } catch (err) {
+      console.warn('Auto-save error:', err);
+    }
+  }, [
+    vehicleNumber,
+    fromLocation,
+    destination,
+    dispatchDate,
+    remarks,
+    items,
+    currentStep,
+    editId,
+    submissionSuccess,
+  ]);
+
+  // Clean up feedback timer on unmount
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    };
+  }, []);
 
   // Audio/vibration helper for scan success
   const playScanTone = () => {
@@ -462,16 +571,14 @@ function NewDispatchContent() {
         // SYNCHRONOUS REF CHECK: 100% immune to stale closures and asynchronous state batching!
         if (scannedUnitIdsRef.current.has(uniqueId)) {
           playRejectTone();
-          setDuplicateModalInfo({
-            serial: serialNumber,
-            modelName: matchedModel.name,
-            modelCode: matchedModel.code,
-          });
           setLastScannedFeedback({
-            text: `⚠️ DUPLICATE BOX! #${serialNumber} (${matchedModel.name}) is ALREADY LOADED in this truck!`,
-            type: 'error',
+            text: `⚠️ Box #${serialNumber} (${matchedModel.name}) is ALREADY LOADED in this truck (Skipped)`,
+            type: 'duplicate',
           });
-          showToast(`Duplicate: Box #${serialNumber} already scanned!`, 'error');
+          if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+          feedbackTimerRef.current = setTimeout(() => {
+            setLastScannedFeedback((prev) => (prev?.type === 'duplicate' ? null : prev));
+          }, 3500);
           return;
         }
 
@@ -480,9 +587,9 @@ function NewDispatchContent() {
         setScannedUnitIds(new Set(scannedUnitIdsRef.current));
       } else {
         // NON-UNIQUE MODEL QR (e.g. bulk QR without serial):
-        // Enforce a strict minimum 2000ms rate-limit on the same model code to prevent camera dwell multiple increments
+        // Enforce a strict minimum 1200ms rate-limit on the same model code to prevent camera dwell multiple increments
         const lastScanTime = lastNonUniqueScanTimeRef.current.get(modelCode) || 0;
-        if (Date.now() - lastScanTime < 2000) {
+        if (Date.now() - lastScanTime < 1200) {
           return;
         }
         lastNonUniqueScanTimeRef.current.set(modelCode, Date.now());
@@ -542,12 +649,16 @@ function NewDispatchContent() {
 
         setLastScannedFeedback({
           text: isUnique
-            ? `✅ ${model.name} — ${updatedCount} pcs (Box #${serialNumber})`
-            : `✅ ${model.name} — ${updatedCount} pcs`,
+            ? `✓ Added: ${model.name} (#${serialNumber}) · ${updatedCount} loaded`
+            : `✓ Added: ${model.name} · ${updatedCount} loaded`,
           type: updatedCount > currentStock ? 'warning' : 'success',
         });
 
-        showToast(`${model.name} — ${updatedCount} pcs`, 'success');
+        if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = setTimeout(() => {
+          setLastScannedFeedback((prev) => (prev?.type === 'success' || prev?.type === 'warning' ? null : prev));
+        }, 4000);
+
         return newItems;
       });
 
@@ -915,6 +1026,13 @@ function NewDispatchContent() {
 
       if (itemsError) throw itemsError;
 
+      // Clear local auto-save draft upon successful server save
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(DISPATCH_DRAFT_KEY);
+        }
+      } catch (e) {}
+
       showToast('Dispatch draft saved successfully!', 'success');
       router.push('/dispatch');
     } catch (err) {
@@ -922,6 +1040,37 @@ function NewDispatchContent() {
       showToast(err.message || 'Failed to save draft dispatch', 'error');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Discard draft / reset active loading session
+  const handleDiscardDraft = () => {
+    const totalUnits = items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+    const msg = totalUnits > 0
+      ? `Clear active dispatch for ${vehicleNumber || 'this vehicle'} (${totalUnits} units loaded)?\n\nAll scanned boxes will be cleared so you can start a fresh dispatch.`
+      : 'Clear current dispatch draft?';
+
+    if (window.confirm(msg)) {
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(DISPATCH_DRAFT_KEY);
+        }
+      } catch (e) {}
+
+      setVehicleNumber('');
+      setDestination('');
+      setFromLocation('Jospo E41');
+      setDispatchDate(todayStr);
+      setRemarks('');
+      setItems([]);
+      scannedUnitIdsRef.current.clear();
+      setScannedUnitIds(new Set());
+      setLastScannedFeedback(null);
+      setLastScannedModel(null);
+      setCurrentStep(1);
+      setDraftRestored(false);
+      setDraftInfo(null);
+      showToast('Loading session cleared. Ready for new vehicle.', 'info');
     }
   };
 
@@ -1011,6 +1160,13 @@ function NewDispatchContent() {
       if (rpcResult && rpcResult.success === false) {
         throw new Error(rpcResult.error || 'Stock deduction failed during confirmation');
       }
+
+      // Clear local auto-save draft upon successful confirmation
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(DISPATCH_DRAFT_KEY);
+        }
+      } catch (e) {}
 
       // Success screen
       setSubmissionSuccess({
@@ -1120,6 +1276,44 @@ function NewDispatchContent() {
           📱 Mobile Scanner
         </span>
       </div>
+
+      {/* Active Session Restored Notification */}
+      {draftRestored && draftInfo && (
+        <div className="bg-sky-50 border border-sky-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-sky-950 shadow-xs animate-fadeIn">
+          <div className="flex items-center space-x-2.5">
+            <span className="text-xl flex-shrink-0">📦</span>
+            <div>
+              <p className="font-bold text-sky-900">
+                Resumed Active Session: Vehicle{' '}
+                <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-sky-200 font-bold">
+                  {draftInfo.vehicle}
+                </span>{' '}
+                ({draftInfo.totalQty} units loaded)
+              </p>
+              <p className="text-[11px] text-sky-700 mt-0.5">
+                Your previously scanned boxes and vehicle details were automatically restored.
+                {draftInfo.savedAt && ` (Saved at ${draftInfo.savedAt})`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 flex-shrink-0 justify-end">
+            <button
+              type="button"
+              onClick={() => setDraftRestored(false)}
+              className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-semibold text-xs transition-colors shadow-2xs"
+            >
+              Continue Loading
+            </button>
+            <button
+              type="button"
+              onClick={handleDiscardDraft}
+              className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-lg font-semibold text-xs transition-colors"
+            >
+              Discard & Start New
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Progress Stepper Bar */}
       <div className="grid grid-cols-3 gap-2 p-1.5 bg-gray-100 rounded-xl text-center text-xs font-semibold">
@@ -1296,46 +1490,24 @@ function NewDispatchContent() {
               <span className="text-gray-500">→</span>
               <span className="font-medium text-gray-800">{destination}</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setCurrentStep(1)}
-              className="text-primary-700 hover:text-primary-900 font-semibold underline"
-            >
-              Edit Route
-            </button>
-          </div>
-
-          {/* DUPLICATE BOX MODAL ALERT */}
-          {duplicateModalInfo && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
-              <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border-2 border-rose-500 text-center animate-scaleUp">
-                <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-3xl mx-auto mb-4 animate-bounce">
-                  ⚠️
-                </div>
-                <h3 className="text-xl font-extrabold text-gray-900 mb-2">
-                  Duplicate Box Detected!
-                </h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Physical box{' '}
-                  <strong className="font-mono bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold">
-                    #{duplicateModalInfo.serial}
-                  </strong>{' '}
-                  for <strong className="text-gray-900">{duplicateModalInfo.modelName}</strong>{' '}
-                  is <span className="text-rose-600 font-bold">already scanned & loaded</span> into this vehicle.
-                </p>
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium mb-6 text-left">
-                  🛑 <strong>Do not load this box again!</strong> Each printed BarTender box has a unique serial number. Please inspect the box label and set aside duplicates.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDuplicateModalInfo(null)}
-                  className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-colors shadow-sm"
-                >
-                  Dismiss Warning & Continue
-                </button>
-              </div>
+            <div className="flex items-center space-x-3">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(1)}
+                className="text-primary-700 hover:text-primary-900 font-semibold underline"
+              >
+                Edit Route
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardDraft}
+                className="text-rose-600 hover:text-rose-800 font-semibold underline"
+                title="Discard this loading session and start fresh"
+              >
+                Clear / Reset
+              </button>
             </div>
-          )}
+          </div>
 
           {/* QR Scanner Component & Hardware Barcode Gun Input */}
           <div className="space-y-3">
@@ -1410,19 +1582,19 @@ function NewDispatchContent() {
           {/* Live Feedback Banner from Last Scan */}
           {lastScannedFeedback && (
             <div
-              className={`p-3 rounded-xl border text-xs font-medium flex items-center justify-between animate-fadeIn ${
+              className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between transition-all duration-300 shadow-xs animate-fadeIn ${
                 lastScannedFeedback.type === 'error'
                   ? 'bg-rose-50 border-rose-200 text-rose-800'
-                  : lastScannedFeedback.type === 'warning'
-                  ? 'bg-amber-50 border-amber-200 text-amber-800'
-                  : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : lastScannedFeedback.type === 'duplicate' || lastScannedFeedback.type === 'warning'
+                  ? 'bg-amber-50 border-amber-300 text-amber-900 ring-2 ring-amber-300/40'
+                  : 'bg-emerald-50 border-emerald-300 text-emerald-900 ring-2 ring-emerald-300/40'
               }`}
             >
-              <div className="flex items-center space-x-2">
-                <span>
+              <div className="flex items-center space-x-2.5">
+                <span className="text-base flex-shrink-0">
                   {lastScannedFeedback.type === 'error'
                     ? '❌'
-                    : lastScannedFeedback.type === 'warning'
+                    : lastScannedFeedback.type === 'duplicate' || lastScannedFeedback.type === 'warning'
                     ? '⚠️'
                     : '✅'}
                 </span>
@@ -1431,7 +1603,7 @@ function NewDispatchContent() {
               <button
                 type="button"
                 onClick={() => setLastScannedFeedback(null)}
-                className="text-gray-400 hover:text-gray-600 ml-2"
+                className="text-gray-400 hover:text-gray-600 ml-2 text-sm leading-none"
               >
                 ✕
               </button>

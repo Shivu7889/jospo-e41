@@ -31,8 +31,6 @@ export default function QRScanner({
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [cooldownDuration, setCooldownDuration] = useState(defaultCooldown); // seconds
-  const [cooldownRemaining, setCooldownRemaining] = useState(0);
-  const [duplicateBlocked, setDuplicateBlocked] = useState(false);
 
   // Audio feedback for successful scan
   const triggerAudioFeedback = useCallback(() => {
@@ -127,23 +125,9 @@ export default function QRScanner({
       timestamp: new Date().toLocaleTimeString(),
     });
 
-    // Start visual cooldown countdown
-    setCooldownRemaining(cooldownDuration);
-    if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
-
-    cooldownTimerRef.current = setInterval(() => {
-      setCooldownRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(cooldownTimerRef.current);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
     // Visual flash
     setFlashActive(true);
-    setTimeout(() => setFlashActive(false), 350);
+    setTimeout(() => setFlashActive(false), 300);
 
     // Audio & vibration (if parent doesn't manage its own custom chimes)
     if (!suppressAudio) {
@@ -382,27 +366,6 @@ export default function QRScanner({
               {/* Animated Laser Scanning Line */}
               <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-primary-400 to-transparent shadow-[0_0_8px_#818cf8] animate-scanLine" />
             </div>
-
-            {/* Duplicate Scan Warning Banner */}
-            {duplicateBlocked && (
-              <div className="absolute top-4 inset-x-4 pointer-events-auto bg-amber-500 text-gray-950 font-bold text-xs py-2 px-3 rounded-xl shadow-xl flex items-center justify-center space-x-2 animate-bounce border-2 border-amber-300">
-                <span className="text-base">⚠️</span>
-                <span>Box already counted! Move camera to next box ({cooldownRemaining}s)</span>
-              </div>
-            )}
-
-            {/* Normal Active Cooldown Countdown Badge */}
-            {!duplicateBlocked && cooldownRemaining > 0 && (
-              <div className="absolute top-4 inset-x-4 pointer-events-none bg-gray-900/85 backdrop-blur-sm border border-emerald-500/40 text-emerald-300 text-xs py-1.5 px-3 rounded-xl flex items-center justify-between shadow-lg">
-                <span className="flex items-center space-x-2 truncate">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  <span>Counted <strong>{lastScannedItem?.code}</strong> (+1)</span>
-                </span>
-                <span className="font-mono text-emerald-400 text-[11px] bg-emerald-950/90 px-2 py-0.5 rounded border border-emerald-800 ml-2">
-                  Cooldown {cooldownRemaining}s
-                </span>
-              </div>
-            )}
           </div>
         )}
 
