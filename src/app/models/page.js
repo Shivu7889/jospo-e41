@@ -356,15 +356,15 @@ export default function ModelsPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
             <a
-              href="/jospo-all-qr-codes.zip"
-              download="jospo-all-qr-codes.zip"
-              className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm hover:border-primary-300"
-              title="Download ZIP with all PNG and SVG QR codes"
+              href="/jospo-20-models-labels.zip"
+              download="jospo-20-models-labels.zip"
+              className="btn-primary text-xs py-2 px-3.5 inline-flex items-center space-x-1.5 shadow-sm bg-black hover:bg-gray-800 text-white font-bold"
+              title="Download complete BarTender package and labels for all 20 active models"
             >
-              <svg className="w-4 h-4 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              <span>Download All QR (.ZIP)</span>
+              <span>Download 20 Models Folder (.ZIP)</span>
             </a>
             <a
               href="/qr-codes/printable-labels-sheet.html"
