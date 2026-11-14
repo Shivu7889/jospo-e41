@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="Print_ROLEX-65-CG-DG">
+    <Print>
+      <Format>ROLEX-65-CG-DG.btw</Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>100</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="ROLEX-65-CG-DG_Records" Type="btTextFile">
+        <Delimited Delimiter=",">
+          <TextDataFile File="ROLEX-65-CG-DG_database.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="MODEL_NAME">
+        <Value>Jospo Rolex 65 CG DG</Value>
+      </NamedSubString>
+      <NamedSubString Name="SERIAL_NO">
+        <Value>#000001</Value>
+      </NamedSubString>
+      <NamedSubString Name="QR_PAYLOAD">
+        <Value>JSP|Jospo Rolex 65 CG DG|000001</Value>
+      </NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>

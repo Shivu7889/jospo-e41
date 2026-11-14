@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="Print_ICECOOL-55-CG-WG">
+    <Print>
+      <Format>ICECOOL-55-CG-WG.btw</Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>100</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="ICECOOL-55-CG-WG_Records" Type="btTextFile">
+        <Delimited Delimiter=",">
+          <TextDataFile File="ICECOOL-55-CG-WG_database.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="MODEL_NAME">
+        <Value>Jospo Icecool 55 CG WG</Value>
+      </NamedSubString>
+      <NamedSubString Name="SERIAL_NO">
+        <Value>#000001</Value>
+      </NamedSubString>
+      <NamedSubString Name="QR_PAYLOAD">
+        <Value>JSP|Jospo Icecool 55 CG WG|000001</Value>
+      </NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>
