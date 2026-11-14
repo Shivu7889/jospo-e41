@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLScript Version="2.0">
+  <Command Name="PrintJob_100x50mm">
+    <Print>
+      <Format>
+        <FormatSetup>
+          <PageSetup>
+            <PaperSize Width="100mm" Height="50mm" />
+            <Orientation>Portrait</Orientation>
+          </PageSetup>
+        </FormatSetup>
+      </Format>
+      <PrintSetup>
+        <Printer>TSC TE244</Printer>
+        <NumberSerializedLabels>50</NumberSerializedLabels>
+      </PrintSetup>
+      <RecordSet Name="JospoModels">
+        <Delimited Delimiter=",">
+          <TextDataFile File="ALL_MODELS_MASTER_CATALOG.csv" />
+        </Delimited>
+      </RecordSet>
+      <NamedSubString Name="ModelName">Rolex 35 CG WG</NamedSubString>
+      <NamedSubString Name="SerialNumber">000001</NamedSubString>
+      <NamedSubString Name="QrData">JSP|Rolex 35 CG WG|000001</NamedSubString>
+    </Print>
+  </Command>
+</XMLScript>
