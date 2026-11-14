@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import AppShell from '@/components/AppShell';
@@ -9,6 +9,43 @@ import QRScanner from '@/components/QRScanner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+
+// Static 20 models registry to ensure zero-latency & offline scanning fallback
+export const JOSPO_20_ACTIVE_MODELS = [
+  { code: 'ICECOOL-55-CG-WG', name: 'Jospo Icecool 55 CG WG', qr_data: 'JOSPO-ICECOOL55CGWG' },
+  { code: 'ICECOOL-55-NCG-WG', name: 'Jospo Icecool 55 NCG WG', qr_data: 'JOSPO-ICECOOL55LNCGWG' },
+  { code: 'ICECOOL-65-CG-WG', name: 'Jospo Icecool 65 CG WG', qr_data: 'JOSPO-ICECOOL65LCGWG' },
+  { code: 'ICECOOL-65-NCG-WG', name: 'Jospo Icecool 65 NCG WG', qr_data: 'JOSPO-ICECOOL65LNCGWG' },
+  { code: 'NEO-100-CG-WG', name: 'Jospo Neo 100 CG WG', qr_data: 'JOSPO-NEO100CGWG' },
+  { code: 'NEO-100-NCG-WG', name: 'Jospo Neo 100 NCG WG', qr_data: 'JOSPO-NEO100NCGWG' },
+  { code: 'NEO-80-CG-WG', name: 'Jospo Neo 80 CG WG', qr_data: 'JOSPO-NEO80CGWG' },
+  { code: 'NEO-80-NCG-WG', name: 'Jospo Neo 80 NCG WG', qr_data: 'JOSPO-NEO80NCGWG' },
+  { code: 'ROLEX-35-CG-DG', name: 'Jospo Rolex 35 CG DG', qr_data: 'JOSPO-ROLEX35CGDG' },
+  { code: 'ROLEX-35-CG-WG', name: 'Jospo Rolex 35 CG WG', qr_data: 'JOSPO-ROLEX35CGWG' },
+  { code: 'ROLEX-35-NCG-DG', name: 'Jospo Rolex 35 NCG DG', qr_data: 'JOSPO-ROLEX35NCGDG' },
+  { code: 'ROLEX-35-NCG-WG', name: 'Jospo Rolex 35 NCG WG', qr_data: 'JOSPO-ROLEX35NCGWG' },
+  { code: 'ROLEX-65-CG-DG', name: 'Jospo Rolex 65 CG DG', qr_data: 'JOSPO-ROLEX65CGDG' },
+  { code: 'ROLEX-65-CG-WG', name: 'Jospo Rolex 65 CG WG', qr_data: 'JOSPO-ROLEX65CGWG' },
+  { code: 'ROLEX-65-NCG-DG', name: 'Jospo Rolex 65 NCG DG', qr_data: 'JOSPO-ROLEX65NCGDG' },
+  { code: 'ROLEX-65-NCG-WG', name: 'Jopso Rolex 65 NCG WG', qr_data: 'JOSPO-JOPSOROLEX65NCGWG' },
+  { code: 'SHINE-100-CG-WG', name: 'Jospo Shine 100 CG WG', qr_data: 'JOSPO-SHINE100CGWG' },
+  { code: 'SHINE-100-NCG-WG', name: 'Jospo Shine 100 NCG WG', qr_data: 'JOSPO-SHINE100NCGWG' },
+  { code: 'SHINE-80-CG-WG', name: 'Jospo Shine 80 CG WG', qr_data: 'JOSPO-SHINE80CGWG' },
+  { code: 'SHINE-80-NCG-WG', name: 'Jospo Shine 80 NCG WG', qr_data: 'JOSPO-SHINE80NCGWG' },
+];
+
+function cleanAlphanumeric(str) {
+  return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function getSignatures(str) {
+  if (!str) return [];
+  const base = cleanAlphanumeric(str);
+  const withoutBrand = base.replace(/^(?:jospo|jsp)/, '');
+  const withoutL = withoutBrand.replace(/(\d+)l([a-z]+)/, '$1$2');
+  const withL = withoutBrand.replace(/(\d+)(cg|ncg)/, '$1l$2');
+  return Array.from(new Set([base, withoutBrand, withoutL, withL])).filter(Boolean);
+}
 
 function NewDispatchContent() {
   const router = useRouter();
@@ -35,7 +72,7 @@ function NewDispatchContent() {
   const [remarks, setRemarks] = useState('');
 
   // Items State - Step 2: Scanned & Manual Items
-  // Item structure: { model_id, model_name, model_code, quantity, available_stock }
+  // Item structure: { model_id, model_name, model_code, quantity, available_stock, scanned_serials: [] }
   const [items, setItems] = useState([]);
 
   // Catalog cache for instant offline/low-latency lookup
@@ -44,36 +81,70 @@ function NewDispatchContent() {
   const [manualModelId, setManualModelId] = useState('');
   const [manualQuantity, setManualQuantity] = useState(1);
 
-  // Live scan feedback banner
+  // Live scan feedback banner & duplicate modal state
   const [lastScannedFeedback, setLastScannedFeedback] = useState(null); // { text, type: 'success' | 'warning' | 'error' }
   const [lastScannedModel, setLastScannedModel] = useState(null); // { model_id, model_code, model_name, timestamp }
-  const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // Tracks unique box serials/QRs in this session
+  const [scannedUnitIds, setScannedUnitIds] = useState(new Set()); // Tracks unique box serials (e.g. 'MODEL_CODE::000001')
+  const [duplicateModalInfo, setDuplicateModalInfo] = useState(null); // { serial, modelName, modelCode }
 
-  // Load models catalog and current stock
+  // Hardware barcode scanner gun input & buffer
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const barcodeBufferRef = useRef('');
+  const lastKeyTimeRef = useRef(0);
+
+  // Load models catalog and current stock (with multi-tier fallback)
   const loadModelsAndStock = useCallback(async () => {
     try {
-      // 1. Fetch cooler models
-      const { data: models, error: modelsError } = await supabase
-        .from('cooler_models')
-        .select('*')
-        .eq('is_active', true)
-        .order('code', { ascending: true });
+      let loadedModels = [];
+      let loadedStocks = {};
 
-      if (modelsError) throw modelsError;
-      setModelsCatalog(models || []);
-
-      // 2. Fetch current stock view
-      const { data: stocks, error: stocksError } = await supabase
-        .from('current_stock')
-        .select('*');
-
-      if (!stocksError && stocks) {
-        const map = {};
-        stocks.forEach((s) => {
-          map[s.model_id] = s.current_stock;
-        });
-        setStockMap(map);
+      // 1. Try fetching via API route
+      try {
+        const res = await fetch('/api/models?active_only=true');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.models?.length > 0) {
+            loadedModels = data.models;
+            data.models.forEach((m) => {
+              loadedStocks[m.id] = m.current_stock ?? 0;
+            });
+          }
+        }
+      } catch (apiErr) {
+        console.warn('API models fetch fallback to direct supabase:', apiErr);
       }
+
+      // 2. Fallback to direct supabase query
+      if (loadedModels.length === 0 && supabase) {
+        const { data: models, error: modelsError } = await supabase
+          .from('cooler_models')
+          .select('*')
+          .eq('is_active', true)
+          .order('code', { ascending: true });
+
+        if (!modelsError && models) {
+          loadedModels = models;
+        }
+
+        const { data: stocks } = await supabase.from('current_stock').select('*');
+        if (stocks) {
+          stocks.forEach((s) => {
+            loadedStocks[s.model_id] = s.current_stock;
+          });
+        }
+      }
+
+      // 3. Fallback to JOSPO_20_ACTIVE_MODELS registry if offline or empty
+      if (loadedModels.length === 0) {
+        loadedModels = JOSPO_20_ACTIVE_MODELS.map((m, idx) => ({
+          id: `local-model-${idx + 1}`,
+          ...m,
+          is_active: true,
+        }));
+      }
+
+      setModelsCatalog(loadedModels);
+      setStockMap(loadedStocks);
     } catch (err) {
       console.error('Error preloading models & stock:', err);
     }
@@ -214,102 +285,143 @@ function NewDispatchContent() {
 
   // Universal parser for BarTender & manufacturing QR codes
   // Supports formats:
-  // - JOSPO-J50-000001 (Standard BarTender hyphenated serial)
-  // - JOSPO-J-50-000001 (Model with hyphen + serial)
-  // - JSP|J-50|000001 (BarTender pipe-delimited)
-  // - J-50#000001 (Hash delimited)
-  // - J-50-000001 or J50-000001 (Direct model prefix)
-  // - JOSPO-J50 (Legacy model-only QR fallback)
+  // - JSP|Model Name|000001 or JSP|Model Code|000001 (BarTender pipe-delimited)
+  // - JOSPO-ROLEX-35-CG-WG-000001 (BarTender hyphen-delimited)
+  // - JOSPO-ROLEX35CGWG-000001 or JOSPO-ROLEX35CGWG000001
+  // - ROLEX-35-CG-WG#000001 or ROLEX-35-CG-WG 000001 or ROLEX-35-CG-WG-000001
+  // - Base model QRs without serial (backward compatibility fallback)
   const parseScannedQr = (rawQr, catalog = []) => {
     const clean = (rawQr || '').trim();
     if (!clean) return null;
 
-    // 1. Strip leading brand prefixes (JOSPO-, JSP|, JSP-, JOSPO/, JOSPO:)
-    let stripped = clean;
-    const brandPrefixMatch = clean.match(/^(?:JOSPO|JSP)[-_/|:\s]+/i);
-    if (brandPrefixMatch) {
-      stripped = clean.slice(brandPrefixMatch[0].length).trim();
+    const effectiveCatalog = (catalog && catalog.length > 0)
+      ? [...catalog]
+      : [...JOSPO_20_ACTIVE_MODELS];
+
+    const findMatchingModel = (modelCandidate) => {
+      const candSigs = getSignatures(modelCandidate);
+      return effectiveCatalog.find((m) => {
+        const mSigs = [
+          ...getSignatures(m.code),
+          ...getSignatures(m.name),
+          ...getSignatures(m.qr_data),
+        ];
+        return candSigs.some((sig) => mSigs.includes(sig));
+      });
+    };
+
+    // 1. Pipe delimited format: JSP|Jospo Icecool 55 CG WG|000001 or JSP|ICECOOL-55-CG-WG|000001
+    if (clean.includes('|')) {
+      const parts = clean.split('|').map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const serialPart = parts[parts.length - 1];
+        const modelPart = parts[parts.length - 2];
+        const matched = findMatchingModel(modelPart);
+
+        if (matched) {
+          const cleanSerial = serialPart.replace(/^[#\-_\s]+/, '').toUpperCase();
+          return {
+            modelCode: matched.code,
+            matchedModel: matched,
+            uniqueId: `${matched.code}::${cleanSerial}`,
+            serialNumber: cleanSerial,
+            isUnique: true,
+            rawQr: clean,
+          };
+        }
+      }
     }
 
-    // 2. Direct match with existing model code or legacy qr_data (Model-only scan)
-    const directModel = catalog.find(
-      (m) =>
-        m.code.toLowerCase() === clean.toLowerCase() ||
-        m.qr_data.toLowerCase() === clean.toLowerCase() ||
-        m.code.toLowerCase() === stripped.toLowerCase() ||
-        m.name.toLowerCase() === clean.toLowerCase()
-    );
-    if (directModel) {
-      return {
-        modelCode: directModel.code,
-        uniqueId: null,
-        serialNumber: null,
-        isUnique: false,
-      };
+    // 2. Hash delimited format: ICECOOL-55-CG-WG#000001
+    if (clean.includes('#')) {
+      const [modelPart, ...serialParts] = clean.split('#');
+      const serialPart = serialParts.join('#').trim();
+      const matched = findMatchingModel(modelPart);
+      if (matched) {
+        const cleanSerial = serialPart.replace(/^[#\-_\s]+/, '').toUpperCase();
+        return {
+          modelCode: matched.code,
+          matchedModel: matched,
+          uniqueId: `${matched.code}::${cleanSerial}`,
+          serialNumber: cleanSerial,
+          isUnique: true,
+          rawQr: clean,
+        };
+      }
     }
 
-    // 3. Match against known catalog models to extract model and unique serial number
-    for (const m of catalog) {
-      const codeClean = m.code.toLowerCase();
-      const codeAlphanum = codeClean.replace(/[^a-z0-9]/g, '');
+    // 3. Exact match check (Non-unique model-only scan without serial)
+    const inputSigs = getSignatures(clean);
+    for (const m of effectiveCatalog) {
+      const mSigs = [
+        ...getSignatures(m.code),
+        ...getSignatures(m.qr_data),
+        ...getSignatures(m.name),
+      ];
 
-      // Check both original 'clean' and 'stripped' (after removing JOSPO-)
-      const candidates = [clean.toLowerCase(), stripped.toLowerCase()];
+      if (inputSigs.some((sig) => mSigs.includes(sig))) {
+        return {
+          modelCode: m.code,
+          matchedModel: m,
+          uniqueId: null,
+          serialNumber: null,
+          isUnique: false,
+          rawQr: clean,
+        };
+      }
+    }
 
-      for (const cand of candidates) {
-        // Try matching with hyphenated code (e.g. j-50) or alphanum (j50)
-        const possiblePrefixes = [codeClean, codeAlphanum, m.qr_data.toLowerCase()];
+    // 4. Prefix matching for serialized codes:
+    // e.g. JOSPO-ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG-000001, ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG000001
+    const sortedCatalog = [...effectiveCatalog].sort((a, b) => b.code.length - a.code.length);
+    const normInput = cleanAlphanumeric(clean);
+    const normInputNoBrand = normInput.replace(/^(?:jospo|jsp)/, '');
 
-        for (const p of possiblePrefixes) {
-          if (cand.startsWith(p) && cand.length > p.length) {
-            const remainder = cand.slice(p.length).replace(/^[-_#|:/]+/, '').trim();
-            if (remainder) {
-              return {
-                modelCode: m.code,
-                uniqueId: clean, // Keep full scanned QR as the globally unique identifier
-                serialNumber: remainder.toUpperCase(),
-                isUnique: true,
-              };
+    for (const m of sortedCatalog) {
+      const mSigs = [
+        ...getSignatures(m.code),
+        ...getSignatures(m.qr_data),
+        ...getSignatures(m.name),
+      ].sort((a, b) => b.length - a.length);
+
+      for (const pref of mSigs) {
+        const targetStr = normInputNoBrand.startsWith(pref)
+          ? normInputNoBrand
+          : normInput.startsWith(pref)
+          ? normInput
+          : null;
+
+        if (targetStr && targetStr.length > pref.length) {
+          const remainingNorm = targetStr.slice(pref.length);
+          if (remainingNorm.length >= 2 && /\d/.test(remainingNorm)) {
+            let serialToDisplay = remainingNorm;
+            const matchTrailingDigits = clean.match(/[-_#\s/:]*([A-Za-z0-9]+)$/);
+            if (matchTrailingDigits && matchTrailingDigits[1]) {
+              serialToDisplay = matchTrailingDigits[1];
             }
+
+            const cleanSerial = serialToDisplay.replace(/^[#\-_\s]+/, '').toUpperCase();
+            return {
+              modelCode: m.code,
+              matchedModel: m,
+              uniqueId: `${m.code}::${cleanSerial}`,
+              serialNumber: cleanSerial,
+              isUnique: true,
+              rawQr: clean,
+            };
           }
         }
       }
     }
 
-    // 4. Pipe delimited format: JSP|J-50|000001 or J-50|000001
-    if (clean.includes('|')) {
-      const parts = clean.split('|').map((s) => s.trim()).filter(Boolean);
-      if (parts.length >= 2) {
-        const potentialModel = parts[parts.length - 2];
-        const sNum = parts[parts.length - 1];
-        const matched = catalog.find((m) => m.code.toLowerCase() === potentialModel.toLowerCase());
-        return {
-          modelCode: matched ? matched.code : potentialModel,
-          uniqueId: clean,
-          serialNumber: sNum,
-          isUnique: true,
-        };
-      }
-    }
-
-    // 5. Hash delimited format: J-50#000001
-    if (clean.includes('#')) {
-      const [mCode, sNum] = clean.split('#');
-      const matched = catalog.find((m) => m.code.toLowerCase() === mCode.trim().toLowerCase());
-      return {
-        modelCode: matched ? matched.code : mCode.trim(),
-        uniqueId: clean,
-        serialNumber: sNum.trim(),
-        isUnique: true,
-      };
-    }
-
-    // Fallback: treated as non-unique model scan
+    // Fallback unrecognized
     return {
       modelCode: clean,
+      matchedModel: null,
       uniqueId: null,
       serialNumber: null,
       isUnique: false,
+      rawQr: clean,
     };
   };
 
@@ -320,52 +432,48 @@ function NewDispatchContent() {
 
     // Parse the QR code (extracts model and unique box serial)
     const parsed = parseScannedQr(cleanQr, modelsCatalog);
-    const targetModelCode = parsed?.modelCode || cleanQr;
-    const uniqueId = parsed?.uniqueId;
-    const serialNumber = parsed?.serialNumber;
-    const isUnique = parsed?.isUnique;
-
-    // 1. DUPLICATE CHECK: Has this specific physical box already been scanned in this dispatch?
-    if (isUnique && uniqueId && scannedUnitIds.has(uniqueId)) {
+    if (!parsed || !parsed.matchedModel) {
       playRejectTone();
       setLastScannedFeedback({
-        text: `⚠️ DUPLICATE BOX! Unit #${serialNumber} has already been scanned in this truck!`,
+        text: `Unrecognized QR: "${cleanQr}". No matching cooler model found.`,
         type: 'error',
       });
-      showToast(`Box #${serialNumber} already scanned in this dispatch!`, 'error');
+      showToast(`Unknown QR: ${cleanQr.slice(0, 32)}`, 'error');
       return;
     }
 
-    // 2. Find matching cooler model from local catalog (by code, name, or qr_data)
-    let model = modelsCatalog.find(
-      (m) =>
-        m.code.toLowerCase() === targetModelCode.toLowerCase() ||
-        m.name.toLowerCase() === targetModelCode.toLowerCase() ||
-        m.qr_data.toLowerCase() === targetModelCode.toLowerCase()
-    );
+    const { matchedModel, modelCode, uniqueId, serialNumber, isUnique } = parsed;
 
-    // Fallback query if not in cache
+    // 1. DUPLICATE CHECK: Has this specific physical box already been scanned in this dispatch?
+    if (isUnique && uniqueId) {
+      if (scannedUnitIds.has(uniqueId)) {
+        playRejectTone();
+        setDuplicateModalInfo({
+          serial: serialNumber,
+          modelName: matchedModel.name,
+          modelCode: matchedModel.code,
+        });
+        setLastScannedFeedback({
+          text: `⚠️ DUPLICATE BOX! #${serialNumber} (${matchedModel.name}) is ALREADY LOADED in this truck!`,
+          type: 'error',
+        });
+        showToast(`Duplicate: Box #${serialNumber} already scanned!`, 'error');
+        return;
+      }
+    }
+
+    // 2. Resolve database row (or matchedModel fallback)
+    let model = modelsCatalog.find((m) => m.code === modelCode || m.id === matchedModel.id);
     if (!model) {
       try {
-        const { data: dbModel, error } = await supabase
+        const { data: dbModel } = await supabase
           .from('cooler_models')
           .select('*')
-          .or(`code.ilike.${targetModelCode},name.ilike.${targetModelCode},qr_data.ilike.${targetModelCode}`)
+          .eq('code', modelCode)
           .single();
-
-        if (error || !dbModel) {
-          playRejectTone();
-          setLastScannedFeedback({
-            text: `Unrecognized QR: "${cleanQr}". No matching cooler model found.`,
-            type: 'error',
-          });
-          showToast(`Unknown cooler model: ${targetModelCode}`, 'error');
-          return;
-        }
-        model = dbModel;
+        model = dbModel || matchedModel;
       } catch (err) {
-        showToast('Error validating QR code', 'error');
-        return;
+        model = matchedModel;
       }
     }
 
@@ -375,22 +483,16 @@ function NewDispatchContent() {
     }
 
     // Get current stock
-    let currentStock = stockMap[model.id];
-    if (currentStock === undefined) {
-      const { data: stockData } = await supabase
-        .from('current_stock')
-        .select('current_stock')
-        .eq('model_id', model.id)
-        .single();
-      currentStock = stockData?.current_stock ?? 0;
-      setStockMap((prev) => ({ ...prev, [model.id]: currentStock }));
-    }
+    let currentStock = stockMap[model.id] ?? 0;
 
+    // 4. Play crisp positive confirmation chime
     playScanTone();
 
-    // Increment or Add item
+    // 5. Increment or Add item
     setItems((prev) => {
-      const existing = prev.find((item) => item.model_id === model.id);
+      const existing = prev.find(
+        (item) => item.model_id === model.id || item.model_code === model.code
+      );
       let updatedCount = 1;
       let newItems;
 
@@ -399,7 +501,7 @@ function NewDispatchContent() {
         const currentSerials = existing.scanned_serials || [];
         const updatedSerials = isUnique && serialNumber ? [...currentSerials, serialNumber] : currentSerials;
         newItems = prev.map((item) =>
-          item.model_id === model.id
+          item.model_id === existing.model_id
             ? { ...item, quantity: item.quantity + 1, scanned_serials: updatedSerials }
             : item
         );
@@ -407,7 +509,7 @@ function NewDispatchContent() {
         newItems = [
           ...prev,
           {
-            model_id: model.id,
+            model_id: model.id || `temp-${model.code}`,
             model_name: model.name,
             model_code: model.code,
             quantity: 1,
@@ -425,7 +527,6 @@ function NewDispatchContent() {
       });
 
       showToast(`${model.name} — ${updatedCount} pcs`, 'success');
-
       return newItems;
     });
 
@@ -437,6 +538,41 @@ function NewDispatchContent() {
       serialNumber: serialNumber || null,
       timestamp: Date.now(),
     });
+  };
+
+  // Remove an individual box serial number from an item
+  const handleRemoveSerial = (modelId, serialToRemove) => {
+    setItems((prev) => {
+      const target = prev.find((item) => item.model_id === modelId);
+      if (!target) return prev;
+
+      const remainingSerials = (target.scanned_serials || []).filter((s) => s !== serialToRemove);
+      const newQty = target.quantity - 1;
+
+      // Free from scannedUnitIds
+      const boxKey = `${target.model_code}::${serialToRemove}`;
+      setScannedUnitIds((prevIds) => {
+        const next = new Set(prevIds);
+        next.delete(boxKey);
+        for (const id of prevIds) {
+          if (id.includes(serialToRemove)) next.delete(id);
+        }
+        return next;
+      });
+
+      if (newQty <= 0) {
+        return prev.filter((item) => item.model_id !== modelId);
+      }
+
+      return prev.map((item) =>
+        item.model_id === modelId
+          ? { ...item, quantity: newQty, scanned_serials: remainingSerials }
+          : item
+      );
+    });
+
+    playUndoTone();
+    showToast(`Removed Box #${serialToRemove}`, 'info');
   };
 
   // Audio helper for Undo
@@ -473,21 +609,23 @@ function NewDispatchContent() {
     }
 
     setItems((prev) => {
-      const existing = prev.find((item) => item.model_id === lastScannedModel.model_id);
+      const existing = prev.find(
+        (item) => item.model_id === lastScannedModel.model_id || item.model_code === lastScannedModel.model_code
+      );
       if (!existing) return prev;
 
       playUndoTone();
       const newQty = existing.quantity - 1;
 
       if (newQty <= 0) {
-        return prev.filter((item) => item.model_id !== lastScannedModel.model_id);
+        return prev.filter((item) => item.model_id !== existing.model_id);
       }
 
       // Pop last serial if present
       const remainingSerials = (existing.scanned_serials || []).slice(0, -1);
 
       return prev.map((item) =>
-        item.model_id === lastScannedModel.model_id
+        item.model_id === existing.model_id
           ? { ...item, quantity: newQty, scanned_serials: remainingSerials }
           : item
       );
@@ -501,6 +639,48 @@ function NewDispatchContent() {
     showToast(`↩️ Removed 1 unit of ${lastScannedModel.model_code}`, 'info');
     setLastScannedModel(null);
   };
+
+  // Barcode gun / manual input submit
+  const handleBarcodeSubmit = (e) => {
+    if (e) e.preventDefault();
+    const val = barcodeInput.trim();
+    if (!val) return;
+    handleScan(val);
+    setBarcodeInput('');
+  };
+
+  // Global keydown listener for hardware USB/Bluetooth barcode scanner guns
+  useEffect(() => {
+    if (currentStep !== 2) return;
+
+    const handleKeyDown = (e) => {
+      // Don't intercept if user is typing into an active input or textarea
+      const targetTag = e.target?.tagName?.toLowerCase();
+      if (targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select') {
+        return;
+      }
+
+      const now = Date.now();
+      if (e.key === 'Enter') {
+        if (barcodeBufferRef.current.length >= 3) {
+          e.preventDefault();
+          const scannedCode = barcodeBufferRef.current.trim();
+          barcodeBufferRef.current = '';
+          handleScan(scannedCode);
+        }
+      } else if (e.key.length === 1) {
+        if (now - lastKeyTimeRef.current > 150) {
+          barcodeBufferRef.current = e.key;
+        } else {
+          barcodeBufferRef.current += e.key;
+        }
+        lastKeyTimeRef.current = now;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentStep, modelsCatalog]);
 
   // Manual Add Item
   const handleManualAdd = (e) => {
@@ -601,6 +781,20 @@ function NewDispatchContent() {
   const isStep1Valid = vehicleNumber.trim() && destination.trim() && dispatchDate;
   const isStep2Valid = items.length > 0 && totalQuantity > 0;
 
+  // Format remarks to include verified unique box serial numbers
+  const getCompiledRemarks = () => {
+    const serialEntries = items
+      .filter((i) => i.scanned_serials?.length > 0)
+      .map((i) => `${i.model_code}: ${i.scanned_serials.map((s) => `#${s}`).join(', ')}`);
+
+    let finalRemarks = remarks.trim();
+    if (serialEntries.length > 0) {
+      const serialsTag = `Verified Box Serials:\n${serialEntries.join('\n')}`;
+      finalRemarks = finalRemarks ? `${finalRemarks}\n\n${serialsTag}` : serialsTag;
+    }
+    return finalRemarks || null;
+  };
+
   // Save as Draft
   const handleSaveAsDraft = async () => {
     if (!employee?.id) {
@@ -626,7 +820,7 @@ function NewDispatchContent() {
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
-            remarks: remarks.trim() || null,
+            remarks: getCompiledRemarks(),
             updated_at: new Date().toISOString(),
           })
           .eq('id', editId)
@@ -650,7 +844,7 @@ function NewDispatchContent() {
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
-            remarks: remarks.trim() || null,
+            remarks: getCompiledRemarks(),
             status: 'draft',
             employee_id: employee.id,
           })
@@ -717,7 +911,7 @@ function NewDispatchContent() {
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
-            remarks: remarks.trim() || null,
+            remarks: getCompiledRemarks(),
             updated_at: new Date().toISOString(),
           })
           .eq('id', editId);
@@ -735,7 +929,7 @@ function NewDispatchContent() {
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
-            remarks: remarks.trim() || null,
+            remarks: getCompiledRemarks(),
             status: 'draft',
             employee_id: employee.id,
           })
@@ -1064,13 +1258,80 @@ function NewDispatchContent() {
             </button>
           </div>
 
-          {/* QR Scanner Component */}
-          <div>
+          {/* DUPLICATE BOX MODAL ALERT */}
+          {duplicateModalInfo && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+              <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border-2 border-rose-500 text-center animate-scaleUp">
+                <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-3xl mx-auto mb-4 animate-bounce">
+                  ⚠️
+                </div>
+                <h3 className="text-xl font-extrabold text-gray-900 mb-2">
+                  Duplicate Box Detected!
+                </h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Physical box{' '}
+                  <strong className="font-mono bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold">
+                    #{duplicateModalInfo.serial}
+                  </strong>{' '}
+                  for <strong className="text-gray-900">{duplicateModalInfo.modelName}</strong>{' '}
+                  is <span className="text-rose-600 font-bold">already scanned & loaded</span> into this vehicle.
+                </p>
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium mb-6 text-left">
+                  🛑 <strong>Do not load this box again!</strong> Each printed BarTender box has a unique serial number. Please inspect the box label and set aside duplicates.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateModalInfo(null)}
+                  className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-colors shadow-sm"
+                >
+                  Dismiss Warning & Continue
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* QR Scanner Component & Hardware Barcode Gun Input */}
+          <div className="space-y-3">
             <QRScanner
               isActive={currentStep === 2}
               onScan={handleScan}
+              suppressAudio={true}
               onError={(err) => console.warn('QR Scanner reported:', err)}
             />
+
+            {/* Hardware Barcode Gun & Quick Manual Serial Input */}
+            <div className="bg-white border border-gray-200 rounded-xl p-3 shadow-xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-gray-800 flex items-center space-x-1.5">
+                  <span>🔫</span>
+                  <span>Barcode Gun / Quick Serial Scan</span>
+                </span>
+                <span className="text-[11px] text-gray-500 hidden sm:inline">
+                  Supports USB / Bluetooth wireless scanners
+                </span>
+              </div>
+              <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                    🏷️
+                  </span>
+                  <input
+                    type="text"
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    placeholder="Scan with barcode gun or type serial (e.g. #000001)..."
+                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono shadow-2xs"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={!barcodeInput.trim()}
+                  className="btn-primary text-xs py-2 px-4 shadow-xs whitespace-nowrap"
+                >
+                  Scan Box
+                </button>
+              </form>
+            </div>
           </div>
 
           {/* Quick Undo Button (One-tap fix for accidental double scans) */}
@@ -1147,7 +1408,7 @@ function NewDispatchContent() {
                 <div className="text-3xl mb-2">📷</div>
                 <p className="font-semibold text-gray-700">No items scanned yet.</p>
                 <p className="mt-1">
-                  Point the camera at a model QR code (e.g. JOSPO-J50) or use the manual entry below.
+                  Point the camera at a BarTender QR code or use the barcode gun input above.
                 </p>
               </div>
             ) : (
@@ -1177,7 +1438,38 @@ function NewDispatchContent() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center space-x-3 text-xs mt-1">
+
+                        {/* Removable Box Serials Pill List */}
+                        {item.scanned_serials?.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-gray-100">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-[11px] font-semibold text-gray-600">
+                                📦 Verified Box Serials ({item.scanned_serials.length}):
+                              </span>
+                              <span className="text-[10px] text-gray-400">Click ✕ to remove box</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+                              {item.scanned_serials.map((sn) => (
+                                <span
+                                  key={sn}
+                                  className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs"
+                                >
+                                  <span>#{sn}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveSerial(item.model_id, sn)}
+                                    className="text-emerald-500 hover:text-red-600 font-bold ml-1 transition-colors"
+                                    title={`Remove Box #${sn}`}
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center space-x-3 text-xs mt-1.5">
                           <span className="text-gray-500">
                             Available in Stock:{' '}
                             <strong className={hasDeficit ? 'text-red-600' : 'text-gray-800'}>

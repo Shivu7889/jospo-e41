@@ -6,7 +6,8 @@ export default function QRScanner({
   onScan,
   onError,
   isActive = true,
-  defaultCooldown = 3,
+  defaultCooldown = 1.5,
+  suppressAudio = false,
 }) {
   const containerIdRef = useRef(`qr-reader-container-${Math.random().toString(36).substring(2, 9)}`);
   const scannerRef = useRef(null);
@@ -100,15 +101,12 @@ export default function QRScanner({
     const isSameCode = lastScannedRef.current.code === decodedText;
     const elapsedSinceLastScan = now - lastScannedRef.current.time;
 
-    // If scanning the same QR code and cooldown is still active, ignore and alert
+    // If scanning the exact same QR code while camera is still hovering within cooldown, silently ignore
     if (isSameCode && elapsedSinceLastScan < cooldownMs) {
-      setDuplicateBlocked(true);
-      triggerRejectFeedback();
-      setTimeout(() => setDuplicateBlocked(false), 900);
       return;
     }
 
-    // Valid scan! Update timestamp and trigger count
+    // Valid new or re-scanned code! Update timestamp
     lastScannedRef.current = { code: decodedText, time: now };
     setLastScannedItem({
       code: decodedText,
@@ -133,14 +131,16 @@ export default function QRScanner({
     setFlashActive(true);
     setTimeout(() => setFlashActive(false), 350);
 
-    // Audio & vibration
-    triggerAudioFeedback();
-    triggerHapticFeedback();
+    // Audio & vibration (if parent doesn't manage its own custom chimes)
+    if (!suppressAudio) {
+      triggerAudioFeedback();
+      triggerHapticFeedback();
+    }
 
     if (onScan) {
       onScan(decodedText);
     }
-  }, [cooldownDuration, onScan, triggerAudioFeedback, triggerHapticFeedback, triggerRejectFeedback]);
+  }, [cooldownDuration, onScan, suppressAudio, triggerAudioFeedback, triggerHapticFeedback]);
 
   // Start the scanner
   const startScanning = useCallback(async (cameraIdToUse) => {
