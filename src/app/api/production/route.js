@@ -398,3 +398,83 @@ export async function POST(request) {
     );
   }
 }
+
+/**
+ * PATCH /api/production
+ * Reassign / update contractor_name of one or more production entries
+ * RESTRICTED: Admin only
+ */
+export async function PATCH(request) {
+  try {
+    const supabase = await createServerSupabase();
+
+    // Verify user & check admin role
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
+    const { data: employee, error: empErr } = await supabase
+      .from('employees')
+      .select('id, name, role')
+      .eq('id', user.id)
+      .single();
+
+    if (empErr || !employee || employee.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Permission denied. Only Admins can reassign or edit Thekedars on production entries.' },
+        { status: 403 }
+      );
+    }
+
+    const body = await request.json();
+    const { id, ids, contractor_name } = body;
+    const cleanContractor = (contractor_name || '').trim();
+
+    if (!cleanContractor) {
+      return NextResponse.json({ error: 'Contractor / Thekedar name cannot be empty.' }, { status: 400 });
+    }
+
+    const idList = ids && Array.isArray(ids) ? ids : (id ? [id] : []);
+    if (idList.length === 0) {
+      return NextResponse.json({ error: 'No production entry ID(s) provided.' }, { status: 400 });
+    }
+
+    // Try updating contractor_name
+    let { data: updated, error: updateErr } = await supabase
+      .from('production_entries')
+      .update({
+        contractor_name: cleanContractor,
+      })
+      .in('id', idList)
+      .select('id, production_date, quantity, remarks, contractor_name');
+
+    // Also update remarks formatted as [Thekedar: cleanContractor] for redundancy
+    if (updateErr) {
+      // Fallback if contractor_name column error
+      const { data: fallback, error: fbErr } = await supabase
+        .from('production_entries')
+        .update({
+          remarks: `[Thekedar: ${cleanContractor}]`,
+        })
+        .in('id', idList)
+        .select('id, production_date, quantity, remarks');
+
+      if (fbErr) throw fbErr;
+      updated = fallback;
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Updated ${idList.length} entry/entries to Thekedar "${cleanContractor}".`,
+      data: updated,
+    });
+  } catch (error) {
+    console.error('API /api/production PATCH error:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Error updating production contractor' },
+      { status: 500 }
+    );
+  }
+}
+

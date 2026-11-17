@@ -28,6 +28,7 @@ export default function ProductionPage() {
 
   // Thekedar (Assembly Contractor) State
   const [thekedars, setThekedars] = useState([
+    'Chotu',
     'Ramesh Thekedar',
     'Suresh Thekedar',
     'Mukesh Thekedar',

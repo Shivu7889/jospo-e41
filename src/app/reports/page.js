@@ -5,10 +5,13 @@ import * as XLSX from 'xlsx';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import StatsCard from '@/components/StatsCard';
+import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 
 export default function ReportsPage() {
+  const { employee } = useAuth();
   const { showToast } = useToast();
+  const isAdmin = employee?.role === 'admin';
 
   // Active Tab: 'thekedar_production' | 'daily_production' | 'daily_dispatch' | 'monthly_summary' | 'model_stock'
   const [activeTab, setActiveTab] = useState('thekedar_production');
@@ -22,6 +25,11 @@ export default function ReportsPage() {
   const currentMonth = new Date().getMonth() + 1;
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedYear, setSelectedYear] = useState(currentYear);
+
+  // Reassign Thekedar State (Admin only)
+  const [editingRow, setEditingRow] = useState(null);
+  const [editContractorName, setEditContractorName] = useState('');
+  const [updatingContractor, setUpdatingContractor] = useState(false);
 
   // Thekedar (Contractor) Report Filter States
   const firstDayOfMonth = useMemo(() => {
@@ -135,6 +143,33 @@ export default function ReportsPage() {
     } catch (err) {
       console.error('Thekedar Excel export error:', err);
       showToast('Export failed: ' + err.message, 'error');
+    }
+  };
+
+  // Admin reassign Thekedar for a production entry
+  const handleUpdateEntryContractor = async () => {
+    if (!editingRow || !editContractorName.trim()) return;
+    try {
+      setUpdatingContractor(true);
+      const res = await fetch('/api/production', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingRow.id,
+          contractor_name: editContractorName.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update entry Thekedar');
+
+      showToast(`Updated Thekedar to "${editContractorName.trim()}"!`, 'success');
+      setEditingRow(null);
+      await fetchReport();
+    } catch (err) {
+      console.error('Error updating entry Thekedar:', err);
+      showToast(err.message || 'Error updating contractor', 'error');
+    } finally {
+      setUpdatingContractor(false);
     }
   };
 
@@ -614,9 +649,24 @@ export default function ReportsPage() {
                             {row.production_date}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
-                              👷 {row.contractor_name || 'General / Unassigned'}
-                            </span>
+                            <div className="flex items-center space-x-1.5">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
+                                👷 {row.contractor_name || 'General / Unassigned'}
+                              </span>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingRow(row);
+                                    setEditContractorName(row.contractor_name || 'Chotu');
+                                  }}
+                                  className="text-gray-400 hover:text-amber-700 hover:bg-amber-100 p-1 rounded transition-colors text-xs"
+                                  title="Admin: Change Thekedar for this entry"
+                                >
+                                  ✏️
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center space-x-1.5">
@@ -660,6 +710,92 @@ export default function ReportsPage() {
                 </div>
               )}
             </div>
+
+            {/* Admin Reassign Contractor Modal */}
+            {isAdmin && editingRow && (
+              <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+                  <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                    <h3 className="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                      <span>👷 Reassign Thekedar</span>
+                      <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full uppercase">Admin</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setEditingRow(null)}
+                      className="text-gray-400 hover:text-gray-600 text-sm font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="p-3 bg-gray-50 rounded-xl text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Date:</span>
+                      <span className="font-semibold">{editingRow.production_date}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Model:</span>
+                      <span className="font-semibold">{editingRow.model_code} - {editingRow.model_name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Quantity:</span>
+                      <span className="font-extrabold text-emerald-700">+{editingRow.quantity} units</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Current Thekedar:</span>
+                      <span className="font-bold text-amber-800">{editingRow.contractor_name || 'General / Unassigned'}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-700 block">Select New Thekedar:</label>
+                    <select
+                      value={editContractorName}
+                      onChange={(e) => setEditContractorName(e.target.value)}
+                      className="input-field text-xs bg-white font-semibold text-gray-900"
+                    >
+                      {thekedarContractorsList.map((t) => (
+                        <option key={t} value={t}>👷 {t}</option>
+                      ))}
+                      {!thekedarContractorsList.includes('Chotu') && (
+                        <option value="Chotu">👷 Chotu</option>
+                      )}
+                    </select>
+
+                    <div className="pt-2">
+                      <span className="text-[11px] text-gray-500 block mb-1">Or type a specific name:</span>
+                      <input
+                        type="text"
+                        value={editContractorName}
+                        onChange={(e) => setEditContractorName(e.target.value)}
+                        placeholder="e.g. Chotu"
+                        className="input-field text-xs bg-white font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setEditingRow(null)}
+                      disabled={updatingContractor}
+                      className="btn-secondary text-xs py-2 px-3"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUpdateEntryContractor}
+                      disabled={updatingContractor || !editContractorName.trim()}
+                      className="btn-primary text-xs py-2 px-4 shadow-sm font-bold"
+                    >
+                      {updatingContractor ? 'Updating...' : 'Save Reassignment'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -4,6 +4,7 @@ import { createServerSupabase } from '@/lib/supabase-server';
 export const dynamic = 'force-dynamic';
 
 const DEFAULT_CONTRACTORS = [
+  'Chotu',
   'Ramesh Thekedar',
   'Suresh Thekedar',
   'Mukesh Thekedar',
