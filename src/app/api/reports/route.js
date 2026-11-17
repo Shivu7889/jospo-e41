@@ -3,6 +3,20 @@ import { createServerSupabase } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
 
+function extractThekedar(row) {
+  if (row.contractor_name && typeof row.contractor_name === 'string' && row.contractor_name.trim()) {
+    return row.contractor_name.trim();
+  }
+  if (row.remarks && typeof row.remarks === 'string') {
+    const match = row.remarks.match(/\[(?:Thekedar|Contractor):\s*([^\]]+)\]/i) ||
+                  row.remarks.match(/(?:Thekedar|Contractor):\s*([^\n,;]+)/i);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+  return 'General Assembly';
+}
+
 export async function GET(request) {
   try {
     const supabase = await createServerSupabase();
@@ -296,6 +310,152 @@ export async function GET(request) {
         report_type: 'model_stock',
         generated_at: new Date().toISOString(),
         data: modelStockList,
+      });
+    }
+
+    // 5. Thekedar / Contractor Production Report
+    if (type === 'thekedar_production' || type === 'contractor_production') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const pad = (n) => String(n).padStart(2, '0');
+      const defaultStartDate = `${year}-${pad(month)}-01`;
+
+      const startDate = searchParams.get('start_date') || defaultStartDate;
+      const endDate = searchParams.get('end_date') || todayStr;
+      const selectedThekedar = searchParams.get('thekedar') || searchParams.get('contractor_name') || 'all';
+      const selectedModelId = searchParams.get('model_id') || 'all';
+
+      const selectQuery = `
+        id,
+        quantity,
+        production_date,
+        remarks,
+        created_at,
+        model_id,
+        employee_id,
+        cooler_models (
+          id,
+          name,
+          code
+        ),
+        employees (
+          id,
+          name
+        )
+      `;
+
+      let query = supabase
+        .from('production_entries')
+        .select(`contractor_name, ${selectQuery}`)
+        .gte('production_date', startDate)
+        .lte('production_date', endDate)
+        .order('production_date', { ascending: false })
+        .order('created_at', { ascending: false });
+
+      if (selectedModelId !== 'all') {
+        query = query.eq('model_id', selectedModelId);
+      }
+
+      let { data, error } = await query;
+
+      // Fallback if contractor_name column doesn't exist yet
+      if (error && (error.message?.includes('contractor_name') || error.code === 'PGRST204')) {
+        let fallbackQuery = supabase
+          .from('production_entries')
+          .select(selectQuery)
+          .gte('production_date', startDate)
+          .lte('production_date', endDate)
+          .order('production_date', { ascending: false })
+          .order('created_at', { ascending: false });
+
+        if (selectedModelId !== 'all') {
+          fallbackQuery = fallbackQuery.eq('model_id', selectedModelId);
+        }
+
+        const fallbackResult = await fallbackQuery;
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      }
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+
+      const allThekedarsSet = new Set();
+      const allRows = (data || []).map((row, index) => {
+        const thekedar = extractThekedar(row);
+        if (thekedar) allThekedarsSet.add(thekedar);
+
+        const cleanRemarks = (row.remarks || '')
+          .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
+          .trim();
+
+        return {
+          id: row.id,
+          serial_no: index + 1,
+          production_date: row.production_date,
+          thekedar_name: thekedar,
+          contractor_name: thekedar,
+          model_id: row.model_id,
+          model_code: row.cooler_models?.code || '—',
+          model_name: row.cooler_models?.name || 'Cooler Model',
+          quantity: row.quantity,
+          employee_name: row.employees?.name || 'Staff',
+          remarks: cleanRemarks,
+          created_at: row.created_at,
+        };
+      });
+
+      // Filter by thekedar if requested
+      const filteredRows = selectedThekedar === 'all'
+        ? allRows
+        : allRows.filter((r) => r.thekedar_name.toLowerCase() === selectedThekedar.toLowerCase());
+
+      const totalQuantity = filteredRows.reduce((sum, r) => sum + r.quantity, 0);
+
+      // Group by Thekedar summary
+      const byThekedar = {};
+      filteredRows.forEach((r) => {
+        if (!byThekedar[r.thekedar_name]) {
+          byThekedar[r.thekedar_name] = {
+            thekedar_name: r.thekedar_name,
+            total_quantity: 0,
+            entry_count: 0,
+            models: {},
+          };
+        }
+        byThekedar[r.thekedar_name].total_quantity += r.quantity;
+        byThekedar[r.thekedar_name].entry_count += 1;
+        byThekedar[r.thekedar_name].models[r.model_code] =
+          (byThekedar[r.thekedar_name].models[r.model_code] || 0) + r.quantity;
+      });
+
+      // Group by Model summary
+      const byModel = {};
+      filteredRows.forEach((r) => {
+        if (!byModel[r.model_code]) {
+          byModel[r.model_code] = {
+            model_code: r.model_code,
+            model_name: r.model_name,
+            total_quantity: 0,
+            entry_count: 0,
+          };
+        }
+        byModel[r.model_code].total_quantity += r.quantity;
+        byModel[r.model_code].entry_count += 1;
+      });
+
+      return NextResponse.json({
+        report_type: 'thekedar_production',
+        start_date: startDate,
+        end_date: endDate,
+        selected_thekedar: selectedThekedar,
+        total_quantity: totalQuantity,
+        total_entries: filteredRows.length,
+        thekedar_count: Object.keys(byThekedar).length,
+        thekedar_list: Array.from(allThekedarsSet).sort(),
+        by_thekedar: Object.values(byThekedar).sort((a, b) => b.total_quantity - a.total_quantity),
+        by_model: Object.values(byModel).sort((a, b) => b.total_quantity - a.total_quantity),
+        data: filteredRows,
       });
     }
 

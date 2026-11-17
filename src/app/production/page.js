@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import DataTable from '@/components/DataTable';
@@ -22,6 +23,18 @@ export default function ProductionPage() {
     { id: 'item-1', model_id: '', quantity: '' },
   ]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Thekedar (Assembly Contractor) State
+  const [thekedars, setThekedars] = useState([
+    'Ramesh Thekedar',
+    'Suresh Thekedar',
+    'Mukesh Thekedar',
+    'Kailash Assembly',
+  ]);
+  const [selectedThekedar, setSelectedThekedar] = useState('');
+  const [isAddingNewThekedar, setIsAddingNewThekedar] = useState(false);
+  const [newThekedarName, setNewThekedarName] = useState('');
+  const [logThekedarFilter, setLogThekedarFilter] = useState('all');
 
   // Active Models Dropdown Data
   const [models, setModels] = useState([]);
@@ -64,6 +77,10 @@ export default function ProductionPage() {
       }
 
       setLogEntries(data.entries || []);
+
+      if (data.contractors && Array.isArray(data.contractors) && data.contractors.length > 0) {
+        setThekedars((prev) => Array.from(new Set([...prev, ...data.contractors])).filter(Boolean));
+      }
     } catch (err) {
       console.error('Error fetching production log:', err);
       showToast('Could not refresh production log', 'error');
@@ -72,10 +89,48 @@ export default function ProductionPage() {
     }
   }, [productionDate, showToast]);
 
+  // Load saved Thekedars from localStorage on mount
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('jospo_thekedars_list');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setThekedars((prev) => Array.from(new Set([...prev, ...parsed])));
+            setSelectedThekedar((curr) => curr || parsed[0]);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read saved thekedars:', e);
+    }
+  }, []);
+
   useEffect(() => {
     fetchModels();
     fetchTodayLog(productionDate);
   }, [fetchModels, fetchTodayLog, productionDate]);
+
+  // Add new Thekedar helper
+  const handleAddNewThekedar = () => {
+    const clean = newThekedarName.trim();
+    if (!clean) {
+      showToast('Please enter a contractor / Thekedar name', 'warning');
+      return;
+    }
+    const updated = Array.from(new Set([...thekedars, clean]));
+    setThekedars(updated);
+    setSelectedThekedar(clean);
+    setIsAddingNewThekedar(false);
+    setNewThekedarName('');
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('jospo_thekedars_list', JSON.stringify(updated));
+      }
+    } catch (e) {}
+    showToast(`Added Thekedar: ${clean}`, 'success');
+  };
 
   // Row management
   const handleAddRow = () => {
@@ -137,6 +192,12 @@ export default function ProductionPage() {
       return;
     }
 
+    const finalThekedar = (selectedThekedar || '').trim();
+    if (!finalThekedar) {
+      showToast('Please select or add the Thekedar (Contractor) who assembled these units.', 'warning');
+      return;
+    }
+
     try {
       setSubmitting(true);
       const res = await fetch('/api/production', {
@@ -145,6 +206,8 @@ export default function ProductionPage() {
         body: JSON.stringify({
           entries: validEntries,
           production_date: productionDate,
+          contractor_name: finalThekedar,
+          thekedar_name: finalThekedar,
           remarks: remarks.trim() || null,
         }),
       });
@@ -154,12 +217,23 @@ export default function ProductionPage() {
         throw new Error(result.error || 'Failed to submit production entries');
       }
 
+      // Persist thekedar to list and localStorage if newly typed
+      if (finalThekedar && !thekedars.includes(finalThekedar)) {
+        const updated = Array.from(new Set([...thekedars, finalThekedar]));
+        setThekedars(updated);
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('jospo_thekedars_list', JSON.stringify(updated));
+          }
+        } catch (e) {}
+      }
+
       showToast(
-        `Successfully logged ${totalQuantity} units across ${validEntries.length} model(s)!`,
+        `Successfully logged ${totalQuantity} units under "${finalThekedar}" across ${validEntries.length} model(s)!`,
         'success'
       );
 
-      // Reset form
+      // Reset form rows & remarks (keep selected Thekedar for rapid consecutive batch logging)
       setRows([{ id: `item-${Date.now()}`, model_id: '', quantity: '' }]);
       setRemarks('');
 
@@ -192,6 +266,15 @@ export default function ProductionPage() {
       render: (val) => (
         <span className="font-mono text-xs text-gray-500 font-medium">
           {formatTime(val)}
+        </span>
+      ),
+    },
+    {
+      key: 'contractor_name',
+      label: 'Thekedar',
+      render: (val) => (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+          👷 {val || 'General / Unassigned'}
         </span>
       ),
     },
@@ -238,10 +321,18 @@ export default function ProductionPage() {
     },
   ];
 
+  // Filtered log entries based on selected contractor filter
+  const displayedLogEntries = useMemo(() => {
+    if (!logThekedarFilter || logThekedarFilter === 'all') return logEntries;
+    return logEntries.filter(
+      (item) => (item.contractor_name || 'General / Unassigned').toLowerCase() === logThekedarFilter.toLowerCase()
+    );
+  }, [logEntries, logThekedarFilter]);
+
   // Calculate sum of log
   const logTotalUnits = useMemo(() => {
-    return logEntries.reduce((sum, item) => sum + (item.quantity || 0), 0);
-  }, [logEntries]);
+    return displayedLogEntries.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  }, [displayedLogEntries]);
 
   return (
     <AppShell allowedRoles={['admin', 'production']}>
@@ -256,11 +347,20 @@ export default function ProductionPage() {
               </h1>
             </div>
             <p className="mt-1 text-sm text-gray-500">
-              Record manufactured cooler units to automatically increment real-time stock balances.
+              Record manufactured cooler units under Thekedars to automatically increment real-time stock balances.
             </p>
           </div>
 
           <div className="flex items-center space-x-3 text-sm">
+            <Link
+              href="/reports?tab=thekedar_production"
+              className="bg-white hover:bg-gray-50 text-gray-700 font-semibold px-3 py-2 rounded-xl border border-gray-200 shadow-sm flex items-center space-x-1.5 transition-colors text-xs"
+            >
+              <span>👷</span>
+              <span>Thekedar Reports & Settlements</span>
+              <span className="text-gray-400">→</span>
+            </Link>
+
             <div className="bg-white px-3.5 py-2 rounded-xl border border-gray-200 shadow-sm flex items-center space-x-2">
               <span className="text-gray-400">📅</span>
               <span className="font-semibold text-gray-800">
@@ -306,6 +406,114 @@ export default function ProductionPage() {
                   <span className="text-[11px] text-gray-400 mt-1 block">
                     Defaults to today. Can be adjusted for prior shift logging.
                   </span>
+                </div>
+
+                {/* Thekedar / Assembly Contractor Section */}
+                <div className="p-3.5 bg-amber-50/70 rounded-xl border border-amber-200/90 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-950 flex items-center space-x-1.5">
+                      <span>👷 Thekedar (Assembly Contractor)</span>
+                      <span className="text-red-500">*</span>
+                    </label>
+                    {!isAddingNewThekedar && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAddingNewThekedar(true)}
+                        className="text-[11px] font-semibold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1"
+                      >
+                        <span>+ Add New Thekedar</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {isAddingNewThekedar ? (
+                    <div className="space-y-2 pt-0.5">
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="text"
+                          value={newThekedarName}
+                          onChange={(e) => setNewThekedarName(e.target.value)}
+                          placeholder="e.g. Ramesh Thekedar"
+                          className="input-field text-xs bg-white font-medium flex-1"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddNewThekedar();
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddNewThekedar}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsAddingNewThekedar(false);
+                            setNewThekedarName('');
+                          }}
+                          className="px-2.5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-medium rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-500">
+                        Type the contractor name and click Save.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <select
+                        value={selectedThekedar}
+                        onChange={(e) => {
+                          if (e.target.value === '__add_new__') {
+                            setIsAddingNewThekedar(true);
+                          } else {
+                            setSelectedThekedar(e.target.value);
+                          }
+                        }}
+                        className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
+                        required
+                      >
+                        <option value="">-- Select Thekedar / Contractor --</option>
+                        {thekedars.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                        <option value="__add_new__">+ Add New Thekedar...</option>
+                      </select>
+
+                      {/* Quick chips for easy 1-click select */}
+                      {thekedars.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          <span className="text-[10px] text-gray-500 font-medium">Quick Select:</span>
+                          {thekedars.slice(0, 5).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setSelectedThekedar(t)}
+                              className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+                                selectedThekedar === t
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                                  : 'bg-white text-gray-700 border-amber-200 hover:border-amber-400 hover:bg-amber-50'
+                              }`}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-amber-800/80">
+                    Production entries will be recorded under this Thekedar for wage settlement and reports.
+                  </p>
                 </div>
 
                 {/* Dynamic Model Rows */}
@@ -489,7 +697,25 @@ export default function ProductionPage() {
                 </p>
               </div>
 
-              <div className="flex items-center space-x-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {thekedars.length > 0 && (
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-xs text-gray-500 font-medium">Thekedar:</span>
+                    <select
+                      value={logThekedarFilter}
+                      onChange={(e) => setLogThekedarFilter(e.target.value)}
+                      className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 bg-gray-50 text-gray-800 font-semibold focus:ring-1 focus:ring-primary-500"
+                    >
+                      <option value="all">All Thekedars ({logEntries.length})</option>
+                      {thekedars.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   {logTotalUnits.toLocaleString()} units produced
                 </span>
@@ -527,8 +753,12 @@ export default function ProductionPage() {
             ) : (
               <DataTable
                 columns={logColumns}
-                data={logEntries}
-                emptyMessage={`No production entries recorded for ${productionDate} yet. Use the form on the left to submit.`}
+                data={displayedLogEntries}
+                emptyMessage={
+                  logThekedarFilter !== 'all'
+                    ? `No production entries found for Thekedar "${logThekedarFilter}" on ${productionDate}.`
+                    : `No production entries recorded for ${productionDate} yet. Use the form on the left to submit.`
+                }
               />
             )}
           </div>
