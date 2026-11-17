@@ -413,60 +413,67 @@ export default function ReportsPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {reportData.by_thekedar.map((c) => (
-                    <div
-                      key={c.contractor_name}
-                      className="p-4 rounded-xl border border-amber-200/80 bg-amber-50/40 hover:bg-amber-50/80 transition-all flex flex-col justify-between"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-gray-900 text-sm flex items-center space-x-1.5">
-                            <span>👷</span>
-                            <span>{c.contractor_name}</span>
-                          </span>
-                          <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
-                            {c.entries_count} logs
-                          </span>
-                        </div>
+                  {(reportData.by_thekedar || []).map((c, cIdx) => {
+                    const cName = c?.contractor_name || c?.thekedar_name || 'General / Unassigned';
+                    return (
+                      <div
+                        key={cName + cIdx}
+                        className="p-4 rounded-xl border border-amber-200/80 bg-amber-50/40 hover:bg-amber-50/80 transition-all flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-900 text-sm flex items-center space-x-1.5">
+                              <span>👷</span>
+                              <span>{cName}</span>
+                            </span>
+                            <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                              {c.entries_count || c.entry_count || 0} logs
+                            </span>
+                          </div>
 
-                        <div className="mt-3">
-                          <span className="text-2xl font-extrabold text-amber-900 font-mono">
-                            {c.total_quantity.toLocaleString()}
-                          </span>
-                          <span className="text-xs font-medium text-gray-500 ml-1.5">assembled coolers</span>
-                        </div>
+                          <div className="mt-3">
+                            <span className="text-2xl font-extrabold text-amber-900 font-mono">
+                              {(c.total_quantity || 0).toLocaleString()}
+                            </span>
+                            <span className="text-xs font-medium text-gray-500 ml-1.5">assembled coolers</span>
+                          </div>
 
-                        {/* Model breakdown chips */}
-                        <div className="mt-3 space-y-1.5 border-t border-amber-100 pt-2.5">
-                          <span className="text-[11px] font-bold text-gray-600 block uppercase">
-                            Model Breakdown:
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {Object.values(c.models || {}).map((m) => (
-                              <span
-                                key={m.code}
-                                className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-white text-gray-800 border border-amber-200 shadow-2xs"
-                              >
-                                <span className="font-bold text-primary-700 mr-1">{m.code}:</span>
-                                <span>{m.quantity}</span>
-                              </span>
-                            ))}
+                          {/* Model breakdown chips */}
+                          <div className="mt-3 space-y-1.5 border-t border-amber-100 pt-2.5">
+                            <span className="text-[11px] font-bold text-gray-600 block uppercase">
+                              Model Breakdown:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {Object.entries(c.models || {}).map(([modelKey, m]) => {
+                                const code = typeof m === 'object' ? (m.code || modelKey) : modelKey;
+                                const qty = typeof m === 'object' ? m.quantity : m;
+                                return (
+                                  <span
+                                    key={code}
+                                    className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-white text-gray-800 border border-amber-200 shadow-2xs"
+                                  >
+                                    <span className="font-bold text-primary-700 mr-1">{code}:</span>
+                                    <span>{qty}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="mt-4 pt-3 border-t border-amber-100 flex items-center justify-between">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedThekedar(c.contractor_name)}
-                          className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1"
-                        >
-                          <span>Filter to {c.contractor_name}</span>
-                          <span>→</span>
-                        </button>
+                        <div className="mt-4 pt-3 border-t border-amber-100 flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedThekedar(cName)}
+                            className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1"
+                          >
+                            <span>Filter to {cName}</span>
+                            <span>→</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -509,28 +516,37 @@ export default function ReportsPage() {
                 </div>
 
                 {/* Model Wise Summary for this contractor */}
-                {reportData?.by_thekedar?.find(
-                  (c) => c.contractor_name.toLowerCase() === selectedThekedar.toLowerCase()
-                ) && (
-                  <div>
-                    <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">
-                      Model Wise Assembled Units:
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {Object.values(
-                        reportData.by_thekedar.find(
-                          (c) => c.contractor_name.toLowerCase() === selectedThekedar.toLowerCase()
-                        )?.models || {}
-                      ).map((m) => (
-                        <div key={m.code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-2xs">
-                          <span className="font-mono font-bold text-xs text-primary-700">{m.code}</span>
-                          <p className="text-xs text-gray-500 truncate">{m.name}</p>
-                          <p className="text-lg font-extrabold text-gray-900 mt-1 font-mono">{m.quantity} units</p>
-                        </div>
-                      ))}
+                {(() => {
+                  const target = (selectedThekedar || '').toLowerCase().trim();
+                  const contractorSummary = (reportData?.by_thekedar || []).find((c) => {
+                    const name = (c?.contractor_name || c?.thekedar_name || '').toLowerCase().trim();
+                    return name === target;
+                  });
+
+                  if (!contractorSummary || !contractorSummary.models) return null;
+
+                  return (
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">
+                        Model Wise Assembled Units:
+                      </h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {Object.entries(contractorSummary.models).map(([modelKey, m]) => {
+                          const code = typeof m === 'object' ? (m.code || modelKey) : modelKey;
+                          const name = typeof m === 'object' ? (m.name || code) : 'Units';
+                          const qty = typeof m === 'object' ? (m.quantity || 0) : m;
+                          return (
+                            <div key={code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-2xs">
+                              <span className="font-mono font-bold text-xs text-primary-700">{code}</span>
+                              <p className="text-xs text-gray-500 truncate">{name}</p>
+                              <p className="text-lg font-extrabold text-gray-900 mt-1 font-mono">{qty} units</p>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             )}
 

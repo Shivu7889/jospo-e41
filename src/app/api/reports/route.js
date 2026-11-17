@@ -88,7 +88,7 @@ export async function GET(request) {
           dispatch_date,
           status,
           remarks,
-          employees (
+          employees!dispatches_employee_id_fkey (
             id,
             name
           ),
@@ -415,18 +415,28 @@ export async function GET(request) {
       // Group by Thekedar summary
       const byThekedar = {};
       filteredRows.forEach((r) => {
-        if (!byThekedar[r.thekedar_name]) {
-          byThekedar[r.thekedar_name] = {
-            thekedar_name: r.thekedar_name,
+        const thekedarName = r.thekedar_name || r.contractor_name || 'General / Unassigned';
+        if (!byThekedar[thekedarName]) {
+          byThekedar[thekedarName] = {
+            thekedar_name: thekedarName,
+            contractor_name: thekedarName,
             total_quantity: 0,
             entry_count: 0,
             models: {},
           };
         }
-        byThekedar[r.thekedar_name].total_quantity += r.quantity;
-        byThekedar[r.thekedar_name].entry_count += 1;
-        byThekedar[r.thekedar_name].models[r.model_code] =
-          (byThekedar[r.thekedar_name].models[r.model_code] || 0) + r.quantity;
+        byThekedar[thekedarName].total_quantity += r.quantity;
+        byThekedar[thekedarName].entry_count += 1;
+
+        const mCode = r.model_code || 'Model';
+        if (!byThekedar[thekedarName].models[mCode]) {
+          byThekedar[thekedarName].models[mCode] = {
+            code: mCode,
+            name: r.model_name || mCode,
+            quantity: 0,
+          };
+        }
+        byThekedar[thekedarName].models[mCode].quantity += r.quantity;
       });
 
       // Group by Model summary
