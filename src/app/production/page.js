@@ -24,6 +24,8 @@ export default function ProductionPage() {
   ]);
   const [submitting, setSubmitting] = useState(false);
 
+  const isAdmin = employee?.role === 'admin';
+
   // Thekedar (Assembly Contractor) State
   const [thekedars, setThekedars] = useState([
     'Ramesh Thekedar',
@@ -32,8 +34,9 @@ export default function ProductionPage() {
     'Kailash Assembly',
   ]);
   const [selectedThekedar, setSelectedThekedar] = useState('');
-  const [isAddingNewThekedar, setIsAddingNewThekedar] = useState(false);
+  const [showManageThekedarsModal, setShowManageThekedarsModal] = useState(false);
   const [newThekedarName, setNewThekedarName] = useState('');
+  const [savingThekedar, setSavingThekedar] = useState(false);
   const [logThekedarFilter, setLogThekedarFilter] = useState('all');
 
   // Active Models Dropdown Data
@@ -64,6 +67,20 @@ export default function ProductionPage() {
     }
   }, [supabase, showToast]);
 
+  // Fetch contractor list from /api/contractors
+  const fetchThekedars = useCallback(async () => {
+    try {
+      const res = await fetch('/api/contractors');
+      const data = await res.json();
+      if (res.ok && data.contractors && Array.isArray(data.contractors) && data.contractors.length > 0) {
+        setThekedars(data.contractors);
+        setSelectedThekedar((curr) => (curr && data.contractors.includes(curr) ? curr : data.contractors[0]));
+      }
+    } catch (e) {
+      console.warn('Could not fetch contractors:', e);
+    }
+  }, []);
+
   // Fetch production log for the selected/today date
   const fetchTodayLog = useCallback(async (targetDate = productionDate) => {
     try {
@@ -89,47 +106,76 @@ export default function ProductionPage() {
     }
   }, [productionDate, showToast]);
 
-  // Load saved Thekedars from localStorage on mount
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('jospo_thekedars_list');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setThekedars((prev) => Array.from(new Set([...prev, ...parsed])));
-            setSelectedThekedar((curr) => curr || parsed[0]);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Could not read saved thekedars:', e);
-    }
-  }, []);
-
   useEffect(() => {
     fetchModels();
+    fetchThekedars();
     fetchTodayLog(productionDate);
-  }, [fetchModels, fetchTodayLog, productionDate]);
+  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate]);
 
-  // Add new Thekedar helper
-  const handleAddNewThekedar = () => {
+  // Admin-only helper: Add new Thekedar
+  const handleAddNewThekedar = async (e) => {
+    if (e) e.preventDefault();
+    if (!isAdmin) {
+      showToast('Permission denied. Only Admins can add Thekedars.', 'error');
+      return;
+    }
     const clean = newThekedarName.trim();
     if (!clean) {
       showToast('Please enter a contractor / Thekedar name', 'warning');
       return;
     }
-    const updated = Array.from(new Set([...thekedars, clean]));
-    setThekedars(updated);
-    setSelectedThekedar(clean);
-    setIsAddingNewThekedar(false);
-    setNewThekedarName('');
     try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('jospo_thekedars_list', JSON.stringify(updated));
+      setSavingThekedar(true);
+      const res = await fetch('/api/contractors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: clean }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to add Thekedar');
+
+      const updated = Array.from(new Set([...thekedars, clean]));
+      setThekedars(updated);
+      setSelectedThekedar(clean);
+      setNewThekedarName('');
+      showToast(`Added Thekedar: ${clean}`, 'success');
+    } catch (err) {
+      console.error('Error adding Thekedar:', err);
+      showToast(err.message || 'Error adding Thekedar', 'error');
+    } finally {
+      setSavingThekedar(false);
+    }
+  };
+
+  // Admin-only helper: Remove Thekedar
+  const handleRemoveThekedar = async (nameToRemove) => {
+    if (!isAdmin) {
+      showToast('Permission denied. Only Admins can remove Thekedars.', 'error');
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" from active Thekedars?`)) {
+      return;
+    }
+    try {
+      setSavingThekedar(true);
+      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove Thekedar');
+
+      const updated = thekedars.filter((t) => t !== nameToRemove);
+      setThekedars(updated);
+      if (selectedThekedar === nameToRemove) {
+        setSelectedThekedar(updated[0] || '');
       }
-    } catch (e) {}
-    showToast(`Added Thekedar: ${clean}`, 'success');
+      showToast(`Removed Thekedar: ${nameToRemove}`, 'success');
+    } catch (err) {
+      console.error('Error removing Thekedar:', err);
+      showToast(err.message || 'Error removing Thekedar', 'error');
+    } finally {
+      setSavingThekedar(false);
+    }
   };
 
   // Row management
@@ -415,104 +461,58 @@ export default function ProductionPage() {
                       <span>👷 Thekedar (Assembly Contractor)</span>
                       <span className="text-red-500">*</span>
                     </label>
-                    {!isAddingNewThekedar && (
+                    {isAdmin && (
                       <button
                         type="button"
-                        onClick={() => setIsAddingNewThekedar(true)}
-                        className="text-[11px] font-semibold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1"
+                        onClick={() => setShowManageThekedarsModal(true)}
+                        className="text-[11px] font-semibold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1 bg-white px-2 py-0.5 rounded border border-gray-300 shadow-2xs"
                       >
-                        <span>+ Add New Thekedar</span>
+                        <span>⚙️ Manage Thekedars (Admin)</span>
                       </button>
                     )}
                   </div>
 
-                  {isAddingNewThekedar ? (
-                    <div className="space-y-2 pt-0.5">
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="text"
-                          value={newThekedarName}
-                          onChange={(e) => setNewThekedarName(e.target.value)}
-                          placeholder="e.g. Ramesh Thekedar"
-                          className="input-field text-xs bg-white font-medium flex-1"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleAddNewThekedar();
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddNewThekedar}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm"
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsAddingNewThekedar(false);
-                            setNewThekedarName('');
-                          }}
-                          className="px-2.5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-medium rounded-lg"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                      <p className="text-[10px] text-gray-500">
-                        Type the contractor name and click Save.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <select
-                        value={selectedThekedar}
-                        onChange={(e) => {
-                          if (e.target.value === '__add_new__') {
-                            setIsAddingNewThekedar(true);
-                          } else {
-                            setSelectedThekedar(e.target.value);
-                          }
-                        }}
-                        className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
-                        required
-                      >
-                        <option value="">-- Select Thekedar / Contractor --</option>
-                        {thekedars.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                        <option value="__add_new__">+ Add New Thekedar...</option>
-                      </select>
+                  <div className="space-y-2">
+                    <select
+                      value={selectedThekedar}
+                      onChange={(e) => setSelectedThekedar(e.target.value)}
+                      className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
+                      required
+                    >
+                      <option value="">-- Select Thekedar / Contractor --</option>
+                      {thekedars.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
 
-                      {/* Quick chips for easy 1-click select */}
-                      {thekedars.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                          <span className="text-[10px] text-gray-500 font-medium">Quick Select:</span>
-                          {thekedars.slice(0, 5).map((t) => (
-                            <button
-                              key={t}
-                              type="button"
-                              onClick={() => setSelectedThekedar(t)}
-                              className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-                                selectedThekedar === t
-                                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                                  : 'bg-white text-gray-700 border-amber-200 hover:border-amber-400 hover:bg-amber-50'
-                              }`}
-                            >
-                              {t}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    {/* Quick chips for easy 1-click select */}
+                    {thekedars.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <span className="text-[10px] text-gray-500 font-medium">Quick Select:</span>
+                        {thekedars.slice(0, 5).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setSelectedThekedar(t)}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+                              selectedThekedar === t
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                                : 'bg-white text-gray-700 border-amber-200 hover:border-amber-400 hover:bg-amber-50'
+                            }`}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   <p className="text-[11px] text-amber-800/80">
-                    Production entries will be recorded under this Thekedar for wage settlement and reports.
+                    {isAdmin
+                      ? 'Production entries are recorded under this Thekedar for wage settlement. Click "Manage Thekedars" to add or remove contractors.'
+                      : 'Assigned contractor for this assembly shift. Only Admins have permission to add or remove Thekedars.'}
                   </p>
                 </div>
 
@@ -763,6 +763,112 @@ export default function ProductionPage() {
             )}
           </div>
         </div>
+
+        {/* ADMIN ONLY: Manage Thekedars Modal */}
+        {isAdmin && showManageThekedarsModal && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-scaleUp">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-2xl">👷</span>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
+                      <span>Manage Assembly Thekedars</span>
+                      <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full uppercase">
+                        Admin Only
+                      </span>
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Add new contractors or remove existing ones from factory production.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowManageThekedarsModal(false)}
+                  className="text-gray-400 hover:text-gray-600 p-1 text-base font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Form: Add New Contractor */}
+              <form onSubmit={handleAddNewThekedar} className="space-y-2 p-3.5 bg-gray-50 rounded-xl border border-gray-200">
+                <label className="text-xs font-bold text-gray-700 block">
+                  Add New Thekedar Name:
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={newThekedarName}
+                    onChange={(e) => setNewThekedarName(e.target.value)}
+                    placeholder="e.g. Raju Thekedar"
+                    className="input-field text-xs bg-white font-medium flex-1"
+                    disabled={savingThekedar}
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingThekedar || !newThekedarName.trim()}
+                    className="btn-primary text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-sm font-bold whitespace-nowrap"
+                  >
+                    <span>+ Add</span>
+                  </button>
+                </div>
+              </form>
+
+              {/* List of Current Thekedars with Remove buttons */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                    Current Thekedars ({thekedars.length})
+                  </span>
+                  <span className="text-[11px] text-gray-400">Click remove to delete</span>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 divide-y divide-gray-100 border border-gray-200 rounded-xl p-2 bg-white">
+                  {thekedars.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-4">No Thekedars registered.</p>
+                  ) : (
+                    thekedars.map((t) => (
+                      <div key={t} className="flex items-center justify-between py-2 px-2 hover:bg-gray-50 rounded-lg group">
+                        <div className="flex items-center space-x-2 text-xs font-semibold text-gray-800">
+                          <span>👷</span>
+                          <span>{t}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveThekedar(t)}
+                          disabled={savingThekedar}
+                          className="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2 py-1 rounded transition-colors font-medium flex items-center space-x-1 border border-red-200"
+                          title={`Remove ${t}`}
+                        >
+                          <span>🗑️</span>
+                          <span>Remove</span>
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                <Link
+                  href="/admin?section=thekedars"
+                  className="text-xs font-semibold text-primary-700 hover:underline"
+                >
+                  Open Full Admin Panel →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setShowManageThekedarsModal(false)}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   );
