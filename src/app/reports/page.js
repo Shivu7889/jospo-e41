@@ -11,7 +11,7 @@ export default function ReportsPage() {
   const { showToast } = useToast();
 
   // Active Tab: 'thekedar_production' | 'daily_production' | 'daily_dispatch' | 'monthly_summary' | 'model_stock'
-  const [activeTab, setActiveTab] = useState('daily_production');
+  const [activeTab, setActiveTab] = useState('thekedar_production');
 
   // Filter States
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);

@@ -78,7 +78,7 @@ export async function GET(request) {
 
     // 2. Daily Dispatch Report
     if (type === 'daily_dispatch') {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('dispatches')
         .select(`
           id,
@@ -104,6 +104,33 @@ export async function GET(request) {
         `)
         .eq('dispatch_date', date)
         .order('created_at', { ascending: false });
+
+      if (error && (error.message?.includes('relationship') || error.code === 'PGRST200')) {
+        const fallback = await supabase
+          .from('dispatches')
+          .select(`
+            id,
+            vehicle_number,
+            from_location,
+            destination,
+            dispatch_date,
+            status,
+            remarks,
+            dispatch_items (
+              id,
+              quantity,
+              cooler_models (
+                id,
+                name,
+                code
+              )
+            )
+          `)
+          .eq('dispatch_date', date)
+          .order('created_at', { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 400 });
