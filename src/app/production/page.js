@@ -40,6 +40,35 @@ export default function ProductionPage() {
   const [savingThekedar, setSavingThekedar] = useState(false);
   const [logThekedarFilter, setLogThekedarFilter] = useState('all');
 
+  // Edit & Delete Production Entry Modal State
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [editModelId, setEditModelId] = useState('');
+  const [editQuantity, setEditQuantity] = useState('');
+  const [editThekedar, setEditThekedar] = useState('');
+  const [editRemarks, setEditRemarks] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [deletingEntry, setDeletingEntry] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Helper to determine if an entry was created / logged today
+  const isEntryFromToday = useCallback((row) => {
+    if (!row) return false;
+    const now = new Date();
+    const utcToday = now.toISOString().split('T')[0];
+    const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    if (row.production_date === utcToday || row.production_date === localToday) return true;
+    if (row.created_at) {
+      const created = new Date(row.created_at);
+      const createdLocal = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')}`;
+      if (createdLocal === localToday) return true;
+      const diffHours = (now.getTime() - created.getTime()) / (1000 * 60 * 60);
+      if (diffHours >= 0 && diffHours <= 24) return true;
+    }
+    return false;
+  }, []);
+
   // Active Models Dropdown Data
   const [models, setModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
@@ -176,6 +205,86 @@ export default function ProductionPage() {
       showToast(err.message || 'Error removing Thekedar', 'error');
     } finally {
       setSavingThekedar(false);
+    }
+  };
+
+  // Open Edit Modal for a row
+  const handleOpenEditModal = (row) => {
+    setEditingEntry(row);
+    setEditModelId(row.model_id || '');
+    setEditQuantity(row.quantity || '');
+    setEditThekedar(row.contractor_name || row.thekedar_name || (thekedars[0] || ''));
+    setEditRemarks(row.display_remarks || row.remarks || '');
+  };
+
+  // Submit Edit changes
+  const handleSaveEdit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editingEntry) return;
+
+    const qty = parseInt(editQuantity, 10);
+    if (isNaN(qty) || qty <= 0) {
+      showToast('Quantity must be a positive number greater than 0', 'warning');
+      return;
+    }
+    if (!editModelId) {
+      showToast('Please select a cooler model', 'warning');
+      return;
+    }
+
+    try {
+      setSavingEdit(true);
+      const res = await fetch('/api/production', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingEntry.id,
+          model_id: editModelId,
+          quantity: qty,
+          contractor_name: (editThekedar || '').trim(),
+          remarks: (editRemarks || '').trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update entry');
+      }
+
+      showToast(data.message || 'Production entry updated successfully', 'success');
+      setEditingEntry(null);
+      await fetchTodayLog(productionDate);
+    } catch (err) {
+      console.error('Error saving production edit:', err);
+      showToast(err.message || 'Failed to update entry', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Confirm and execute entry deletion
+  const handleConfirmDelete = async () => {
+    if (!deletingEntry) return;
+
+    try {
+      setDeleting(true);
+      const res = await fetch(`/api/production?id=${encodeURIComponent(deletingEntry.id)}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to delete entry');
+      }
+
+      showToast(data.message || 'Production entry deleted successfully', 'success');
+      setDeletingEntry(null);
+      await fetchTodayLog(productionDate);
+    } catch (err) {
+      console.error('Error deleting production entry:', err);
+      showToast(err.message || 'Failed to delete entry', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -365,6 +474,55 @@ export default function ProductionPage() {
           <span className="font-medium">{val || 'Employee'}</span>
         </div>
       ),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      align: 'right',
+      render: (val, row) => {
+        const isToday = isEntryFromToday(row);
+        const isAuthor = !row.employee_id || row.employee_id === employee?.id;
+        const canModify = isAdmin || (isToday && isAuthor);
+
+        if (!canModify) {
+          return (
+            <span
+              className="inline-flex items-center space-x-1 text-[11px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-200"
+              title={
+                !isToday
+                  ? 'Locked: Past date entries cannot be edited or deleted by production staff.'
+                  : 'Locked: Only the employee who logged this entry can edit or delete it.'
+              }
+            >
+              <span>🔒</span>
+              <span>Locked</span>
+            </span>
+          );
+        }
+
+        return (
+          <div className="flex items-center justify-end space-x-1.5">
+            <button
+              type="button"
+              onClick={() => handleOpenEditModal(row)}
+              className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-semibold flex items-center space-x-1 border border-blue-200"
+              title="Edit quantity, model, or Thekedar"
+            >
+              <span>✏️</span>
+              <span className="hidden sm:inline">Edit</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeletingEntry(row)}
+              className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-semibold flex items-center space-x-1 border border-red-200"
+              title="Delete this entry and reverse stock"
+            >
+              <span>🗑️</span>
+              <span className="hidden sm:inline">Delete</span>
+            </button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -865,6 +1023,224 @@ export default function ProductionPage() {
                   className="btn-secondary text-xs py-2 px-4"
                 >
                   Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EDIT PRODUCTION ENTRY MODAL */}
+        {editingEntry && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">✏️</span>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Edit Production Entry
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Logged on {editingEntry.production_date} by {editingEntry.employee_name || 'You'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingEntry(null)}
+                  disabled={savingEdit}
+                  className="text-gray-400 hover:text-gray-600 p-1 text-base font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                {/* Model Selection */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Cooler Model <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editModelId}
+                    onChange={(e) => setEditModelId(e.target.value)}
+                    className="input-field text-xs bg-white font-semibold text-gray-900"
+                    required
+                  >
+                    <option value="">-- Select Model --</option>
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.code} - {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Quantity */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Quantity (Units Manufactured) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={editQuantity}
+                    onChange={(e) => setEditQuantity(e.target.value)}
+                    className="input-field text-sm font-bold font-mono bg-white"
+                    placeholder="e.g. 50"
+                    required
+                  />
+                  <span className="text-[11px] text-gray-400 mt-1 block">
+                    Current stock balance will automatically adjust to reflect the new count.
+                  </span>
+                </div>
+
+                {/* Thekedar (Contractor) */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Thekedar (Assembly Contractor) <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editThekedar}
+                    onChange={(e) => setEditThekedar(e.target.value)}
+                    className="input-field text-xs bg-white font-semibold text-gray-900"
+                    required
+                  >
+                    <option value="">-- Select Thekedar --</option>
+                    {thekedars.map((t) => (
+                      <option key={t} value={t}>
+                        👷 {t}
+                      </option>
+                    ))}
+                    {!thekedars.includes(editThekedar) && editThekedar && (
+                      <option value={editThekedar}>👷 {editThekedar}</option>
+                    )}
+                  </select>
+                </div>
+
+                {/* Remarks */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Shift Notes / Remarks
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editRemarks}
+                    onChange={(e) => setEditRemarks(e.target.value)}
+                    placeholder="Optional remarks"
+                    className="input-field text-xs"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditingEntry(null)}
+                    disabled={savingEdit}
+                    className="btn-secondary text-xs py-2 px-3"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit || !editQuantity || parseInt(editQuantity, 10) <= 0 || !editModelId}
+                    className="btn-primary text-xs py-2 px-4 shadow-sm font-bold inline-flex items-center space-x-1.5"
+                  >
+                    {savingEdit ? (
+                      <>
+                        <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <span>Save Changes</span>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* DELETE CONFIRMATION MODAL */}
+        {deletingEntry && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp border-t-4 border-red-500">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2 text-red-600">
+                  <span className="text-2xl">⚠️</span>
+                  <h3 className="text-base font-bold text-gray-900">
+                    Delete Production Entry?
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeletingEntry(null)}
+                  disabled={deleting}
+                  className="text-gray-400 hover:text-gray-600 p-1 text-base font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-3.5 bg-red-50/60 rounded-xl text-xs space-y-1.5 border border-red-100">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Model:</span>
+                  <span className="font-bold text-gray-900">
+                    {deletingEntry.model_code} - {deletingEntry.model_name}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Quantity to Deduct:</span>
+                  <span className="font-extrabold text-red-600">
+                    -{deletingEntry.quantity} units
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Thekedar:</span>
+                  <span className="font-semibold text-amber-800">
+                    {deletingEntry.contractor_name || 'General Assembly'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Date:</span>
+                  <span className="font-medium text-gray-700">{deletingEntry.production_date}</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-600">
+                Are you sure you want to delete this production entry? This will automatically reverse the stock ledger and reduce current stock by <strong className="text-red-700">{deletingEntry.quantity} units</strong>.
+              </p>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setDeletingEntry(null)}
+                  disabled={deleting}
+                  className="btn-secondary text-xs py-2 px-3"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs py-2 px-4 rounded-xl shadow-sm inline-flex items-center space-x-1.5 transition-colors"
+                >
+                  {deleting ? (
+                    <>
+                      <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      </svg>
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <span>Yes, Delete Entry</span>
+                  )}
                 </button>
               </div>
             </div>

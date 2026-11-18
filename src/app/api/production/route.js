@@ -1,7 +1,41 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { createServerSupabase, createAdminSupabase } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Helper to determine if an entry was created / logged "today"
+ * Checks UTC date, IST local date (Asia/Kolkata), and 24-hour window
+ */
+function isEntryFromToday(entry) {
+  if (!entry) return false;
+  const now = new Date();
+  const utcToday = now.toISOString().split('T')[0];
+  const localToday = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+  // 1. Check production_date
+  if (entry.production_date === utcToday || entry.production_date === localToday) {
+    return true;
+  }
+
+  // 2. Check created_at date
+  if (entry.created_at) {
+    const createdDate = new Date(entry.created_at);
+    const createdUtc = createdDate.toISOString().split('T')[0];
+    const createdLocal = createdDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (createdUtc === utcToday || createdLocal === localToday) {
+      return true;
+    }
+
+    // 3. Within 24 hours of creation
+    const diffHours = (now.getTime() - createdDate.getTime()) / (1000 * 60 * 60);
+    if (diffHours >= 0 && diffHours <= 24) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Helper to extract Thekedar (Contractor) name from entry or remarks fallback
@@ -401,80 +435,391 @@ export async function POST(request) {
 
 /**
  * PATCH /api/production
- * Reassign / update contractor_name of one or more production entries
- * RESTRICTED: Admin only
+ * Edit production entry (Quantity, Model, Thekedar, Remarks) or Batch Thekedar reassign.
+ * Permissions:
+ *   - Admin: Can edit any entry anytime, or batch reassign Thekedars.
+ *   - Production Employee: Can ONLY edit entries they personally logged, and ONLY on the date they were added (today).
  */
 export async function PATCH(request) {
   try {
-    const supabase = await createServerSupabase();
+    const userSupabase = await createServerSupabase();
+    const adminSupabase = createAdminSupabase();
+    const db = adminSupabase || userSupabase;
 
-    // Verify user & check admin role
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    // 1. Authenticate user
+    const {
+      data: { user },
+      error: authErr,
+    } = await userSupabase.auth.getUser();
+
     if (authErr || !user) {
-      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
     }
 
-    const { data: employee, error: empErr } = await supabase
+    // 2. Fetch employee details
+    const { data: employee, error: empErr } = await userSupabase
       .from('employees')
-      .select('id, name, role')
+      .select('id, name, role, is_active')
       .eq('id', user.id)
       .single();
 
-    if (empErr || !employee || employee.role !== 'admin') {
+    if (empErr || !employee) {
+      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
+    }
+
+    const isAdmin = employee.role === 'admin';
+    const isProduction = employee.role === 'production';
+
+    if (!isAdmin && !isProduction) {
       return NextResponse.json(
-        { error: 'Permission denied. Only Admins can reassign or edit Thekedars on production entries.' },
+        { success: false, error: 'Forbidden. Only Production or Admin staff may edit production entries.' },
         { status: 403 }
       );
     }
 
     const body = await request.json();
-    const { id, ids, contractor_name } = body;
-    const cleanContractor = (contractor_name || '').trim();
+    const { id, ids, contractor_name, model_id, quantity, remarks } = body;
 
-    if (!cleanContractor) {
-      return NextResponse.json({ error: 'Contractor / Thekedar name cannot be empty.' }, { status: 400 });
-    }
+    // CASE A: Admin Batch Contractor Update
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      if (!isAdmin) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden. Only Admins can batch update Thekedars.' },
+          { status: 403 }
+        );
+      }
+      const cleanContractor = (contractor_name || '').trim();
+      if (!cleanContractor) {
+        return NextResponse.json({ success: false, error: 'Contractor name cannot be empty.' }, { status: 400 });
+      }
 
-    const idList = ids && Array.isArray(ids) ? ids : (id ? [id] : []);
-    if (idList.length === 0) {
-      return NextResponse.json({ error: 'No production entry ID(s) provided.' }, { status: 400 });
-    }
-
-    // Try updating contractor_name
-    let { data: updated, error: updateErr } = await supabase
-      .from('production_entries')
-      .update({
-        contractor_name: cleanContractor,
-      })
-      .in('id', idList)
-      .select('id, production_date, quantity, remarks, contractor_name');
-
-    // Also update remarks formatted as [Thekedar: cleanContractor] for redundancy
-    if (updateErr) {
-      // Fallback if contractor_name column error
-      const { data: fallback, error: fbErr } = await supabase
+      let { data: updated, error: updateErr } = await db
         .from('production_entries')
-        .update({
-          remarks: `[Thekedar: ${cleanContractor}]`,
-        })
-        .in('id', idList)
-        .select('id, production_date, quantity, remarks');
+        .update({ contractor_name: cleanContractor })
+        .in('id', ids)
+        .select('id, production_date, quantity, remarks, contractor_name');
 
-      if (fbErr) throw fbErr;
-      updated = fallback;
+      if (updateErr) {
+        const { data: fallback, error: fbErr } = await db
+          .from('production_entries')
+          .update({ remarks: `[Thekedar: ${cleanContractor}]` })
+          .in('id', ids)
+          .select('id, production_date, quantity, remarks');
+        if (fbErr) throw fbErr;
+        updated = fallback;
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `Updated ${ids.length} entry/entries to Thekedar "${cleanContractor}".`,
+        data: updated,
+      });
+    }
+
+    // CASE B: Single Entry Update
+    if (!id) {
+      return NextResponse.json({ success: false, error: 'Production entry ID is required.' }, { status: 400 });
+    }
+
+    // Fetch the existing production entry to verify ownership and creation date
+    const { data: targetEntry, error: fetchErr } = await db
+      .from('production_entries')
+      .select('id, model_id, quantity, production_date, remarks, employee_id, created_at, contractor_name')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !targetEntry) {
+      return NextResponse.json({ success: false, error: 'Production entry not found.' }, { status: 404 });
+    }
+
+    // Strict Permissions:
+    // If not Admin, user MUST be the employee who logged it, AND entry MUST be from today!
+    if (!isAdmin) {
+      if (targetEntry.employee_id && targetEntry.employee_id !== employee.id) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Permission denied. You can only edit production entries that you personally logged.',
+          },
+          { status: 403 }
+        );
+      }
+
+      if (!isEntryFromToday(targetEntry)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Locked: Production entries can only be edited on the day they were created.',
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Prepare update payload
+    const updatePayload = {};
+    let newQuantity = targetEntry.quantity;
+    let newModelId = targetEntry.model_id;
+    let newContractor = targetEntry.contractor_name || extractThekedar(targetEntry);
+
+    if (quantity !== undefined) {
+      const q = Number(quantity);
+      if (!Number.isInteger(q) || q <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'Quantity must be a positive whole number greater than 0.' },
+          { status: 400 }
+        );
+      }
+      updatePayload.quantity = q;
+      newQuantity = q;
+    }
+
+    if (model_id !== undefined && model_id !== targetEntry.model_id) {
+      const { data: modelData, error: modelErr } = await db
+        .from('cooler_models')
+        .select('id, name, code, is_active')
+        .eq('id', model_id)
+        .single();
+      if (modelErr || !modelData) {
+        return NextResponse.json({ success: false, error: 'Selected cooler model not found.' }, { status: 400 });
+      }
+      updatePayload.model_id = model_id;
+      newModelId = model_id;
+    }
+
+    if (contractor_name !== undefined) {
+      const clean = contractor_name.trim();
+      if (clean) {
+        updatePayload.contractor_name = clean;
+        newContractor = clean;
+      }
+    }
+
+    // Format remarks to retain Thekedar tag for backward compatibility
+    let cleanRemarks = remarks !== undefined ? (remarks || '').trim() : (targetEntry.remarks || '');
+    cleanRemarks = cleanRemarks.replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '').trim();
+    if (newContractor && newContractor !== 'General Assembly') {
+      cleanRemarks = cleanRemarks ? `[Thekedar: ${newContractor}] ${cleanRemarks}` : `[Thekedar: ${newContractor}]`;
+    }
+    updatePayload.remarks = cleanRemarks || null;
+
+    // 1. Update production_entries
+    const selectFields = `
+      id,
+      quantity,
+      production_date,
+      remarks,
+      created_at,
+      model_id,
+      employee_id,
+      cooler_models (id, name, code),
+      employees (id, name)
+    `;
+
+    let { data: updatedEntry, error: updateErr } = await db
+      .from('production_entries')
+      .update(updatePayload)
+      .eq('id', id)
+      .select(selectFields)
+      .single();
+
+    if (updateErr && (updateErr.message?.includes('contractor_name') || updateErr.code === 'PGRST204')) {
+      delete updatePayload.contractor_name;
+      const retry = await db
+        .from('production_entries')
+        .update(updatePayload)
+        .eq('id', id)
+        .select(selectFields)
+        .single();
+      updatedEntry = retry.data;
+      updateErr = retry.error;
+    }
+
+    if (updateErr || !updatedEntry) {
+      throw new Error(updateErr?.message || 'Failed to update production entry');
+    }
+
+    // 2. Synchronize stock_transactions to keep inventory ledger exact
+    const modelCode = updatedEntry.cooler_models?.code || 'Units';
+    const stockNote = `Production: +${newQuantity} units of ${modelCode} (Thekedar: ${newContractor})`;
+
+    const { data: existingTx } = await db
+      .from('stock_transactions')
+      .select('id')
+      .eq('reference_id', id)
+      .eq('transaction_type', 'production')
+      .maybeSingle();
+
+    if (existingTx) {
+      await db
+        .from('stock_transactions')
+        .update({
+          model_id: newModelId,
+          quantity: newQuantity,
+          notes: stockNote,
+        })
+        .eq('id', existingTx.id);
+    } else {
+      await db
+        .from('stock_transactions')
+        .insert({
+          model_id: newModelId,
+          transaction_type: 'production',
+          quantity: newQuantity,
+          reference_id: id,
+          employee_id: employee.id,
+          notes: stockNote,
+        });
     }
 
     return NextResponse.json({
       success: true,
-      message: `Updated ${idList.length} entry/entries to Thekedar "${cleanContractor}".`,
-      data: updated,
+      message: `Production entry updated successfully (+${newQuantity} units).`,
+      entry: {
+        ...updatedEntry,
+        contractor_name: newContractor,
+        thekedar_name: newContractor,
+        model_name: updatedEntry.cooler_models?.name || 'Cooler Model',
+        model_code: updatedEntry.cooler_models?.code || 'N/A',
+        employee_name: updatedEntry.employees?.name || employee.name,
+      },
     });
   } catch (error) {
     console.error('API /api/production PATCH error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Error updating production contractor' },
+      { success: false, error: error.message || 'Error updating production entry' },
       { status: 500 }
     );
   }
 }
+
+/**
+ * DELETE /api/production
+ * Delete a production entry and reverse its stock transaction.
+ * Permissions:
+ *   - Admin: Can delete any entry anytime.
+ *   - Production Employee: Can ONLY delete entries they personally logged, and ONLY on the date they were added (today).
+ */
+export async function DELETE(request) {
+  try {
+    const userSupabase = await createServerSupabase();
+    const adminSupabase = createAdminSupabase();
+    const db = adminSupabase || userSupabase;
+
+    // 1. Authenticate user
+    const {
+      data: { user },
+      error: authErr,
+    } = await userSupabase.auth.getUser();
+
+    if (authErr || !user) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+
+    // 2. Fetch employee details
+    const { data: employee, error: empErr } = await userSupabase
+      .from('employees')
+      .select('id, name, role, is_active')
+      .eq('id', user.id)
+      .single();
+
+    if (empErr || !employee) {
+      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
+    }
+
+    const isAdmin = employee.role === 'admin';
+    const isProduction = employee.role === 'production';
+
+    if (!isAdmin && !isProduction) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden. Only Production or Admin staff may delete production entries.' },
+        { status: 403 }
+      );
+    }
+
+    // Get entry ID from URL search params or request body
+    const { searchParams } = new URL(request.url);
+    let id = searchParams.get('id');
+    if (!id) {
+      try {
+        const body = await request.json();
+        id = body?.id;
+      } catch (e) {}
+    }
+
+    if (!id) {
+      return NextResponse.json({ success: false, error: 'Production entry ID is required.' }, { status: 400 });
+    }
+
+    // Fetch existing entry to check ownership and creation date
+    const { data: targetEntry, error: fetchErr } = await db
+      .from('production_entries')
+      .select('id, quantity, production_date, employee_id, created_at, model_id, cooler_models(code, name)')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !targetEntry) {
+      return NextResponse.json({ success: false, error: 'Production entry not found.' }, { status: 404 });
+    }
+
+    // Strict Permissions:
+    // If not Admin, user MUST be the employee who logged it, AND entry MUST be from today!
+    if (!isAdmin) {
+      if (targetEntry.employee_id && targetEntry.employee_id !== employee.id) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Permission denied. You can only delete production entries that you personally logged.',
+          },
+          { status: 403 }
+        );
+      }
+
+      if (!isEntryFromToday(targetEntry)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Locked: Production entries can only be deleted on the day they were created.',
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    // 1. Delete associated stock transaction first so stock is reduced immediately
+    const { error: stockDelErr } = await db
+      .from('stock_transactions')
+      .delete()
+      .eq('reference_id', id)
+      .eq('transaction_type', 'production');
+
+    if (stockDelErr) {
+      console.warn('Warning deleting stock transaction for production entry:', stockDelErr);
+    }
+
+    // 2. Delete production entry
+    const { error: delErr } = await db
+      .from('production_entries')
+      .delete()
+      .eq('id', id);
+
+    if (delErr) {
+      throw new Error(delErr.message || 'Failed to delete production entry');
+    }
+
+    const modelLabel = targetEntry.cooler_models?.code || 'Cooler';
+    return NextResponse.json({
+      success: true,
+      message: `Deleted production entry of ${targetEntry.quantity} units (${modelLabel}) and updated stock ledger.`,
+      deletedId: id,
+    });
+  } catch (error) {
+    console.error('API /api/production DELETE error:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Error deleting production entry' },
+      { status: 500 }
+    );
+  }
+}
+
 

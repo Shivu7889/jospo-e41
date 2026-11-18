@@ -37,3 +37,15 @@ export async function createServerSupabase() {
     }
   );
 }
+
+export function createAdminSupabase() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (serviceRoleKey && url) {
+    const { createClient } = require('@supabase/supabase-js');
+    return createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return null;
+}
