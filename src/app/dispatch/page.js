@@ -703,31 +703,26 @@ export default function DispatchListPage() {
                                 </>
                               )}
 
-                              {/* Confirmed actions: Admin Edit, Cancel, Delete */}
+                              {/* Confirmed actions: Admin Edit & Delete */}
                               {dispatch.status === 'confirmed' && isAdmin && (
                                 <>
                                   <button
                                     type="button"
                                     onClick={() => handleOpenEditDispatch(dispatch)}
-                                    className="px-2 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200"
+                                    className="px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200 inline-flex items-center space-x-1"
                                     title="Edit dispatch details"
                                   >
-                                    ✏️ Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setCancelModalData(dispatch)}
-                                    className="px-2.5 py-1 text-xs font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-md transition-colors border border-amber-200"
-                                  >
-                                    Cancel Dispatch
+                                    <span>✏️</span>
+                                    <span>Edit</span>
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => setDeleteModalData(dispatch)}
-                                    className="px-2 py-1 text-xs font-medium text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200"
+                                    className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
                                     title="Delete Confirmed Dispatch"
                                   >
-                                    🗑️
+                                    <span>🗑️</span>
+                                    <span>Delete Dispatch</span>
                                   </button>
                                 </>
                               )}
@@ -738,18 +733,20 @@ export default function DispatchListPage() {
                                   <button
                                     type="button"
                                     onClick={() => handleOpenEditDispatch(dispatch)}
-                                    className="px-2 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200"
+                                    className="px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200 inline-flex items-center space-x-1"
                                     title="Edit dispatch details"
                                   >
-                                    ✏️ Edit
+                                    <span>✏️</span>
+                                    <span>Edit</span>
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => setDeleteModalData(dispatch)}
-                                    className="px-2 py-1 text-xs font-medium text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200"
+                                    className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
                                     title="Delete Cancelled Dispatch"
                                   >
-                                    🗑️
+                                    <span>🗑️</span>
+                                    <span>Delete Dispatch</span>
                                   </button>
                                 </>
                               )}
@@ -1261,7 +1258,7 @@ export default function DispatchListPage() {
                       }}
                       className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors"
                     >
-                      🗑️ Delete
+                      🗑️ Delete Dispatch
                     </button>
                   </>
                 )}
