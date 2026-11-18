@@ -71,10 +71,12 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
-    if (existing.status !== 'draft') {
+    const isAdmin = auth.employee.role === 'admin';
+
+    if (existing.status !== 'draft' && !isAdmin) {
       return NextResponse.json(
-        { error: `Cannot edit dispatch with status "${existing.status}". Only drafts can be modified.` },
-        { status: 400 }
+        { error: `Cannot edit dispatch with status "${existing.status}". Only Admins can modify non-draft dispatches.` },
+        { status: 403 }
       );
     }
 
@@ -155,6 +157,25 @@ export async function PUT(request, { params }) {
           }
           return NextResponse.json({ error: insertItemsError.message }, { status: 400 });
         }
+
+        // If this dispatch was already confirmed, update stock ledger transactions
+        if (existing.status === 'confirmed') {
+          await supabase
+            .from('stock_transactions')
+            .delete()
+            .eq('reference_id', id)
+            .eq('transaction_type', 'dispatch');
+
+          const stockTxs = items.map((it) => ({
+            model_id: it.model_id,
+            transaction_type: 'dispatch',
+            quantity: -Number(it.quantity),
+            reference_id: id,
+            employee_id: auth.employee.id,
+            notes: 'Dispatch updated by Admin',
+          }));
+          await supabase.from('stock_transactions').insert(stockTxs);
+        }
       }
     }
 
@@ -171,7 +192,7 @@ export async function PUT(request, { params }) {
   }
 }
 
-// DELETE: Delete draft dispatch
+// DELETE: Delete dispatch (admin can delete any dispatch and restore stock; dispatch staff can only delete drafts)
 export async function DELETE(request, { params }) {
   try {
     const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
@@ -182,7 +203,7 @@ export async function DELETE(request, { params }) {
     // Verify existing dispatch status
     const { data: existing, error: checkError } = await supabase
       .from('dispatches')
-      .select('status')
+      .select('status, vehicle_number')
       .eq('id', id)
       .single();
 
@@ -190,14 +211,31 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
-    if (existing.status !== 'draft') {
+    const isAdmin = auth.employee.role === 'admin';
+
+    if (existing.status !== 'draft' && !isAdmin) {
       return NextResponse.json(
-        { error: `Cannot delete dispatch with status "${existing.status}". Only drafts can be deleted.` },
-        { status: 400 }
+        { error: `Cannot delete dispatch with status "${existing.status}". Only Admins can delete non-draft dispatches.` },
+        { status: 403 }
       );
     }
 
-    // Delete dispatch (dispatch_items will cascade delete)
+    // If dispatch had stock transactions (confirmed or cancelled), remove them to restore stock
+    if (existing.status !== 'draft') {
+      const { error: stockDelErr } = await supabase
+        .from('stock_transactions')
+        .delete()
+        .eq('reference_id', id);
+
+      if (stockDelErr) {
+        console.warn('Warning deleting stock transactions for dispatch:', stockDelErr);
+      }
+    }
+
+    // Delete line items first
+    await supabase.from('dispatch_items').delete().eq('dispatch_id', id);
+
+    // Delete dispatch
     const { error: deleteError } = await supabase
       .from('dispatches')
       .delete()
@@ -208,7 +246,13 @@ export async function DELETE(request, { params }) {
     }
 
     return NextResponse.json(
-      { success: true, message: 'Draft dispatch deleted successfully' },
+      {
+        success: true,
+        message:
+          existing.status === 'confirmed'
+            ? `Dispatch ${existing.vehicle_number} deleted and deducted stock restored to inventory.`
+            : `Dispatch ${existing.vehicle_number} deleted successfully.`,
+      },
       { status: 200 }
     );
   } catch (err) {

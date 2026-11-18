@@ -51,6 +51,15 @@ export default function DispatchListPage() {
   // Delivery Challan & Gate Pass Modal state
   const [challanModalDispatch, setChallanModalDispatch] = useState(null);
 
+  // Edit Dispatch Modal state (Admin can edit any dispatch)
+  const [editDispatchModal, setEditDispatchModal] = useState(null);
+  const [editVehicleNumber, setEditVehicleNumber] = useState('');
+  const [editDestination, setEditDestination] = useState('');
+  const [editFromLocation, setEditFromLocation] = useState('Jospo E41');
+  const [editDispatchDate, setEditDispatchDate] = useState('');
+  const [editRemarks, setEditRemarks] = useState('');
+  const [savingDispatchEdit, setSavingDispatchEdit] = useState(false);
+
   // Fetch dispatches
   const fetchDispatches = useCallback(async (isRefresh = false) => {
     try {
@@ -224,27 +233,83 @@ export default function DispatchListPage() {
     }
   };
 
-  // Handle Delete Draft Dispatch
+  // Handle Delete Dispatch (Admin can delete any dispatch; dispatch staff can delete drafts)
   const handleDeleteDraft = async () => {
     if (!deleteModalData) return;
     try {
       setDeleting(true);
-      const { error } = await supabase
-        .from('dispatches')
-        .delete()
-        .eq('id', deleteModalData.id)
-        .eq('status', 'draft');
+      const res = await fetch(`/api/dispatch/${deleteModalData.id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete dispatch');
+      }
 
-      if (error) throw error;
-
-      showToast(`Draft dispatch for ${deleteModalData.vehicle_number} deleted.`, 'success');
+      showToast(data.message || `Dispatch for ${deleteModalData.vehicle_number} deleted.`, 'success');
       setDeleteModalData(null);
       await fetchDispatches(true);
     } catch (err) {
-      console.error('Error deleting draft dispatch:', err);
-      showToast(err.message || 'Failed to delete draft dispatch', 'error');
+      console.error('Error deleting dispatch:', err);
+      showToast(err.message || 'Failed to delete dispatch', 'error');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // Open Edit Dispatch Modal (for Admin)
+  const handleOpenEditDispatch = (dispatch) => {
+    setEditDispatchModal(dispatch);
+    setEditVehicleNumber(dispatch.vehicle_number || '');
+    setEditDestination(dispatch.destination || '');
+    setEditFromLocation(dispatch.from_location || 'Jospo E41');
+    setEditDispatchDate(dispatch.dispatch_date || getTodayIST());
+    setEditRemarks(dispatch.remarks || '');
+  };
+
+  // Save Dispatch Edit
+  const handleSaveDispatchEdit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editDispatchModal) return;
+
+    const vNum = editVehicleNumber.trim().toUpperCase();
+    const dest = editDestination.trim();
+    if (!vNum) {
+      showToast('Vehicle number is required', 'warning');
+      return;
+    }
+    if (!dest) {
+      showToast('Destination is required', 'warning');
+      return;
+    }
+
+    try {
+      setSavingDispatchEdit(true);
+      const res = await fetch(`/api/dispatch/${editDispatchModal.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicle_number: vNum,
+          destination: dest,
+          from_location: editFromLocation.trim(),
+          dispatch_date: editDispatchDate,
+          remarks: editRemarks.trim(),
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to update dispatch');
+      }
+
+      showToast(`Dispatch ${vNum} updated successfully`, 'success');
+      setEditDispatchModal(null);
+      await fetchDispatches(true);
+    } catch (err) {
+      console.error('Error updating dispatch:', err);
+      showToast(err.message || 'Error updating dispatch', 'error');
+    } finally {
+      setSavingDispatchEdit(false);
     }
   };
 
@@ -638,15 +703,55 @@ export default function DispatchListPage() {
                                 </>
                               )}
 
-                              {/* Confirmed actions: Admin Cancel button */}
+                              {/* Confirmed actions: Admin Edit, Cancel, Delete */}
                               {dispatch.status === 'confirmed' && isAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => setCancelModalData(dispatch)}
-                                  className="px-2.5 py-1 text-xs font-medium text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200"
-                                >
-                                  Cancel Dispatch
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditDispatch(dispatch)}
+                                    className="px-2 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200"
+                                    title="Edit dispatch details"
+                                  >
+                                    ✏️ Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCancelModalData(dispatch)}
+                                    className="px-2.5 py-1 text-xs font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-md transition-colors border border-amber-200"
+                                  >
+                                    Cancel Dispatch
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeleteModalData(dispatch)}
+                                    className="px-2 py-1 text-xs font-medium text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200"
+                                    title="Delete Confirmed Dispatch"
+                                  >
+                                    🗑️
+                                  </button>
+                                </>
+                              )}
+
+                              {/* Cancelled actions: Admin Edit & Delete */}
+                              {dispatch.status === 'cancelled' && isAdmin && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditDispatch(dispatch)}
+                                    className="px-2 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200"
+                                    title="Edit dispatch details"
+                                  >
+                                    ✏️ Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeleteModalData(dispatch)}
+                                    className="px-2 py-1 text-xs font-medium text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200"
+                                    title="Delete Cancelled Dispatch"
+                                  >
+                                    🗑️
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -842,18 +947,35 @@ export default function DispatchListPage() {
           </div>
         )}
 
-        {/* Modal: Delete Draft Dispatch */}
+        {/* Modal: Delete Dispatch */}
         {deleteModalData && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
             <div className="card max-w-sm w-full p-6 shadow-2xl animate-scaleUp text-center">
               <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-2xl mx-auto mb-3">
                 🗑️
               </div>
-              <h3 className="text-base font-bold text-gray-900 mb-1">Delete Draft Dispatch</h3>
-              <p className="text-xs text-gray-500 mb-5 leading-relaxed">
-                Are you sure you want to remove draft dispatch for vehicle{' '}
-                <strong className="font-mono text-gray-800">{deleteModalData.vehicle_number}</strong>? This action cannot be undone.
-              </p>
+              <h3 className="text-base font-bold text-gray-900 mb-1">
+                {deleteModalData.status === 'confirmed'
+                  ? 'Delete Confirmed Dispatch'
+                  : deleteModalData.status === 'cancelled'
+                  ? 'Delete Cancelled Dispatch'
+                  : 'Delete Draft Dispatch'}
+              </h3>
+
+              {deleteModalData.status === 'confirmed' ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 text-left mb-4 leading-relaxed">
+                  <p className="font-bold mb-1">⚠️ Restores Warehouse Inventory</p>
+                  Deleting this confirmed dispatch for vehicle{' '}
+                  <strong className="font-mono text-gray-900">{deleteModalData.vehicle_number}</strong> will permanently remove the dispatch record and{' '}
+                  <strong>automatically return {calculateTotalQty(deleteModalData.dispatch_items)} pcs</strong> back to warehouse stock.
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500 mb-5 leading-relaxed">
+                  Are you sure you want to permanently remove dispatch for vehicle{' '}
+                  <strong className="font-mono text-gray-800">{deleteModalData.vehicle_number}</strong>? This action cannot be undone.
+                </p>
+              )}
+
               <div className="flex justify-center space-x-3">
                 <button
                   type="button"
@@ -867,11 +989,143 @@ export default function DispatchListPage() {
                   type="button"
                   onClick={handleDeleteDraft}
                   disabled={deleting}
-                  className="btn-danger text-xs py-2 px-4 shadow-sm"
+                  className="btn-danger text-xs py-2 px-4 shadow-sm font-semibold"
                 >
-                  {deleting ? 'Deleting...' : 'Delete Draft'}
+                  {deleting
+                    ? 'Deleting...'
+                    : deleteModalData.status === 'confirmed'
+                    ? 'Delete & Return Stock'
+                    : 'Delete Dispatch'}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Edit Dispatch (Admin) */}
+        {editDispatchModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
+            <div className="card max-w-lg w-full p-6 shadow-2xl animate-scaleUp">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-base">
+                    ✏️
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Edit Dispatch {editDispatchModal.vehicle_number}
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Status: <span className="font-semibold capitalize">{editDispatchModal.status}</span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditDispatchModal(null)}
+                  className="text-gray-400 hover:text-gray-600 p-1 rounded-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveDispatchEdit} className="space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="label text-xs">Vehicle Number <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      value={editVehicleNumber}
+                      onChange={(e) => setEditVehicleNumber(e.target.value.toUpperCase())}
+                      placeholder="e.g. MP-09-AB-1234"
+                      className="input-field text-xs uppercase font-mono font-bold"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label text-xs">Destination <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      value={editDestination}
+                      onChange={(e) => setEditDestination(e.target.value)}
+                      placeholder="e.g. Jaipur Depot, Client Warehouse"
+                      className="input-field text-xs"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="label text-xs">Origin Location</label>
+                    <input
+                      type="text"
+                      value={editFromLocation}
+                      onChange={(e) => setEditFromLocation(e.target.value)}
+                      placeholder="e.g. Jospo E41"
+                      className="input-field text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label text-xs">Dispatch Date <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      value={editDispatchDate}
+                      onChange={(e) => setEditDispatchDate(e.target.value)}
+                      className="input-field text-xs"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label text-xs">Remarks / Notes</label>
+                  <textarea
+                    rows={2}
+                    value={editRemarks}
+                    onChange={(e) => setEditRemarks(e.target.value)}
+                    placeholder="Optional remarks, driver info, e-way bill number..."
+                    className="input-field text-xs"
+                  />
+                </div>
+
+                {/* Link to full workstation if user wants to change models/items */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-blue-900 flex items-start space-x-2">
+                  <span className="text-base">ℹ️</span>
+                  <div className="text-xs leading-relaxed">
+                    <p className="font-semibold">Need to modify cooler models or item quantities?</p>
+                    <p className="mt-0.5 text-blue-800">
+                      You can also use the full workstation to scan or adjust quantities:
+                    </p>
+                    <Link
+                      href={`/dispatch/new?id=${editDispatchModal.id}`}
+                      className="inline-block mt-1 font-bold text-primary-700 hover:underline"
+                    >
+                      Open in Dispatch Workstation →
+                    </Link>
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-2 pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditDispatchModal(null)}
+                    disabled={savingDispatchEdit}
+                    className="btn-secondary text-xs py-2 px-4"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingDispatchEdit}
+                    className="btn-primary text-xs py-2 px-5 font-bold shadow-sm"
+                  >
+                    {savingDispatchEdit ? 'Saving...' : '💾 Save Changes'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
@@ -969,26 +1223,52 @@ export default function DispatchListPage() {
                 </table>
               </div>
 
-              <div className="flex justify-end space-x-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setChallanModalDispatch(viewDetailsModal)}
-                  className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-1.5"
+                  className="btn-primary text-xs py-2 px-3 inline-flex items-center space-x-1.5"
                 >
-                  <span>🖨️ Print Gate Pass</span>
+                  <span>🖨️ Gate Pass</span>
                 </button>
                 {viewDetailsModal.status === 'draft' && (
                   <Link
                     href={`/dispatch/new?id=${viewDetailsModal.id}`}
-                    className="btn-secondary text-xs py-2 px-4"
+                    className="btn-secondary text-xs py-2 px-3"
                   >
                     Edit Draft
                   </Link>
                 )}
+                {isAdmin && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = viewDetailsModal;
+                        setViewDetailsModal(null);
+                        handleOpenEditDispatch(d);
+                      }}
+                      className="px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors"
+                    >
+                      ✏️ Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = viewDetailsModal;
+                        setViewDetailsModal(null);
+                        setDeleteModalData(d);
+                      }}
+                      className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors"
+                    >
+                      🗑️ Delete
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => setViewDetailsModal(null)}
-                  className="btn-secondary text-xs py-2 px-4"
+                  className="btn-secondary text-xs py-2 px-3"
                 >
                   Close
                 </button>

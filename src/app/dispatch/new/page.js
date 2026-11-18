@@ -66,6 +66,7 @@ function NewDispatchContent() {
   const [submissionSuccess, setSubmissionSuccess] = useState(null); // { dispatchId, vehicleNumber, totalQty, status }
   const [showChallanModal, setShowChallanModal] = useState(false);
   const [countdown, setCountdown] = useState(3);
+  const [existingDispatchStatus, setExistingDispatchStatus] = useState(null);
 
   // Form State - Step 1: Vehicle Details
   const todayStr = useMemo(() => getTodayIST(), []);
@@ -185,11 +186,14 @@ function NewDispatchContent() {
       if (error) throw error;
       if (!dispatch) throw new Error('Dispatch record not found');
 
-      if (dispatch.status !== 'draft') {
+      const isAdmin = employee?.role === 'admin';
+      if (dispatch.status !== 'draft' && !isAdmin) {
         showToast('Only draft dispatches can be edited.', 'warning');
         router.push('/dispatch');
         return;
       }
+
+      setExistingDispatchStatus(dispatch.status);
 
       setVehicleNumber(dispatch.vehicle_number || '');
       setFromLocation(dispatch.from_location || 'Jospo E41');
@@ -207,16 +211,16 @@ function NewDispatchContent() {
       }));
 
       setItems(loadedItems);
-      // Auto move to step 2 if editing an existing draft
+      // Auto move to step 2 if editing an existing dispatch
       setCurrentStep(2);
     } catch (err) {
-      console.error('Error loading draft dispatch:', err);
-      showToast(err.message || 'Failed to load draft dispatch', 'error');
+      console.error('Error loading dispatch:', err);
+      showToast(err.message || 'Failed to load dispatch', 'error');
       router.push('/dispatch');
     } finally {
       setLoadingInitial(false);
     }
-  }, [supabase, showToast, router, todayStr]);
+  }, [supabase, showToast, router, todayStr, employee]);
 
   // Initial data loading
   useEffect(() => {
@@ -981,29 +985,28 @@ function NewDispatchContent() {
       let targetDispatchId = editId;
 
       if (editId) {
-        // Update existing header
-        const { error: updateError } = await supabase
-          .from('dispatches')
-          .update({
+        // Update existing dispatch via API (handles headers, items, and atomic stock adjustments for confirmed status)
+        const res = await fetch(`/api/dispatch/${editId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             vehicle_number: vehicleNumber.trim().toUpperCase(),
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
             remarks: getCompiledRemarks(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', editId)
-          .eq('status', 'draft');
+            items: items.map((item) => ({
+              model_id: item.model_id,
+              quantity: parseInt(item.quantity, 10) || 1,
+            })),
+          }),
+        });
 
-        if (updateError) throw updateError;
-
-        // Delete existing items and re-insert
-        const { error: delError } = await supabase
-          .from('dispatch_items')
-          .delete()
-          .eq('dispatch_id', editId);
-
-        if (delError) throw delError;
+        const resData = await res.json();
+        if (!res.ok) {
+          throw new Error(resData.error || 'Failed to update dispatch');
+        }
+        targetDispatchId = editId;
       } else {
         // Insert new draft dispatch
         const { data: newDispatch, error: insertError } = await supabase
@@ -1022,20 +1025,20 @@ function NewDispatchContent() {
 
         if (insertError) throw insertError;
         targetDispatchId = newDispatch.id;
+
+        // Insert line items
+        const itemsToInsert = items.map((item) => ({
+          dispatch_id: targetDispatchId,
+          model_id: item.model_id,
+          quantity: parseInt(item.quantity, 10) || 1,
+        }));
+
+        const { error: itemsError } = await supabase
+          .from('dispatch_items')
+          .insert(itemsToInsert);
+
+        if (itemsError) throw itemsError;
       }
-
-      // Insert line items
-      const itemsToInsert = items.map((item) => ({
-        dispatch_id: targetDispatchId,
-        model_id: item.model_id,
-        quantity: parseInt(item.quantity, 10) || 1,
-      }));
-
-      const { error: itemsError } = await supabase
-        .from('dispatch_items')
-        .insert(itemsToInsert);
-
-      if (itemsError) throw itemsError;
 
       // Clear local auto-save draft upon successful server save
       try {
@@ -1044,11 +1047,16 @@ function NewDispatchContent() {
         }
       } catch (e) {}
 
-      showToast('Dispatch draft saved successfully!', 'success');
+      showToast(
+        existingDispatchStatus === 'confirmed'
+          ? 'Confirmed dispatch and inventory stock updated successfully!'
+          : 'Dispatch draft saved successfully!',
+        'success'
+      );
       router.push('/dispatch');
     } catch (err) {
-      console.error('Error saving draft dispatch:', err);
-      showToast(err.message || 'Failed to save draft dispatch', 'error');
+      console.error('Error saving dispatch:', err);
+      showToast(err.message || 'Failed to save dispatch', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -1087,6 +1095,9 @@ function NewDispatchContent() {
 
   // Confirm Dispatch (Atomic Stock Deduction)
   const handleConfirmDispatch = async () => {
+    if (existingDispatchStatus === 'confirmed') {
+      return handleSaveAsDraft();
+    }
     if (!employee?.id) {
       showToast('Employee profile missing. Please log in again.', 'error');
       return;
@@ -1303,17 +1314,30 @@ function NewDispatchContent() {
             </Link>
             <span>/</span>
             <span className="text-gray-700 font-medium">
-              {editId ? 'Edit Draft' : 'New Dispatch'}
+              {editId ? (existingDispatchStatus === 'confirmed' ? 'Edit Confirmed Dispatch' : 'Edit Draft') : 'New Dispatch'}
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-            {editId ? 'Edit Draft Dispatch' : 'New Cooler Dispatch'}
+            {editId ? (existingDispatchStatus === 'confirmed' ? 'Edit Confirmed Dispatch' : 'Edit Draft Dispatch') : 'New Cooler Dispatch'}
           </h1>
         </div>
         <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-primary-100 text-primary-800">
           📱 Mobile Scanner
         </span>
       </div>
+
+      {/* Confirmed Dispatch Admin Banner */}
+      {existingDispatchStatus === 'confirmed' && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 flex items-center space-x-3 text-xs text-indigo-950 shadow-xs">
+          <span className="text-xl flex-shrink-0">✏️</span>
+          <div>
+            <p className="font-bold text-indigo-900">Admin Dispatch Modification Mode</p>
+            <p className="text-indigo-700">
+              You are editing an already confirmed dispatch. Any changes to line item quantities will automatically recalculate and adjust warehouse inventory.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Active Session Restored Notification */}
       {draftRestored && draftInfo && (
@@ -2009,21 +2033,25 @@ function NewDispatchContent() {
             </button>
 
             <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
-              <button
-                type="button"
-                onClick={handleSaveAsDraft}
-                disabled={submitting}
-                className="btn-secondary text-xs py-2.5 px-5 w-full sm:w-auto"
-              >
-                {submitting ? 'Saving...' : 'Save as Draft'}
-              </button>
+              {existingDispatchStatus !== 'confirmed' && (
+                <button
+                  type="button"
+                  onClick={handleSaveAsDraft}
+                  disabled={submitting}
+                  className="btn-secondary text-xs py-2.5 px-5 w-full sm:w-auto"
+                >
+                  {submitting ? 'Saving...' : 'Save as Draft'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleConfirmDispatch}
-                disabled={submitting || stockDeficits.length > 0}
+                disabled={submitting || (existingDispatchStatus !== 'confirmed' && stockDeficits.length > 0)}
                 className="btn-success text-xs py-2.5 px-6 shadow-sm w-full sm:w-auto font-bold"
               >
-                {submitting ? 'Confirming Dispatch...' : 'Confirm & Deduct Stock ✓'}
+                {submitting
+                  ? (existingDispatchStatus === 'confirmed' ? 'Updating Stock...' : 'Confirming Dispatch...')
+                  : (existingDispatchStatus === 'confirmed' ? '💾 Save Updates & Adjust Stock' : 'Confirm & Deduct Stock ✓')}
               </button>
             </div>
           </div>
