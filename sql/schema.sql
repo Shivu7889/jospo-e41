@@ -42,6 +42,8 @@ CREATE TABLE public.production_entries (
   production_date DATE NOT NULL DEFAULT CURRENT_DATE,
   remarks TEXT,
   employee_id UUID NOT NULL REFERENCES public.employees(id),
+  contractor_name TEXT,
+  manpower INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -83,6 +85,15 @@ CREATE TABLE public.stock_transactions (
   employee_id UUID NOT NULL REFERENCES public.employees(id),
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Contractors / Thekedars Table
+CREATE TABLE IF NOT EXISTS public.contractors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT UNIQUE NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================
@@ -158,6 +169,7 @@ ALTER TABLE public.production_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dispatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dispatch_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stock_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contractors ENABLE ROW LEVEL SECURITY;
 
 -- All authenticated users can read all tables
 CREATE POLICY "auth_read_employees" ON public.employees FOR SELECT USING (auth.role() = 'authenticated');
@@ -214,6 +226,42 @@ CREATE POLICY "dispatch_delete_items" ON public.dispatch_items FOR DELETE USING 
 CREATE POLICY "dispatch_insert_stock" ON public.stock_transactions FOR INSERT WITH CHECK (
   EXISTS (SELECT 1 FROM public.employees WHERE id = auth.uid() AND role IN ('admin', 'dispatch'))
 );
+
+-- Contractors policies
+DROP POLICY IF EXISTS "contractors_select_policy" ON public.contractors;
+CREATE POLICY "contractors_select_policy" ON public.contractors
+  FOR SELECT TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "contractors_insert_policy" ON public.contractors;
+CREATE POLICY "contractors_insert_policy" ON public.contractors
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.employees
+      WHERE employees.id = auth.uid() AND employees.role = 'admin'
+    )
+  );
+
+DROP POLICY IF EXISTS "contractors_update_policy" ON public.contractors;
+CREATE POLICY "contractors_update_policy" ON public.contractors
+  FOR UPDATE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.employees
+      WHERE employees.id = auth.uid() AND employees.role = 'admin'
+    )
+  );
+
+DROP POLICY IF EXISTS "contractors_delete_policy" ON public.contractors;
+CREATE POLICY "contractors_delete_policy" ON public.contractors
+  FOR DELETE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.employees
+      WHERE employees.id = auth.uid() AND employees.role = 'admin'
+    )
+  );
 
 -- ============================================
 -- 5. FUNCTIONS

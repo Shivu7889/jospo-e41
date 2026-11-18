@@ -56,3 +56,32 @@
     @apply badge bg-blue-100 text-blue-800;
   }
 }
+
+/* Print Styles */
+@media print {
+  .no-print,
+  nav,
+  footer,
+  button,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-success {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 12pt;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  @page {
+    margin: 1cm;
+    size: A4;
+  }
+}

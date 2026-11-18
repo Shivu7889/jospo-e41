@@ -1,13 +1,15 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 // GET: Get single dispatch by id with line items and employee info
 export async function GET(request, { params }) {
   try {
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { id } = params;
-    const supabase = await createServerSupabase();
 
     const { data, error } = await supabase
       .from('dispatches')
@@ -52,8 +54,10 @@ export async function GET(request, { params }) {
 // PUT: Update draft dispatch (header info or items)
 export async function PUT(request, { params }) {
   try {
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { id } = params;
-    const supabase = await createServerSupabase();
     const body = await request.json();
 
     // Verify existing dispatch status
@@ -103,8 +107,25 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: updateError.message }, { status: 400 });
     }
 
-    // If items are provided, replace line items
+    // If items are provided, validate and safely replace line items
     if (Array.isArray(items)) {
+      // Validate line items before deleting anything
+      for (const it of items) {
+        const qty = Number(it.quantity);
+        if (!it.model_id) {
+          return NextResponse.json({ error: 'Each item must have a valid model_id' }, { status: 400 });
+        }
+        if (!Number.isInteger(qty) || qty <= 0) {
+          return NextResponse.json({ error: 'Item quantity must be a positive integer' }, { status: 400 });
+        }
+      }
+
+      // Fetch existing items as backup in case replacement fails
+      const { data: previousItems } = await supabase
+        .from('dispatch_items')
+        .select('model_id, quantity')
+        .eq('dispatch_id', id);
+
       // Delete existing line items
       const { error: delError } = await supabase
         .from('dispatch_items')
@@ -127,6 +148,11 @@ export async function PUT(request, { params }) {
           .insert(lineItems);
 
         if (insertItemsError) {
+          // Rollback: restore previous items
+          if (previousItems && previousItems.length > 0) {
+            const rollbackItems = previousItems.map((p) => ({ ...p, dispatch_id: id }));
+            await supabase.from('dispatch_items').insert(rollbackItems);
+          }
           return NextResponse.json({ error: insertItemsError.message }, { status: 400 });
         }
       }
@@ -148,8 +174,10 @@ export async function PUT(request, { params }) {
 // DELETE: Delete draft dispatch
 export async function DELETE(request, { params }) {
   try {
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { id } = params;
-    const supabase = await createServerSupabase();
 
     // Verify existing dispatch status
     const { data: existing, error: checkError } = await supabase

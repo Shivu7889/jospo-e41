@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
+import { getTodayIST } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,11 +12,13 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { searchParams } = new URL(request.url);
     const modelIdFilter = searchParams.get('model_id');
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getTodayIST();
 
     // 1. Fetch current stock from current_stock view
     let stockQuery = supabase

@@ -285,7 +285,7 @@ export default function QRGenerator({
       {/* Printable Label Container */}
       <div
         ref={labelRef}
-        className="w-full max-w-[320px] bg-white rounded-xl border-3 border-black p-5 flex flex-col items-center text-center shadow-lg"
+        className="w-full max-w-[320px] bg-white rounded-xl border-2 border-black p-5 flex flex-col items-center text-center shadow-lg"
         style={{ borderWidth: '3px', borderColor: '#000000' }}
       >
         {/* Brand Header */}

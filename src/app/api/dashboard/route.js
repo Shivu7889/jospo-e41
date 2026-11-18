@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
+import { getTodayIST } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const supabase = await createServerSupabase();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
+    const todayStr = getTodayIST();
 
     // 1. Fetch dashboard stats via RPC get_dashboard_stats()
     let stats = {

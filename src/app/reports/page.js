@@ -7,6 +7,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import StatsCard from '@/components/StatsCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
+import { getTodayIST } from '@/lib/date';
 
 export default function ReportsPage() {
   const { employee } = useAuth();
@@ -17,7 +18,7 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState('thekedar_production');
 
   // Filter States
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => getTodayIST(), []);
   const [productionDate, setProductionDate] = useState(todayStr);
   const [dispatchDate, setDispatchDate] = useState(todayStr);
 
@@ -33,9 +34,7 @@ export default function ReportsPage() {
 
   // Thekedar (Contractor) Report Filter States
   const firstDayOfMonth = useMemo(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().split('T')[0];
+    return getTodayIST().slice(0, 7) + '-01';
   }, []);
   const [thekedarStartDate, setThekedarStartDate] = useState(firstDayOfMonth);
   const [thekedarEndDate, setThekedarEndDate] = useState(todayStr);
@@ -485,7 +484,7 @@ export default function ReportsPage() {
                                 return (
                                   <span
                                     key={code}
-                                    className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-white text-gray-800 border border-amber-200 shadow-2xs"
+                                    className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-white text-gray-800 border border-amber-200 shadow-sm"
                                   >
                                     <span className="font-bold text-primary-700 mr-1">{code}:</span>
                                     <span>{qty}</span>
@@ -535,7 +534,7 @@ export default function ReportsPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedThekedar('all')}
-                      className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-2xs"
+                      className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
                     >
                       ← Back to All Thekedars
                     </button>
@@ -571,7 +570,7 @@ export default function ReportsPage() {
                           const name = typeof m === 'object' ? (m.name || code) : 'Units';
                           const qty = typeof m === 'object' ? (m.quantity || 0) : m;
                           return (
-                            <div key={code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-2xs">
+                            <div key={code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
                               <span className="font-mono font-bold text-xs text-primary-700">{code}</span>
                               <p className="text-xs text-gray-500 truncate">{name}</p>
                               <p className="text-lg font-extrabold text-gray-900 mt-1 font-mono">{qty} units</p>
@@ -596,7 +595,7 @@ export default function ReportsPage() {
                     Individual assembly records matching selected Thekedar and date range.
                   </p>
                 </div>
-                <span className="text-xs font-bold text-gray-700 bg-white px-3 py-1 rounded-lg border border-gray-200 shadow-2xs">
+                <span className="text-xs font-bold text-gray-700 bg-white px-3 py-1 rounded-lg border border-gray-200 shadow-sm">
                   Showing {reportData?.data?.length || 0} entries
                 </span>
               </div>
@@ -658,7 +657,7 @@ export default function ReportsPage() {
                                   type="button"
                                   onClick={() => {
                                     setEditingRow(row);
-                                    setEditContractorName(row.contractor_name || 'Chotu');
+                                    setEditContractorName(row.contractor_name || (thekedarContractorsList[0] || ''));
                                   }}
                                   className="text-gray-400 hover:text-amber-700 hover:bg-amber-100 p-1 rounded transition-colors text-xs"
                                   title="Admin: Change Thekedar for this entry"
@@ -713,7 +712,7 @@ export default function ReportsPage() {
 
             {/* Admin Reassign Contractor Modal */}
             {isAdmin && editingRow && (
-              <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
                   <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                     <h3 className="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
@@ -758,9 +757,6 @@ export default function ReportsPage() {
                       {thekedarContractorsList.map((t) => (
                         <option key={t} value={t}>👷 {t}</option>
                       ))}
-                      {!thekedarContractorsList.includes('Chotu') && (
-                        <option value="Chotu">👷 Chotu</option>
-                      )}
                     </select>
 
                     <div className="pt-2">

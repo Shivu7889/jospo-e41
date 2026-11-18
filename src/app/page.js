@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { getSupabase } from '@/lib/supabase';
+import { getTodayIST } from '@/lib/date';
 import { useAuth } from '@/contexts/AuthContext';
 import AppShell from '@/components/AppShell';
 import StatsCard from '@/components/StatsCard';
@@ -34,7 +35,7 @@ export default function DashboardPage() {
       setError(null);
 
       const supabase = getSupabase();
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getTodayIST();
 
       // 1. Fetch Stats via RPC or fallback
       let fetchedStats = {
@@ -309,7 +310,7 @@ export default function DashboardPage() {
 
             {['admin', 'dispatch'].includes(role) && (
               <Link
-                href="/dispatch"
+                href="/dispatch/new"
                 className="btn-success text-xs sm:text-sm inline-flex items-center space-x-1.5 shadow-sm"
               >
                 <span>📦</span>

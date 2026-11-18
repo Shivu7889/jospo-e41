@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import AppShell from '@/components/AppShell';
@@ -9,6 +9,7 @@ import StatsCard from '@/components/StatsCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+import { getTodayIST } from '@/lib/date';
 
 export default function DispatchListPage() {
   const router = useRouter();
@@ -145,7 +146,7 @@ export default function DispatchListPage() {
 
   // Aggregate stats
   const stats = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getTodayIST();
     const total = dispatches.length;
     const drafts = dispatches.filter((d) => d.status === 'draft').length;
     const confirmedToday = dispatches.filter(
@@ -476,7 +477,7 @@ export default function DispatchListPage() {
                     const itemCount = dispatch.dispatch_items?.length || 0;
 
                     return (
-                      <tbody key={dispatch.id} className="group">
+                      <React.Fragment key={dispatch.id}>
                         <tr
                           className={`hover:bg-primary-50/30 transition-colors cursor-pointer ${
                             isExpanded ? 'bg-primary-50/20' : ''
@@ -659,7 +660,7 @@ export default function DispatchListPage() {
                             </td>
                           </tr>
                         )}
-                      </tbody>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
+import { getTodayIST } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
 // GET: List dispatches with items, models, and employee info
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { searchParams } = new URL(request.url);
 
     const status = searchParams.get('status');
@@ -67,23 +70,19 @@ export async function GET(request) {
 // POST: Create a new dispatch (draft or auto-confirmed)
 export async function POST(request) {
   try {
-    const supabase = await createServerSupabase();
-
-    // Authenticate user
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase, employee } = auth;
 
     const body = await request.json();
     const {
       vehicle_number,
       from_location = 'Jospo E41',
       destination,
-      dispatch_date = new Date().toISOString().split('T')[0],
+      dispatch_date = getTodayIST(),
       remarks,
       items = [],
       auto_confirm = false,
-      employee_id: providedEmployeeId,
     } = body;
 
     // 1. Validation
@@ -97,11 +96,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'At least one item must be added to dispatch' }, { status: 400 });
     }
 
-    // Determine employee ID
-    const employeeId = providedEmployeeId || user?.id;
-    if (!employeeId) {
-      return NextResponse.json({ error: 'User is not authenticated as an employee' }, { status: 401 });
-    }
+    const employeeId = employee.id;
 
     // Validate item quantities
     for (const item of items) {

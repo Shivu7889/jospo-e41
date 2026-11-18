@@ -57,9 +57,27 @@ export async function middleware(request) {
     return redirectResponse;
   };
 
-  // If not logged in and not on login page, redirect to login
-  if (!user && !request.nextUrl.pathname.startsWith('/login') && !request.nextUrl.pathname.startsWith('/api')) {
-    return createRedirectResponse('/login');
+  // If not logged in: return 401 for API routes, redirect to /login for pages
+  if (!user) {
+    if (request.nextUrl.pathname.startsWith('/api')) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: Authentication required.' },
+        { status: 401 }
+      );
+    }
+    if (!request.nextUrl.pathname.startsWith('/login')) {
+      const returnUrl = request.nextUrl.pathname + request.nextUrl.search;
+      const url = request.nextUrl.clone();
+      url.pathname = '/login';
+      if (returnUrl && returnUrl !== '/') {
+        url.searchParams.set('next', returnUrl);
+      }
+      const redirectResponse = NextResponse.redirect(url);
+      supabaseResponse.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+      });
+      return redirectResponse;
+    }
   }
 
   // If logged in and on login page, redirect to dashboard

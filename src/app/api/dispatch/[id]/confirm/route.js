@@ -1,37 +1,17 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 // POST: Confirm a draft dispatch via confirm_dispatch RPC
 export async function POST(request, { params }) {
   try {
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
+    if (auth.error) return auth.error;
+    const { supabase, employee } = auth;
     const { id } = params;
-    const supabase = await createServerSupabase();
 
-    // Authenticate user
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    let employeeId = user?.id;
-
-    // Optional employee_id in request body override if provided
-    try {
-      const body = await request.json();
-      if (body?.employee_id) {
-        employeeId = body.employee_id;
-      }
-    } catch (e) {
-      // Body might be empty, ignore
-    }
-
-    if (!employeeId) {
-      return NextResponse.json(
-        { error: 'Authentication required. No valid employee profile found.' },
-        { status: 401 }
-      );
-    }
+    const employeeId = employee.id;
 
     // Call Supabase RPC confirm_dispatch
     const { data: rpcResult, error: rpcError } = await supabase.rpc('confirm_dispatch', {

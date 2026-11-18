@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 // GET: List all employees
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     const { data, error } = await supabase
       .from('employees')
@@ -27,7 +29,9 @@ export async function GET(request) {
 // POST: Add new employee profile
 export async function POST(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const body = await request.json();
 
     const { id, name, email, role, is_active = true } = body;
@@ -89,7 +93,9 @@ export async function POST(request) {
 // PATCH: Toggle active status or update role/name
 export async function PATCH(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const body = await request.json();
     const { id, is_active, role, name } = body;
 

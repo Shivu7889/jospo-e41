@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { searchParams } = new URL(request.url);
     const activeOnlyParam = searchParams.get('active_only');
     const activeOnly = activeOnlyParam !== 'false';
@@ -84,41 +86,9 @@ export async function GET(request) {
  */
 export async function POST(request) {
   try {
-    const supabase = await createServerSupabase();
-
-    // 1. Authenticate user
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized. Please sign in.' },
-        { status: 401 }
-      );
-    }
-
-    // 2. Authorize admin role
-    const { data: employee, error: empError } = await supabase
-      .from('employees')
-      .select('id, name, role, is_active')
-      .eq('id', user.id)
-      .single();
-
-    if (empError || !employee) {
-      return NextResponse.json(
-        { success: false, error: 'Employee profile not found' },
-        { status: 403 }
-      );
-    }
-
-    if (employee.role !== 'admin') {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden. Only administrators can create cooler models.' },
-        { status: 403 }
-      );
-    }
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     // 3. Parse and validate body
     const body = await request.json();
@@ -223,32 +193,9 @@ export async function POST(request) {
  */
 export async function PATCH(request) {
   try {
-    const supabase = await createServerSupabase();
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { data: employee } = await supabase
-      .from('employees')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (!employee || employee.role !== 'admin') {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden. Admin privileges required.' },
-        { status: 403 }
-      );
-    }
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     const body = await request.json();
     const { id, is_active, name, description } = body;

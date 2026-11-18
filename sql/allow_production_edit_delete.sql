@@ -50,7 +50,7 @@ FOR UPDATE USING (
     WHERE id = auth.uid() 
       AND (
         role = 'admin' 
-        OR (role = 'production' AND employee_id = auth.uid() AND transaction_type = 'production' AND (created_at::date = CURRENT_DATE))
+        OR (role = 'production' AND employee_id = auth.uid() AND transaction_type = 'production' AND (stock_transactions.created_at::date = CURRENT_DATE))
       )
   )
 );
@@ -64,7 +64,7 @@ FOR DELETE USING (
     WHERE id = auth.uid() 
       AND (
         role = 'admin' 
-        OR (role = 'production' AND employee_id = auth.uid() AND transaction_type = 'production' AND (created_at::date = CURRENT_DATE))
+        OR (role = 'production' AND employee_id = auth.uid() AND transaction_type = 'production' AND (stock_transactions.created_at::date = CURRENT_DATE))
       )
   )
 );

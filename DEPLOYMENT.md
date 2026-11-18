@@ -42,8 +42,8 @@ This is the easiest and most reliable method. It gives you automatic deployments
 4. Expand **Environment Variables** and add these two:
    | Key | Value |
    | --- | --- |
-   | `NEXT_PUBLIC_SUPABASE_URL` | `https://egumwbmnvxemxousaujj.supabase.co` |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `sb_publishable_CyvFW3O3SiE3LjwvN4RqFA_TfGAjmcX` |
+   | `NEXT_PUBLIC_SUPABASE_URL` | `https://<YOUR_PROJECT_ID>.supabase.co` |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `<YOUR_SUPABASE_ANON_KEY>` |
 5. Click **"Deploy"**.
 
 Within ~60 seconds, Vercel will build and provide your live production URL (e.g. `https://jospo-e41.vercel.app`)!
@@ -82,7 +82,7 @@ If you don't want to use GitHub:
 
 Once deployed, make sure your Supabase project redirects to your live Vercel domain:
 
-1. Open your [Supabase Dashboard](https://supabase.com/dashboard/project/egumwbmnvxemxousaujj).
+1. Open your [Supabase Dashboard](https://supabase.com/dashboard/project/<YOUR_PROJECT_ID>).
 2. Go to **Authentication** → **URL Configuration**.
 3. Set **Site URL** to your Vercel URL (e.g., `https://jospo-e41.vercel.app`).
 4. In **Redirect URLs**, add:

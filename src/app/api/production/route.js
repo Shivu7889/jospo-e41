@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabase, createAdminSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
+import { getTodayIST } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,20 +12,18 @@ export const dynamic = 'force-dynamic';
 function isEntryFromToday(entry) {
   if (!entry) return false;
   const now = new Date();
-  const utcToday = now.toISOString().split('T')[0];
-  const localToday = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const localToday = getTodayIST();
 
   // 1. Check production_date
-  if (entry.production_date === utcToday || entry.production_date === localToday) {
+  if (entry.production_date === localToday) {
     return true;
   }
 
   // 2. Check created_at date
   if (entry.created_at) {
     const createdDate = new Date(entry.created_at);
-    const createdUtc = createdDate.toISOString().split('T')[0];
     const createdLocal = createdDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    if (createdUtc === utcToday || createdLocal === localToday) {
+    if (createdLocal === localToday) {
       return true;
     }
 
@@ -83,7 +83,9 @@ function extractManpower(row) {
  */
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest({ requireActive: false });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { searchParams } = new URL(request.url);
 
     const dateParam = searchParams.get('date');
@@ -93,7 +95,7 @@ export async function GET(request) {
     const modelIdParam = searchParams.get('model_id');
 
     // Default to today unless specified or 'all' or date range given
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getTodayIST();
     const filterDate = startDateParam || endDateParam ? null : dateParam === null ? todayStr : dateParam === 'all' ? null : dateParam;
 
     const selectQuery = `
@@ -265,7 +267,7 @@ export async function POST(request) {
 
     // 3. Parse payload
     const body = await request.json();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getTodayIST();
     const defaultContractor = (body.contractor_name || body.thekedar_name || body.thekedar || '').trim();
     const defaultManpower = body.manpower !== undefined && body.manpower !== '' && !isNaN(Number(body.manpower))
       ? parseInt(body.manpower, 10)
@@ -609,6 +611,27 @@ export async function PATCH(request) {
           { status: 400 }
         );
       }
+
+      // Negative stock guard: if reducing quantity, verify stock doesn't fall below zero
+      if (q < targetEntry.quantity) {
+        const reduction = targetEntry.quantity - q;
+        const { data: stockRow } = await db
+          .from('current_stock')
+          .select('current_stock')
+          .eq('model_id', targetEntry.model_id)
+          .maybeSingle();
+        const available = stockRow?.current_stock ?? 0;
+        if (available < reduction) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Cannot reduce quantity by ${reduction} units. Current available stock is only ${available} units (some units may have already been dispatched).`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+
       updatePayload.quantity = q;
       newQuantity = q;
     }
@@ -622,6 +645,24 @@ export async function PATCH(request) {
       if (modelErr || !modelData) {
         return NextResponse.json({ success: false, error: 'Selected cooler model not found.' }, { status: 400 });
       }
+
+      // Negative stock guard: verify current stock of original model has at least targetEntry.quantity
+      const { data: origStockRow } = await db
+        .from('current_stock')
+        .select('current_stock')
+        .eq('model_id', targetEntry.model_id)
+        .maybeSingle();
+      const origAvailable = origStockRow?.current_stock ?? 0;
+      if (origAvailable < targetEntry.quantity) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Cannot change model. Current available stock of original model is only ${origAvailable} units, which is less than the entry's ${targetEntry.quantity} units (some units were already dispatched).`,
+          },
+          { status: 400 }
+        );
+      }
+
       updatePayload.model_id = model_id;
       newModelId = model_id;
     }
@@ -844,6 +885,23 @@ export async function DELETE(request) {
           { status: 403 }
         );
       }
+    }
+
+    // Negative stock guard: verify current available stock does not drop below zero
+    const { data: stockRow } = await db
+      .from('current_stock')
+      .select('current_stock')
+      .eq('model_id', targetEntry.model_id)
+      .maybeSingle();
+    const available = stockRow?.current_stock ?? 0;
+    if (available < targetEntry.quantity) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Cannot delete entry: only ${available} units available in stock, but this entry added ${targetEntry.quantity} units. Some units have already been dispatched.`,
+        },
+        { status: 400 }
+      );
     }
 
     // 1. Delete associated stock transaction first so stock is reduced immediately

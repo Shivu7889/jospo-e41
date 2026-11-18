@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
+import { getTodayIST } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,11 +20,13 @@ function extractThekedar(row) {
 
 export async function GET(request) {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest();
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
     const { searchParams } = new URL(request.url);
 
     const type = searchParams.get('type') || 'daily_production';
-    const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
+    const date = searchParams.get('date') || getTodayIST();
     const month = parseInt(searchParams.get('month') || String(new Date().getMonth() + 1), 10);
     const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()), 10);
 
@@ -342,7 +345,7 @@ export async function GET(request) {
 
     // 5. Thekedar / Contractor Production Report
     if (type === 'thekedar_production' || type === 'contractor_production') {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getTodayIST();
       const pad = (n) => String(n).padStart(2, '0');
       const defaultStartDate = `${year}-${pad(month)}-01`;
 

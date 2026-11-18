@@ -7,6 +7,7 @@ import DataTable from '@/components/DataTable';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+import { getTodayIST } from '@/lib/date';
 
 export default function StockPage() {
   const { showToast } = useToast();
@@ -73,7 +74,7 @@ export default function StockPage() {
       setAvailableModels(formattedStock);
 
       // Also compute stats from DB
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getTodayIST();
 
       // Total Stock
       const totalUnits = formattedStock.reduce(
@@ -139,13 +140,13 @@ export default function StockPage() {
       }
 
       if (startDate) {
-        // Start of selected date in ISO
-        query = query.gte('created_at', `${startDate}T00:00:00.000Z`);
+        // Start of selected date in IST
+        query = query.gte('created_at', `${startDate}T00:00:00+05:30`);
       }
 
       if (endDate) {
-        // End of selected date in ISO
-        query = query.lte('created_at', `${endDate}T23:59:59.999Z`);
+        // End of selected date in IST
+        query = query.lte('created_at', `${endDate}T23:59:59.999+05:30`);
       }
 
       const fromIndex = (page - 1) * pageSize;

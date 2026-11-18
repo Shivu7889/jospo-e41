@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabase } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +18,9 @@ const DEFAULT_CONTRACTORS = [
  */
 export async function GET() {
   try {
-    const supabase = await createServerSupabase();
+    const auth = await authenticateRequest({ requireActive: false });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     // 1. Try querying the dedicated contractors table if it exists
     let { data: dbContractors, error: dbError } = await supabase
@@ -81,26 +83,9 @@ export async function GET() {
  */
 export async function POST(request) {
   try {
-    const supabase = await createServerSupabase();
-
-    // Verify user & check admin role
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !user) {
-      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
-    }
-
-    const { data: employee, error: empErr } = await supabase
-      .from('employees')
-      .select('id, name, role')
-      .eq('id', user.id)
-      .single();
-
-    if (empErr || !employee || employee.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Permission denied. Only Admins can add or remove Thekedars.' },
-        { status: 403 }
-      );
-    }
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     const body = await request.json();
     const name = (body.name || '').trim();
@@ -115,6 +100,8 @@ export async function POST(request) {
       .upsert({ name, is_active: true }, { onConflict: 'name' })
       .select()
       .single();
+
+    if (insertError) throw insertError;
 
     return NextResponse.json({
       success: true,
@@ -137,26 +124,9 @@ export async function POST(request) {
  */
 export async function DELETE(request) {
   try {
-    const supabase = await createServerSupabase();
-
-    // Verify user & check admin role
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !user) {
-      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
-    }
-
-    const { data: employee, error: empErr } = await supabase
-      .from('employees')
-      .select('id, name, role')
-      .eq('id', user.id)
-      .single();
-
-    if (empErr || !employee || employee.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Permission denied. Only Admins can add or remove Thekedars.' },
-        { status: 403 }
-      );
-    }
+    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
 
     const { searchParams } = new URL(request.url);
     const name = searchParams.get('name') || (await request.json().catch(() => ({}))).name;
@@ -168,14 +138,12 @@ export async function DELETE(request) {
     const cleanName = name.trim();
 
     // Try updating is_active = false or deleting in contractors table
-    try {
-      await supabase
-        .from('contractors')
-        .update({ is_active: false })
-        .eq('name', cleanName);
-    } catch (e) {
-      // Table might not exist yet
-    }
+    const { error: updateError } = await supabase
+      .from('contractors')
+      .update({ is_active: false })
+      .eq('name', cleanName);
+
+    if (updateError) throw updateError;
 
     return NextResponse.json({
       success: true,

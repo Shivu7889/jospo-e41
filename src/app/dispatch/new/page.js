@@ -9,6 +9,7 @@ import QRScanner from '@/components/QRScanner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+import { getTodayIST } from '@/lib/date';
 
 // Static 20 models registry to ensure zero-latency & offline scanning fallback
 export const JOSPO_20_ACTIVE_MODELS = [
@@ -64,7 +65,7 @@ function NewDispatchContent() {
   const [countdown, setCountdown] = useState(3);
 
   // Form State - Step 1: Vehicle Details
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => getTodayIST(), []);
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [fromLocation, setFromLocation] = useState('Jospo E41');
   const [destination, setDestination] = useState('');
@@ -899,8 +900,15 @@ function NewDispatchContent() {
 
   // Set quantity directly
   const handleSetExactQuantity = (modelId, newQty) => {
+    // Allow empty string so user can clear and retype
+    if (newQty === '' || newQty === undefined) {
+      setItems((prev) =>
+        prev.map((it) => (it.model_id === modelId ? { ...it, quantity: '' } : it))
+      );
+      return;
+    }
     const val = parseInt(newQty, 10);
-    if (isNaN(val) || val <= 0) return;
+    if (isNaN(val) || val < 0) return;
     setItems((prev) =>
       prev.map((item) => (item.model_id === modelId ? { ...item, quantity: val } : item))
     );
@@ -932,12 +940,12 @@ function NewDispatchContent() {
 
   // Stock check: determine if any item exceeds available stock
   const stockDeficits = useMemo(() => {
-    return items.filter((item) => item.quantity > item.available_stock);
+    return items.filter((item) => (Number(item.quantity) || 0) > item.available_stock);
   }, [items]);
 
   // Validation
   const isStep1Valid = vehicleNumber.trim() && destination.trim() && dispatchDate;
-  const isStep2Valid = items.length > 0 && totalQuantity > 0;
+  const isStep2Valid = items.length > 0 && totalQuantity > 0 && items.every((i) => (Number(i.quantity) || 0) > 0);
 
   // Format remarks to include verified unique box serial numbers
   const getCompiledRemarks = () => {
@@ -1017,7 +1025,7 @@ function NewDispatchContent() {
       const itemsToInsert = items.map((item) => ({
         dispatch_id: targetDispatchId,
         model_id: item.model_id,
-        quantity: item.quantity,
+        quantity: parseInt(item.quantity, 10) || 1,
       }));
 
       const { error: itemsError } = await supabase
@@ -1140,7 +1148,7 @@ function NewDispatchContent() {
       const itemsToInsert = items.map((item) => ({
         dispatch_id: targetDispatchId,
         model_id: item.model_id,
-        quantity: item.quantity,
+        quantity: parseInt(item.quantity, 10) || 1,
       }));
 
       const { error: itemsError } = await supabase
@@ -1300,7 +1308,7 @@ function NewDispatchContent() {
             <button
               type="button"
               onClick={() => setDraftRestored(false)}
-              className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-semibold text-xs transition-colors shadow-2xs"
+              className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-semibold text-xs transition-colors shadow-sm"
             >
               Continue Loading
             </button>
@@ -1539,7 +1547,7 @@ function NewDispatchContent() {
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
                     placeholder="Scan with barcode gun or type serial (e.g. #000001)..."
-                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono shadow-2xs"
+                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono shadow-sm"
                   />
                 </div>
                 <button
@@ -1671,7 +1679,7 @@ function NewDispatchContent() {
                               {item.scanned_serials.map((sn) => (
                                 <span
                                   key={sn}
-                                  className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs"
+                                  className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-sm"
                                 >
                                   <span>#{sn}</span>
                                   <button
@@ -1719,6 +1727,11 @@ function NewDispatchContent() {
                             min="1"
                             value={item.quantity}
                             onChange={(e) => handleSetExactQuantity(item.model_id, e.target.value)}
+                            onBlur={() => {
+                              if (item.quantity === '' || parseInt(item.quantity, 10) <= 0) {
+                                handleSetExactQuantity(item.model_id, '1');
+                              }
+                            }}
                             className="w-14 text-center font-bold text-sm text-gray-900 focus:outline-none border-x border-gray-200 py-1"
                           />
                           <button

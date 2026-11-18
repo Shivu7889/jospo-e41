@@ -601,7 +601,7 @@ export default function AdminPage() {
                     These Thekedars appear in the production entry dropdown.
                   </p>
                 </div>
-                <span className="text-xs font-bold text-gray-700 bg-white px-2.5 py-1 rounded-lg border border-gray-200 shadow-2xs">
+                <span className="text-xs font-bold text-gray-700 bg-white px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm">
                   {thekedarsList.length} registered
                 </span>
               </div>
@@ -759,7 +759,7 @@ export default function AdminPage() {
                                   <div className="font-semibold text-gray-900 flex items-center gap-1.5">
                                     <span>{emp.name}</span>
                                     {isSelf && (
-                                      <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-1.5 py-0.2 rounded">
+                                      <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-1.5 py-0.5 rounded">
                                         You
                                       </span>
                                     )}

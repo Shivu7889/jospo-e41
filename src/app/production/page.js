@@ -7,13 +7,14 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+import { getTodayIST } from '@/lib/date';
 
 export default function ProductionPage() {
   const { employee } = useAuth();
   const { showToast } = useToast();
   const supabase = getSupabase();
 
-  const getTodayStr = () => new Date().toISOString().split('T')[0];
+  const getTodayStr = () => getTodayIST();
 
   // Form State
   const [productionDate, setProductionDate] = useState(getTodayStr());
@@ -55,16 +56,12 @@ export default function ProductionPage() {
   // Helper to determine if an entry was created / logged today
   const isEntryFromToday = useCallback((row) => {
     if (!row) return false;
-    const now = new Date();
-    const utcToday = now.toISOString().split('T')[0];
-    const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-    if (row.production_date === utcToday || row.production_date === localToday) return true;
+    const todayIST = getTodayIST();
+    if (row.production_date === todayIST) return true;
     if (row.created_at) {
-      const created = new Date(row.created_at);
-      const createdLocal = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')}`;
-      if (createdLocal === localToday) return true;
-      const diffHours = (now.getTime() - created.getTime()) / (1000 * 60 * 60);
+      const createdIST = new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      if (createdIST === todayIST) return true;
+      const diffHours = (Date.now() - new Date(row.created_at).getTime()) / (1000 * 60 * 60);
       if (diffHours >= 0 && diffHours <= 24) return true;
     }
     return false;
@@ -539,7 +536,7 @@ export default function ProductionPage() {
                       <button
                         type="button"
                         onClick={() => setShowManageThekedarsModal(true)}
-                        className="text-[11px] font-semibold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1 bg-white px-2 py-0.5 rounded border border-gray-300 shadow-2xs"
+                        className="text-[11px] font-semibold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1 bg-white px-2 py-0.5 rounded border border-gray-300 shadow-sm"
                       >
                         <span>⚙️ Manage Thekedars (Admin)</span>
                       </button>
@@ -863,7 +860,7 @@ export default function ProductionPage() {
                     {/* Thekedar Category Header */}
                     <div className="bg-gradient-to-r from-amber-500/10 via-amber-100/40 to-transparent p-3 sm:px-4 sm:py-3 border-b border-amber-200/70 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div className="flex items-center space-x-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center text-base font-bold shadow-2xs border border-amber-200">
+                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center text-base font-bold shadow-sm border border-amber-200">
                           👷
                         </div>
                         <div>
@@ -878,11 +875,11 @@ export default function ProductionPage() {
 
                       <div className="flex items-center space-x-2 text-xs">
                         {category.manpower && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold bg-white text-indigo-800 border border-indigo-200 shadow-2xs">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold bg-white text-indigo-800 border border-indigo-200 shadow-sm">
                             👥 {category.manpower} {category.manpower === 1 ? 'worker' : 'workers'}
                           </span>
                         )}
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-sm">
                           +{category.totalUnits.toLocaleString()} units
                         </span>
                       </div>
@@ -960,7 +957,7 @@ export default function ProductionPage() {
                                       <button
                                         type="button"
                                         onClick={() => handleOpenEditModal(row)}
-                                        className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-2xs"
+                                        className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-sm"
                                         title="Edit quantity, model, Thekedar, or manpower"
                                       >
                                         <span>✏️</span>
@@ -969,7 +966,7 @@ export default function ProductionPage() {
                                       <button
                                         type="button"
                                         onClick={() => setDeletingEntry(row)}
-                                        className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-red-200 shadow-2xs"
+                                        className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-red-200 shadow-sm"
                                         title="Delete entry and deduct from stock"
                                       >
                                         <span>🗑️</span>
@@ -1072,7 +1069,7 @@ export default function ProductionPage() {
 
         {/* ADMIN ONLY: Manage Thekedars Modal */}
         {isAdmin && showManageThekedarsModal && (
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-scaleUp">
               <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                 <div className="flex items-center space-x-2">
@@ -1178,7 +1175,7 @@ export default function ProductionPage() {
 
         {/* EDIT PRODUCTION ENTRY MODAL */}
         {editingEntry && (
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
               <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                 <div className="flex items-center space-x-2">
@@ -1330,7 +1327,7 @@ export default function ProductionPage() {
 
         {/* DELETE CONFIRMATION MODAL */}
         {deletingEntry && (
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp border-t-4 border-red-500">
               <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                 <div className="flex items-center space-x-2 text-red-600">
