@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import DataTable from '@/components/DataTable';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
@@ -414,118 +413,6 @@ export default function ProductionPage() {
     }
   };
 
-  // Table columns for production log
-  const logColumns = [
-    {
-      key: 'created_at',
-      label: 'Time',
-      render: (val) => (
-        <span className="font-mono text-xs text-gray-500 font-medium">
-          {formatTime(val)}
-        </span>
-      ),
-    },
-    {
-      key: 'contractor_name',
-      label: 'Thekedar',
-      render: (val) => (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-          👷 {val || 'General / Unassigned'}
-        </span>
-      ),
-    },
-    {
-      key: 'model_code',
-      label: 'Cooler Model',
-      render: (val, row) => (
-        <div>
-          <div className="flex items-center space-x-1.5">
-            <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2 py-0.5 rounded border border-primary-100">
-              {val}
-            </span>
-            <span className="text-xs font-semibold text-gray-900">{row.model_name}</span>
-          </div>
-          {row.remarks && (
-            <p className="text-[11px] text-gray-400 mt-0.5 truncate max-w-xs italic">
-              Note: {row.remarks}
-            </p>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'quantity',
-      label: 'Quantity',
-      align: 'right',
-      render: (val) => (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
-          +{Number(val).toLocaleString()} units
-        </span>
-      ),
-    },
-    {
-      key: 'employee_name',
-      label: 'Logged By',
-      render: (val) => (
-        <div className="flex items-center space-x-1.5 text-xs text-gray-600">
-          <div className="w-5 h-5 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center text-[10px] font-bold uppercase">
-            {(val || 'U')[0]}
-          </div>
-          <span className="font-medium">{val || 'Employee'}</span>
-        </div>
-      ),
-    },
-    {
-      key: 'actions',
-      label: 'Actions',
-      align: 'right',
-      render: (val, row) => {
-        const isToday = isEntryFromToday(row);
-        const isAuthor = !row.employee_id || row.employee_id === employee?.id;
-        const canModify = isAdmin || (isToday && isAuthor);
-
-        if (!canModify) {
-          return (
-            <span
-              className="inline-flex items-center space-x-1 text-[11px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-200"
-              title={
-                !isToday
-                  ? 'Locked: Past date entries cannot be edited or deleted by production staff.'
-                  : 'Locked: Only the employee who logged this entry can edit or delete it.'
-              }
-            >
-              <span>🔒</span>
-              <span>Locked</span>
-            </span>
-          );
-        }
-
-        return (
-          <div className="flex items-center justify-end space-x-1.5">
-            <button
-              type="button"
-              onClick={() => handleOpenEditModal(row)}
-              className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-semibold flex items-center space-x-1 border border-blue-200"
-              title="Edit quantity, model, or Thekedar"
-            >
-              <span>✏️</span>
-              <span className="hidden sm:inline">Edit</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeletingEntry(row)}
-              className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-semibold flex items-center space-x-1 border border-red-200"
-              title="Delete this entry and reverse stock"
-            >
-              <span>🗑️</span>
-              <span className="hidden sm:inline">Delete</span>
-            </button>
-          </div>
-        );
-      },
-    },
-  ];
-
   // Filtered log entries based on selected contractor filter
   const displayedLogEntries = useMemo(() => {
     if (!logThekedarFilter || logThekedarFilter === 'all') return logEntries;
@@ -904,21 +791,200 @@ export default function ProductionPage() {
               </div>
             </div>
 
-            {/* Log Table */}
+            {/* Log Table / List - 100% width with ZERO horizontal scroll */}
             {loadingLog ? (
               <div className="card py-16 flex justify-center">
                 <LoadingSpinner message="Fetching daily production log..." size="md" />
               </div>
+            ) : displayedLogEntries.length === 0 ? (
+              <div className="card py-12 text-center text-gray-500 bg-white border border-gray-200 rounded-xl">
+                <div className="flex flex-col items-center justify-center space-y-2">
+                  <span className="text-3xl">📦</span>
+                  <p className="font-semibold text-gray-700">
+                    {logThekedarFilter !== 'all'
+                      ? `No production entries found for Thekedar "${logThekedarFilter}" on ${productionDate}.`
+                      : `No production entries recorded for ${productionDate} yet.`}
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    Use the batch form on the left to record manufactured units.
+                  </p>
+                </div>
+              </div>
             ) : (
-              <DataTable
-                columns={logColumns}
-                data={displayedLogEntries}
-                emptyMessage={
-                  logThekedarFilter !== 'all'
-                    ? `No production entries found for Thekedar "${logThekedarFilter}" on ${productionDate}.`
-                    : `No production entries recorded for ${productionDate} yet. Use the form on the left to submit.`
-                }
-              />
+              <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                {/* Desktop & Tablet Table (Fits 100% width, NO horizontal scroll needed) */}
+                <div className="hidden sm:block">
+                  <table className="w-full divide-y divide-gray-200 text-xs">
+                    <thead>
+                      <tr className="bg-gray-50/90 text-gray-600 font-semibold uppercase tracking-wider text-[11px]">
+                        <th scope="col" className="px-3 py-2.5 text-left w-24">Time</th>
+                        <th scope="col" className="px-3 py-2.5 text-left w-32">Thekedar</th>
+                        <th scope="col" className="px-3 py-2.5 text-left">Cooler Model</th>
+                        <th scope="col" className="px-3 py-2.5 text-right w-24">Quantity</th>
+                        <th scope="col" className="px-3 py-2.5 text-right w-28">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {displayedLogEntries.map((row, idx) => {
+                        const isToday = isEntryFromToday(row);
+                        const isAuthor = !row.employee_id || row.employee_id === employee?.id;
+                        const canModify = isAdmin || (isToday && isAuthor);
+
+                        return (
+                          <tr
+                            key={row.id || idx}
+                            className="transition-colors hover:bg-gray-50/70"
+                          >
+                            {/* Time & Logged By */}
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              <span className="font-mono text-gray-700 font-bold block">
+                                {formatTime(row.created_at)}
+                              </span>
+                              <span className="text-[10px] text-gray-400 truncate block max-w-[90px]" title={row.employee_name}>
+                                {row.employee_name || 'Staff'}
+                              </span>
+                            </td>
+
+                            {/* Thekedar */}
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 truncate max-w-[125px]" title={row.contractor_name || 'General Assembly'}>
+                                👷 {row.contractor_name || 'General'}
+                              </span>
+                            </td>
+
+                            {/* Cooler Model */}
+                            <td className="px-3 py-2.5 min-w-0">
+                              <div className="flex items-center space-x-1.5 flex-wrap gap-y-0.5">
+                                <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
+                                  {row.model_code}
+                                </span>
+                                <span className="text-xs font-semibold text-gray-900 truncate max-w-[170px] xl:max-w-xs" title={row.model_name}>
+                                  {row.model_name}
+                                </span>
+                              </div>
+                              {row.remarks && (
+                                <p className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[210px] xl:max-w-sm italic">
+                                  Note: {row.remarks}
+                                </p>
+                              )}
+                            </td>
+
+                            {/* Quantity */}
+                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                                +{Number(row.quantity).toLocaleString()}
+                              </span>
+                            </td>
+
+                            {/* Actions (Always visible right here with ZERO scrolling) */}
+                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                              {canModify ? (
+                                <div className="flex items-center justify-end space-x-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditModal(row)}
+                                    className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-2xs"
+                                    title="Edit Quantity, Model, or Thekedar"
+                                  >
+                                    <span>✏️</span>
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeletingEntry(row)}
+                                    className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-red-200 shadow-2xs"
+                                    title="Delete entry and deduct from stock"
+                                  >
+                                    <span>🗑️</span>
+                                    <span>Del</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <span
+                                  className="inline-flex items-center space-x-1 text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
+                                  title={!isToday ? 'Locked: Past date entries cannot be edited/deleted' : 'Locked: Only author can edit/delete'}
+                                >
+                                  <span>🔒</span>
+                                  <span>Locked</span>
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Cards (Directly visible with zero horizontal scroll) */}
+                <div className="block sm:hidden divide-y divide-gray-100">
+                  {displayedLogEntries.map((row, idx) => {
+                    const isToday = isEntryFromToday(row);
+                    const isAuthor = !row.employee_id || row.employee_id === employee?.id;
+                    const canModify = isAdmin || (isToday && isAuthor);
+
+                    return (
+                      <div key={row.id || idx} className="p-3 hover:bg-gray-50/60 transition-colors space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                              <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
+                                {row.model_code}
+                              </span>
+                              <span className="text-xs font-semibold text-gray-900 truncate">
+                                {row.model_name}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-2 text-[11px] text-gray-500 mt-1">
+                              <span className="font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                                👷 {row.contractor_name || 'General'}
+                              </span>
+                              <span>•</span>
+                              <span>{formatTime(row.created_at)}</span>
+                              <span>•</span>
+                              <span>{row.employee_name || 'Staff'}</span>
+                            </div>
+                            {row.remarks && (
+                              <p className="text-[10px] text-gray-400 mt-1 italic truncate">
+                                Note: {row.remarks}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col items-end space-y-1.5 flex-shrink-0">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                              +{Number(row.quantity).toLocaleString()} units
+                            </span>
+
+                            {canModify ? (
+                              <div className="flex items-center space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditModal(row)}
+                                  className="px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded border border-blue-200 text-xs font-bold"
+                                >
+                                  ✏️ Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingEntry(row)}
+                                  className="px-2 py-0.5 text-red-600 hover:bg-red-50 rounded border border-red-200 text-xs font-bold"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border">
+                                🔒 Locked
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
         </div>
