@@ -55,6 +55,24 @@ function extractThekedar(row) {
 }
 
 /**
+ * Helper to extract Manpower (worker count) from entry or remarks fallback
+ */
+function extractManpower(row) {
+  if (row.manpower !== undefined && row.manpower !== null && !isNaN(Number(row.manpower))) {
+    return Number(row.manpower);
+  }
+  if (row.remarks && typeof row.remarks === 'string') {
+    const match = row.remarks.match(/\[(?:Manpower|Workers|Labors|Labour):\s*(\d+)\]/i) ||
+                  row.remarks.match(/(?:Manpower|Workers|Labors|Labour):\s*(\d+)/i);
+    if (match && match[1]) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return null;
+}
+
+
+/**
  * GET /api/production
  * Fetch production entries with cooler model, employee, and Thekedar details
  * Query params:
@@ -99,10 +117,10 @@ export async function GET(request) {
       )
     `;
 
-    // Try selecting with contractor_name column first
+    // Try selecting with contractor_name and manpower columns first
     let query = supabase
       .from('production_entries')
-      .select(`contractor_name, ${selectQuery}`)
+      .select(`contractor_name, manpower, ${selectQuery}`)
       .order('production_date', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -121,8 +139,8 @@ export async function GET(request) {
 
     let { data: entries, error } = await query;
 
-    // Fallback if contractor_name column doesn't exist yet in Supabase schema cache
-    if (error && (error.message?.includes('contractor_name') || error.code === 'PGRST204')) {
+    // Fallback if contractor_name or manpower columns don't exist yet in Supabase schema cache
+    if (error && (error.message?.includes('contractor_name') || error.message?.includes('manpower') || error.code === 'PGRST204')) {
       let fallbackQuery = supabase
         .from('production_entries')
         .select(selectQuery)
@@ -149,17 +167,20 @@ export async function GET(request) {
     // Flatten / normalize helper fields for ease of frontend consumption
     let normalizedEntries = (entries || []).map((entry) => {
       const thekedar = extractThekedar(entry);
+      const manpower = extractManpower(entry);
       if (thekedar) uniqueThekedarsSet.add(thekedar);
 
-      // Clean remarks by removing duplicate tag
+      // Clean remarks by removing duplicate tags
       const displayRemarks = (entry.remarks || '')
         .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
+        .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
         .trim();
 
       return {
         ...entry,
         contractor_name: thekedar,
         thekedar_name: thekedar,
+        manpower: manpower,
         display_remarks: displayRemarks,
         model_name: entry.cooler_models?.name || 'Unknown Model',
         model_code: entry.cooler_models?.code || 'N/A',
@@ -246,6 +267,9 @@ export async function POST(request) {
     const body = await request.json();
     const todayStr = new Date().toISOString().split('T')[0];
     const defaultContractor = (body.contractor_name || body.thekedar_name || body.thekedar || '').trim();
+    const defaultManpower = body.manpower !== undefined && body.manpower !== '' && !isNaN(Number(body.manpower))
+      ? parseInt(body.manpower, 10)
+      : null;
 
     // Support both batch ({ entries: [...] }) and single ({ model_id, quantity })
     let rawItems = [];
@@ -256,6 +280,9 @@ export async function POST(request) {
         production_date: item.production_date || body.production_date || todayStr,
         remarks: item.remarks || body.remarks || null,
         contractor_name: (item.contractor_name || defaultContractor || '').trim(),
+        manpower: item.manpower !== undefined && item.manpower !== '' && !isNaN(Number(item.manpower))
+          ? parseInt(item.manpower, 10)
+          : defaultManpower,
       }));
     } else if (body.model_id) {
       rawItems = [
@@ -265,6 +292,7 @@ export async function POST(request) {
           production_date: body.production_date || todayStr,
           remarks: body.remarks || null,
           contractor_name: defaultContractor,
+          manpower: defaultManpower,
         },
       ];
     } else {
@@ -331,12 +359,19 @@ export async function POST(request) {
       const model = modelsMap[item.model_id];
       const thekedarName = item.contractor_name || 'General Assembly';
 
-      // Ensure Thekedar tag is in remarks for 100% backward-compatible persistence
+      // Ensure Thekedar and Manpower tags are in remarks for 100% backward-compatible persistence
       let combinedRemarks = item.remarks ? item.remarks.trim() : '';
       if (thekedarName && !combinedRemarks.includes(`[Thekedar: ${thekedarName}]`)) {
         combinedRemarks = combinedRemarks
           ? `[Thekedar: ${thekedarName}] ${combinedRemarks}`
           : `[Thekedar: ${thekedarName}]`;
+      }
+      if (item.manpower !== null && item.manpower !== undefined && item.manpower > 0) {
+        if (!combinedRemarks.includes(`[Manpower: ${item.manpower}]`)) {
+          combinedRemarks = combinedRemarks
+            ? `[Manpower: ${item.manpower}] ${combinedRemarks}`
+            : `[Manpower: ${item.manpower}]`;
+        }
       }
 
       const insertPayload = {
@@ -346,6 +381,7 @@ export async function POST(request) {
         remarks: combinedRemarks || null,
         employee_id: employee.id,
         contractor_name: thekedarName,
+        ...(item.manpower && item.manpower > 0 ? { manpower: item.manpower } : {}),
       };
 
       const selectFields = `
@@ -359,16 +395,17 @@ export async function POST(request) {
         employees (id, name)
       `;
 
-      // Try inserting with contractor_name column
+      // Try inserting with contractor_name and manpower columns
       let { data: prodEntry, error: prodErr } = await supabase
         .from('production_entries')
         .insert(insertPayload)
         .select(selectFields)
         .single();
 
-      // If contractor_name column doesn't exist yet, retry without it (remarks tag holds Thekedar)
-      if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.code === 'PGRST204')) {
+      // If contractor_name or manpower column doesn't exist yet, retry without them (remarks tag holds both)
+      if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.message?.includes('manpower') || prodErr.code === 'PGRST204')) {
         delete insertPayload.contractor_name;
+        delete insertPayload.manpower;
         const retryResult = await supabase
           .from('production_entries')
           .insert(insertPayload)
@@ -383,7 +420,7 @@ export async function POST(request) {
       }
 
       // Insert into stock_transactions
-      const stockNote = `Production: +${item.quantity} units of ${model.code} (Thekedar: ${thekedarName})`;
+      const stockNote = `Production: +${item.quantity} units of ${model.code} (Thekedar: ${thekedarName}${item.manpower ? `, Manpower: ${item.manpower}` : ''})`;
 
       const { error: stockErr } = await supabase
         .from('stock_transactions')
@@ -406,6 +443,7 @@ export async function POST(request) {
         ...prodEntry,
         contractor_name: thekedarName,
         thekedar_name: thekedarName,
+        manpower: item.manpower || null,
         model_name: prodEntry.cooler_models?.name || model.name,
         model_code: prodEntry.cooler_models?.code || model.code,
         employee_name: prodEntry.employees?.name || employee.name,
@@ -478,7 +516,7 @@ export async function PATCH(request) {
     }
 
     const body = await request.json();
-    const { id, ids, contractor_name, model_id, quantity, remarks } = body;
+    const { id, ids, contractor_name, model_id, quantity, remarks, manpower } = body;
 
     // CASE A: Admin Batch Contractor Update
     if (ids && Array.isArray(ids) && ids.length > 0) {
@@ -561,6 +599,7 @@ export async function PATCH(request) {
     let newQuantity = targetEntry.quantity;
     let newModelId = targetEntry.model_id;
     let newContractor = targetEntry.contractor_name || extractThekedar(targetEntry);
+    let newManpower = targetEntry.manpower !== undefined ? targetEntry.manpower : extractManpower(targetEntry);
 
     if (quantity !== undefined) {
       const q = Number(quantity);
@@ -595,11 +634,30 @@ export async function PATCH(request) {
       }
     }
 
-    // Format remarks to retain Thekedar tag for backward compatibility
+    if (manpower !== undefined) {
+      if (manpower === '' || manpower === null) {
+        updatePayload.manpower = null;
+        newManpower = null;
+      } else {
+        const mp = Number(manpower);
+        if (!isNaN(mp) && mp > 0) {
+          updatePayload.manpower = parseInt(mp, 10);
+          newManpower = parseInt(mp, 10);
+        }
+      }
+    }
+
+    // Format remarks to retain Thekedar & Manpower tags for backward compatibility
     let cleanRemarks = remarks !== undefined ? (remarks || '').trim() : (targetEntry.remarks || '');
-    cleanRemarks = cleanRemarks.replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '').trim();
+    cleanRemarks = cleanRemarks
+      .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
+      .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
+      .trim();
     if (newContractor && newContractor !== 'General Assembly') {
       cleanRemarks = cleanRemarks ? `[Thekedar: ${newContractor}] ${cleanRemarks}` : `[Thekedar: ${newContractor}]`;
+    }
+    if (newManpower && newManpower > 0) {
+      cleanRemarks = cleanRemarks ? `[Manpower: ${newManpower}] ${cleanRemarks}` : `[Manpower: ${newManpower}]`;
     }
     updatePayload.remarks = cleanRemarks || null;
 
@@ -623,8 +681,9 @@ export async function PATCH(request) {
       .select(selectFields)
       .single();
 
-    if (updateErr && (updateErr.message?.includes('contractor_name') || updateErr.code === 'PGRST204')) {
+    if (updateErr && (updateErr.message?.includes('contractor_name') || updateErr.message?.includes('manpower') || updateErr.code === 'PGRST204')) {
       delete updatePayload.contractor_name;
+      delete updatePayload.manpower;
       const retry = await db
         .from('production_entries')
         .update(updatePayload)
@@ -641,7 +700,7 @@ export async function PATCH(request) {
 
     // 2. Synchronize stock_transactions to keep inventory ledger exact
     const modelCode = updatedEntry.cooler_models?.code || 'Units';
-    const stockNote = `Production: +${newQuantity} units of ${modelCode} (Thekedar: ${newContractor})`;
+    const stockNote = `Production: +${newQuantity} units of ${modelCode} (Thekedar: ${newContractor}${newManpower ? `, Manpower: ${newManpower}` : ''})`;
 
     const { data: existingTx } = await db
       .from('stock_transactions')
@@ -679,6 +738,7 @@ export async function PATCH(request) {
         ...updatedEntry,
         contractor_name: newContractor,
         thekedar_name: newContractor,
+        manpower: newManpower,
         model_name: updatedEntry.cooler_models?.name || 'Cooler Model',
         model_code: updatedEntry.cooler_models?.code || 'N/A',
         employee_name: updatedEntry.employees?.name || employee.name,

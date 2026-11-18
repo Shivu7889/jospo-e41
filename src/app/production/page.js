@@ -18,6 +18,7 @@ export default function ProductionPage() {
   // Form State
   const [productionDate, setProductionDate] = useState(getTodayStr());
   const [remarks, setRemarks] = useState('');
+  const [manpower, setManpower] = useState('');
   const [rows, setRows] = useState([
     { id: 'item-1', model_id: '', quantity: '' },
   ]);
@@ -44,6 +45,7 @@ export default function ProductionPage() {
   const [editModelId, setEditModelId] = useState('');
   const [editQuantity, setEditQuantity] = useState('');
   const [editThekedar, setEditThekedar] = useState('');
+  const [editManpower, setEditManpower] = useState('');
   const [editRemarks, setEditRemarks] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -213,6 +215,7 @@ export default function ProductionPage() {
     setEditModelId(row.model_id || '');
     setEditQuantity(row.quantity || '');
     setEditThekedar(row.contractor_name || row.thekedar_name || (thekedars[0] || ''));
+    setEditManpower(row.manpower || '');
     setEditRemarks(row.display_remarks || row.remarks || '');
   };
 
@@ -241,6 +244,7 @@ export default function ProductionPage() {
           model_id: editModelId,
           quantity: qty,
           contractor_name: (editThekedar || '').trim(),
+          manpower: editManpower !== '' && !isNaN(Number(editManpower)) ? parseInt(editManpower, 10) : null,
           remarks: (editRemarks || '').trim(),
         }),
       });
@@ -363,6 +367,7 @@ export default function ProductionPage() {
           production_date: productionDate,
           contractor_name: finalThekedar,
           thekedar_name: finalThekedar,
+          manpower: manpower !== '' && !isNaN(Number(manpower)) ? parseInt(manpower, 10) : null,
           remarks: remarks.trim() || null,
         }),
       });
@@ -388,9 +393,10 @@ export default function ProductionPage() {
         'success'
       );
 
-      // Reset form rows & remarks (keep selected Thekedar for rapid consecutive batch logging)
+      // Reset form rows & remarks & manpower (keep selected Thekedar for rapid consecutive batch logging)
       setRows([{ id: `item-${Date.now()}`, model_id: '', quantity: '' }]);
       setRemarks('');
+      setManpower('');
 
       // Refresh production log
       await fetchTodayLog(productionDate);
@@ -424,6 +430,28 @@ export default function ProductionPage() {
   // Calculate sum of log
   const logTotalUnits = useMemo(() => {
     return displayedLogEntries.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  }, [displayedLogEntries]);
+
+  // Group log entries by Thekedar as Category
+  const groupedByThekedar = useMemo(() => {
+    const groups = {};
+    for (const entry of displayedLogEntries) {
+      const thekedar = entry.contractor_name || 'General Assembly';
+      if (!groups[thekedar]) {
+        groups[thekedar] = {
+          thekedar,
+          entries: [],
+          totalUnits: 0,
+          manpower: entry.manpower || null,
+        };
+      }
+      groups[thekedar].entries.push(entry);
+      groups[thekedar].totalUnits += entry.quantity || 0;
+      if (!groups[thekedar].manpower && entry.manpower) {
+        groups[thekedar].manpower = entry.manpower;
+      }
+    }
+    return Object.values(groups);
   }, [displayedLogEntries]);
 
   return (
@@ -519,19 +547,36 @@ export default function ProductionPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <select
-                      value={selectedThekedar}
-                      onChange={(e) => setSelectedThekedar(e.target.value)}
-                      className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
-                      required
-                    >
-                      <option value="">-- Select Thekedar / Contractor --</option>
-                      {thekedars.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                      <div className="sm:col-span-8">
+                        <select
+                          value={selectedThekedar}
+                          onChange={(e) => setSelectedThekedar(e.target.value)}
+                          className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
+                          required
+                        >
+                          <option value="">-- Select Thekedar / Contractor --</option>
+                          {thekedars.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="sm:col-span-4">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="👥 Manpower"
+                          value={manpower}
+                          onChange={(e) => setManpower(e.target.value)}
+                          className="input-field text-xs bg-white font-semibold text-gray-900 border-amber-300 focus:border-amber-500"
+                          title="Number of workers / labors deployed by this Thekedar"
+                        />
+                      </div>
+                    </div>
 
                     {/* Quick chips for easy 1-click select */}
                     {thekedars.length > 0 && (
@@ -556,9 +601,7 @@ export default function ProductionPage() {
                   </div>
 
                   <p className="text-[11px] text-amber-800/80">
-                    {isAdmin
-                      ? 'Production entries are recorded under this Thekedar for wage settlement. Click "Manage Thekedars" to add or remove contractors.'
-                      : 'Assigned contractor for this assembly shift. Only Admins have permission to add or remove Thekedars.'}
+                    Production entries are categorized under this Thekedar along with deployed manpower for accounting.
                   </p>
                 </div>
 
@@ -811,179 +854,217 @@ export default function ProductionPage() {
                 </div>
               </div>
             ) : (
-              <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-                {/* Desktop & Tablet Table (Fits 100% width, NO horizontal scroll needed) */}
-                <div className="hidden sm:block">
-                  <table className="w-full divide-y divide-gray-200 text-xs">
-                    <thead>
-                      <tr className="bg-gray-50/90 text-gray-600 font-semibold uppercase tracking-wider text-[11px]">
-                        <th scope="col" className="px-3 py-2.5 text-left w-24">Time</th>
-                        <th scope="col" className="px-3 py-2.5 text-left w-32">Thekedar</th>
-                        <th scope="col" className="px-3 py-2.5 text-left">Cooler Model</th>
-                        <th scope="col" className="px-3 py-2.5 text-right w-24">Quantity</th>
-                        <th scope="col" className="px-3 py-2.5 text-right w-28">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
-                      {displayedLogEntries.map((row, idx) => {
+              <div className="space-y-4">
+                {groupedByThekedar.map((category) => (
+                  <div
+                    key={category.thekedar}
+                    className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden"
+                  >
+                    {/* Thekedar Category Header */}
+                    <div className="bg-gradient-to-r from-amber-500/10 via-amber-100/40 to-transparent p-3 sm:px-4 sm:py-3 border-b border-amber-200/70 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center text-base font-bold shadow-2xs border border-amber-200">
+                          👷
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-extrabold text-amber-950 flex items-center space-x-2">
+                            <span>{category.thekedar}</span>
+                            <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                              {category.entries.length} {category.entries.length === 1 ? 'batch' : 'batches'}
+                            </span>
+                          </h3>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 text-xs">
+                        {category.manpower && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold bg-white text-indigo-800 border border-indigo-200 shadow-2xs">
+                            👥 {category.manpower} {category.manpower === 1 ? 'worker' : 'workers'}
+                          </span>
+                        )}
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
+                          +{category.totalUnits.toLocaleString()} units
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Desktop & Tablet Table for this Thekedar */}
+                    <div className="hidden sm:block">
+                      <table className="w-full divide-y divide-gray-100 text-xs">
+                        <thead>
+                          <tr className="bg-gray-50/80 text-gray-500 font-semibold uppercase tracking-wider text-[10px]">
+                            <th scope="col" className="px-3 py-2 text-left w-20">Time</th>
+                            <th scope="col" className="px-3 py-2 text-left">Cooler Model</th>
+                            <th scope="col" className="px-3 py-2 text-center w-24">Manpower</th>
+                            <th scope="col" className="px-3 py-2 text-right w-24">Quantity</th>
+                            <th scope="col" className="px-3 py-2 text-right w-28">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 bg-white">
+                          {category.entries.map((row, idx) => {
+                            const isToday = isEntryFromToday(row);
+                            const isAuthor = !row.employee_id || row.employee_id === employee?.id;
+                            const canModify = isAdmin || (isToday && isAuthor);
+
+                            return (
+                              <tr key={row.id || idx} className="hover:bg-gray-50/60 transition-colors">
+                                {/* Time & Staff */}
+                                <td className="px-3 py-2.5 whitespace-nowrap">
+                                  <span className="font-mono text-gray-700 font-bold block">
+                                    {formatTime(row.created_at)}
+                                  </span>
+                                  <span className="text-[10px] text-gray-400 block truncate max-w-[80px]" title={row.employee_name}>
+                                    {row.employee_name || 'Staff'}
+                                  </span>
+                                </td>
+
+                                {/* Cooler Model & Remarks */}
+                                <td className="px-3 py-2.5 min-w-0">
+                                  <div className="flex items-center space-x-1.5 flex-wrap gap-y-0.5">
+                                    <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
+                                      {row.model_code}
+                                    </span>
+                                    <span className="text-xs font-semibold text-gray-900 truncate max-w-[180px] xl:max-w-sm">
+                                      {row.model_name}
+                                    </span>
+                                  </div>
+                                  {row.remarks && (
+                                    <p className="text-[10px] text-gray-400 mt-0.5 italic truncate max-w-[220px] xl:max-w-md">
+                                      Note: {row.remarks}
+                                    </p>
+                                  )}
+                                </td>
+
+                                {/* Manpower */}
+                                <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                  {row.manpower ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                      👥 {row.manpower}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-300 text-xs">—</span>
+                                  )}
+                                </td>
+
+                                {/* Quantity */}
+                                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    +{Number(row.quantity).toLocaleString()}
+                                  </span>
+                                </td>
+
+                                {/* Actions (Always visible without scrolling) */}
+                                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                  {canModify ? (
+                                    <div className="flex items-center justify-end space-x-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenEditModal(row)}
+                                        className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-2xs"
+                                        title="Edit quantity, model, Thekedar, or manpower"
+                                      >
+                                        <span>✏️</span>
+                                        <span>Edit</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingEntry(row)}
+                                        className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-red-200 shadow-2xs"
+                                        title="Delete entry and deduct from stock"
+                                      >
+                                        <span>🗑️</span>
+                                        <span>Del</span>
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span
+                                      className="inline-flex items-center space-x-1 text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
+                                      title={!isToday ? 'Locked: Past date entries cannot be edited/deleted' : 'Locked: Only author can edit/delete'}
+                                    >
+                                      <span>🔒</span>
+                                      <span>Locked</span>
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Cards for this Thekedar */}
+                    <div className="block sm:hidden divide-y divide-gray-100">
+                      {category.entries.map((row, idx) => {
                         const isToday = isEntryFromToday(row);
                         const isAuthor = !row.employee_id || row.employee_id === employee?.id;
                         const canModify = isAdmin || (isToday && isAuthor);
 
                         return (
-                          <tr
-                            key={row.id || idx}
-                            className="transition-colors hover:bg-gray-50/70"
-                          >
-                            {/* Time & Logged By */}
-                            <td className="px-3 py-2.5 whitespace-nowrap">
-                              <span className="font-mono text-gray-700 font-bold block">
-                                {formatTime(row.created_at)}
-                              </span>
-                              <span className="text-[10px] text-gray-400 truncate block max-w-[90px]" title={row.employee_name}>
-                                {row.employee_name || 'Staff'}
-                              </span>
-                            </td>
-
-                            {/* Thekedar */}
-                            <td className="px-3 py-2.5 whitespace-nowrap">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 truncate max-w-[125px]" title={row.contractor_name || 'General Assembly'}>
-                                👷 {row.contractor_name || 'General'}
-                              </span>
-                            </td>
-
-                            {/* Cooler Model */}
-                            <td className="px-3 py-2.5 min-w-0">
-                              <div className="flex items-center space-x-1.5 flex-wrap gap-y-0.5">
-                                <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
-                                  {row.model_code}
-                                </span>
-                                <span className="text-xs font-semibold text-gray-900 truncate max-w-[170px] xl:max-w-xs" title={row.model_name}>
-                                  {row.model_name}
-                                </span>
-                              </div>
-                              {row.remarks && (
-                                <p className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[210px] xl:max-w-sm italic">
-                                  Note: {row.remarks}
-                                </p>
-                              )}
-                            </td>
-
-                            {/* Quantity */}
-                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
-                                +{Number(row.quantity).toLocaleString()}
-                              </span>
-                            </td>
-
-                            {/* Actions (Always visible right here with ZERO scrolling) */}
-                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                              {canModify ? (
-                                <div className="flex items-center justify-end space-x-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenEditModal(row)}
-                                    className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-2xs"
-                                    title="Edit Quantity, Model, or Thekedar"
-                                  >
-                                    <span>✏️</span>
-                                    <span>Edit</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDeletingEntry(row)}
-                                    className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-red-200 shadow-2xs"
-                                    title="Delete entry and deduct from stock"
-                                  >
-                                    <span>🗑️</span>
-                                    <span>Del</span>
-                                  </button>
+                          <div key={row.id || idx} className="p-3 hover:bg-gray-50/60 transition-colors space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                  <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
+                                    {row.model_code}
+                                  </span>
+                                  <span className="text-xs font-semibold text-gray-900 truncate">
+                                    {row.model_name}
+                                  </span>
                                 </div>
-                              ) : (
-                                <span
-                                  className="inline-flex items-center space-x-1 text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200"
-                                  title={!isToday ? 'Locked: Past date entries cannot be edited/deleted' : 'Locked: Only author can edit/delete'}
-                                >
-                                  <span>🔒</span>
-                                  <span>Locked</span>
+                                <div className="flex items-center space-x-2 text-[11px] text-gray-500 mt-1 flex-wrap">
+                                  <span>{formatTime(row.created_at)}</span>
+                                  <span>•</span>
+                                  <span>{row.employee_name || 'Staff'}</span>
+                                  {row.manpower && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-indigo-700 font-medium">👥 {row.manpower} workers</span>
+                                    </>
+                                  )}
+                                </div>
+                                {row.remarks && (
+                                  <p className="text-[10px] text-gray-400 mt-1 italic truncate">
+                                    Note: {row.remarks}
+                                  </p>
+                                )}
+                              </div>
+
+                              <div className="flex flex-col items-end space-y-1.5 flex-shrink-0">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                                  +{Number(row.quantity).toLocaleString()} units
                                 </span>
-                              )}
-                            </td>
-                          </tr>
+
+                                {canModify ? (
+                                  <div className="flex items-center space-x-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditModal(row)}
+                                      className="px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded border border-blue-200 text-xs font-bold"
+                                    >
+                                      ✏️ Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeletingEntry(row)}
+                                      className="px-2 py-0.5 text-red-600 hover:bg-red-50 rounded border border-red-200 text-xs font-bold"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border">
+                                    🔒 Locked
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile Cards (Directly visible with zero horizontal scroll) */}
-                <div className="block sm:hidden divide-y divide-gray-100">
-                  {displayedLogEntries.map((row, idx) => {
-                    const isToday = isEntryFromToday(row);
-                    const isAuthor = !row.employee_id || row.employee_id === employee?.id;
-                    const canModify = isAdmin || (isToday && isAuthor);
-
-                    return (
-                      <div key={row.id || idx} className="p-3 hover:bg-gray-50/60 transition-colors space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-                              <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
-                                {row.model_code}
-                              </span>
-                              <span className="text-xs font-semibold text-gray-900 truncate">
-                                {row.model_name}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-2 text-[11px] text-gray-500 mt-1">
-                              <span className="font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
-                                👷 {row.contractor_name || 'General'}
-                              </span>
-                              <span>•</span>
-                              <span>{formatTime(row.created_at)}</span>
-                              <span>•</span>
-                              <span>{row.employee_name || 'Staff'}</span>
-                            </div>
-                            {row.remarks && (
-                              <p className="text-[10px] text-gray-400 mt-1 italic truncate">
-                                Note: {row.remarks}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="flex flex-col items-end space-y-1.5 flex-shrink-0">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
-                              +{Number(row.quantity).toLocaleString()} units
-                            </span>
-
-                            {canModify ? (
-                              <div className="flex items-center space-x-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditModal(row)}
-                                  className="px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded border border-blue-200 text-xs font-bold"
-                                >
-                                  ✏️ Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDeletingEntry(row)}
-                                  className="px-2 py-0.5 text-red-600 hover:bg-red-50 rounded border border-red-200 text-xs font-bold"
-                                >
-                                  🗑️
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border">
-                                🔒 Locked
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -1142,25 +1223,41 @@ export default function ProductionPage() {
                   </select>
                 </div>
 
-                {/* Quantity */}
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    Quantity (Units Manufactured) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={editQuantity}
-                    onChange={(e) => setEditQuantity(e.target.value)}
-                    className="input-field text-sm font-bold font-mono bg-white"
-                    placeholder="e.g. 50"
-                    required
-                  />
-                  <span className="text-[11px] text-gray-400 mt-1 block">
-                    Current stock balance will automatically adjust to reflect the new count.
-                  </span>
+                {/* Quantity & Manpower */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Quantity (Units Manufactured) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={editQuantity}
+                      onChange={(e) => setEditQuantity(e.target.value)}
+                      className="input-field text-sm font-bold font-mono bg-white"
+                      placeholder="e.g. 50"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      👥 Manpower (Workers)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={editManpower}
+                      onChange={(e) => setEditManpower(e.target.value)}
+                      className="input-field text-sm font-bold font-mono bg-white"
+                      placeholder="e.g. 8"
+                    />
+                  </div>
                 </div>
+                <span className="text-[11px] text-gray-400 -mt-2 block">
+                  Current stock balance will automatically adjust to reflect the new count.
+                </span>
 
                 {/* Thekedar (Contractor) */}
                 <div>
