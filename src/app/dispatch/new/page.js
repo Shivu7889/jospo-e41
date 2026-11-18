@@ -10,6 +10,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
+import SearchableSelect from '@/components/SearchableSelect';
+import DeliveryChallanModal from '@/components/DeliveryChallanModal';
 
 // Static 20 models registry to ensure zero-latency & offline scanning fallback
 export const JOSPO_20_ACTIVE_MODELS = [
@@ -62,6 +64,7 @@ function NewDispatchContent() {
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(null); // { dispatchId, vehicleNumber, totalQty, status }
+  const [showChallanModal, setShowChallanModal] = useState(false);
   const [countdown, setCountdown] = useState(3);
 
   // Form State - Step 1: Vehicle Details
@@ -1231,7 +1234,14 @@ function NewDispatchContent() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/dispatch" className="btn-primary text-sm py-2 px-5">
+            <button
+              type="button"
+              onClick={() => setShowChallanModal(true)}
+              className="btn-success text-sm py-2 px-5 inline-flex items-center justify-center space-x-1.5 font-bold shadow-md"
+            >
+              <span>🖨️ Print Delivery Challan</span>
+            </button>
+            <Link href="/dispatch" className="btn-primary text-sm py-2 px-5 text-center">
               Go to Dispatch List
             </Link>
             <button
@@ -1249,6 +1259,26 @@ function NewDispatchContent() {
               Scan Another Vehicle
             </button>
           </div>
+
+          {showChallanModal && (
+            <DeliveryChallanModal
+              dispatch={{
+                id: submissionSuccess.dispatchId,
+                vehicle_number: submissionSuccess.vehicleNumber,
+                destination: submissionSuccess.destination,
+                dispatch_date: dispatchDate,
+                from_location: fromLocation,
+                employees: employee,
+                dispatch_items: items.map((it) => ({
+                  id: it.model_id,
+                  quantity: it.quantity,
+                  cooler_models: { code: it.model_code, name: it.model_name },
+                })),
+                remarks,
+              }}
+              onClose={() => setShowChallanModal(false)}
+            />
+          )}
         </div>
       </div>
     );
@@ -1778,25 +1808,19 @@ function NewDispatchContent() {
             </div>
             <form onSubmit={handleManualAdd} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
               <div className="sm:col-span-7">
-                <label htmlFor="manualModel" className="label text-xs">
+                <label className="label text-xs">
                   Cooler Model
                 </label>
-                <select
-                  id="manualModel"
+                <SearchableSelect
+                  options={modelsCatalog.map((m) => ({
+                    id: m.id,
+                    code: m.code,
+                    name: `${m.name} (Stock: ${stockMap[m.id] ?? 0})`,
+                  }))}
                   value={manualModelId}
-                  onChange={(e) => setManualModelId(e.target.value)}
-                  className="input-field text-xs py-2"
-                >
-                  <option value="">-- Select Cooler Model --</option>
-                  {modelsCatalog.map((m) => {
-                    const stock = stockMap[m.id] ?? 0;
-                    return (
-                      <option key={m.id} value={m.id}>
-                        {m.code} - {m.name} (Stock: {stock})
-                      </option>
-                    );
-                  })}
-                </select>
+                  onChange={(val) => setManualModelId(val)}
+                  placeholder="-- Select or Search Cooler Model --"
+                />
               </div>
 
               <div className="sm:col-span-3">

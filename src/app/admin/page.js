@@ -122,9 +122,11 @@ export default function AdminPage() {
 
   // New Employee Form State
   const [showAddUserModal, setShowAddUserModal] = useState(false);
+  const [creationMode, setCreationMode] = useState('auto'); // 'auto' | 'manual'
   const [newUserId, setNewUserId] = useState('');
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState('production');
 
   // Stock Adjustment Form State
@@ -251,9 +253,30 @@ export default function AdminPage() {
   // Handle Add Employee Submit
   const handleAddEmployee = async (e) => {
     e.preventDefault();
-    if (!newUserName.trim() || !newUserEmail.trim() || !newUserId.trim()) {
-      showToast('All fields including Supabase Auth User ID are required.', 'warning');
+    if (!newUserName.trim() || !newUserEmail.trim()) {
+      showToast('Name and email are required.', 'warning');
       return;
+    }
+
+    const payload = {
+      name: newUserName.trim(),
+      email: newUserEmail.trim(),
+      role: newUserRole,
+      is_active: true,
+    };
+
+    if (creationMode === 'auto') {
+      if (!newUserPassword || newUserPassword.length < 6) {
+        showToast('Password must be at least 6 characters long.', 'warning');
+        return;
+      }
+      payload.password = newUserPassword;
+    } else {
+      if (!newUserId.trim()) {
+        showToast('Please provide a valid Supabase Auth User ID (UUID).', 'warning');
+        return;
+      }
+      payload.id = newUserId.trim();
     }
 
     try {
@@ -262,13 +285,7 @@ export default function AdminPage() {
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: newUserId.trim(),
-          name: newUserName.trim(),
-          email: newUserEmail.trim(),
-          role: newUserRole,
-          is_active: true,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const json = await res.json();
@@ -281,6 +298,7 @@ export default function AdminPage() {
       setNewUserId('');
       setNewUserName('');
       setNewUserEmail('');
+      setNewUserPassword('');
       setNewUserRole('production');
       await fetchEmployees();
     } catch (err) {
@@ -1200,25 +1218,33 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              <form onSubmit={handleAddEmployee} className="space-y-4 text-xs">
-                <div>
-                  <label htmlFor="newUserId" className="label text-xs">
-                    Supabase Auth User ID (UUID) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    id="newUserId"
-                    type="text"
-                    required
-                    placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
-                    value={newUserId}
-                    onChange={(e) => setNewUserId(e.target.value)}
-                    className="input-field font-mono text-xs"
-                  />
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    Copy the UUID from Supabase Auth dashboard after user registers or is invited.
-                  </p>
-                </div>
+              {/* Mode Toggle */}
+              <div className="flex rounded-lg bg-gray-100 p-1 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('auto')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
+                    creationMode === 'auto'
+                      ? 'bg-white text-primary-700 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  ⚡ One-Step Account Creation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('manual')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
+                    creationMode === 'manual'
+                      ? 'bg-white text-primary-700 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  🔗 Link Existing UUID
+                </button>
+              </div>
 
+              <form onSubmit={handleAddEmployee} className="space-y-4 text-xs">
                 <div>
                   <label htmlFor="newUserName" className="label text-xs">
                     Full Name <span className="text-red-500">*</span>
@@ -1230,7 +1256,7 @@ export default function AdminPage() {
                     placeholder="e.g. Vikram Sharma"
                     value={newUserName}
                     onChange={(e) => setNewUserName(e.target.value)}
-                    className="input-field text-xs"
+                    className="input-field text-xs bg-white"
                   />
                 </div>
 
@@ -1245,9 +1271,47 @@ export default function AdminPage() {
                     placeholder="e.g. vikram@jospo.com"
                     value={newUserEmail}
                     onChange={(e) => setNewUserEmail(e.target.value)}
-                    className="input-field text-xs"
+                    className="input-field text-xs bg-white"
                   />
                 </div>
+
+                {creationMode === 'auto' ? (
+                  <div>
+                    <label htmlFor="newUserPassword" className="label text-xs">
+                      Password (min 6 characters) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="newUserPassword"
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      className="input-field text-xs bg-white font-mono"
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Login credentials and employee profile will be generated instantly in Supabase Auth.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <label htmlFor="newUserId" className="label text-xs">
+                      Supabase Auth User ID (UUID) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="newUserId"
+                      type="text"
+                      required
+                      placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
+                      value={newUserId}
+                      onChange={(e) => setNewUserId(e.target.value)}
+                      className="input-field font-mono text-xs bg-white"
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Copy the UUID from Supabase Auth dashboard after user registers or is invited.
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label htmlFor="newUserRole" className="label text-xs">

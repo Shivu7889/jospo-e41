@@ -29,6 +29,14 @@ export default function ModelsPage() {
   // QR Modal State
   const [qrModalModel, setQrModalModel] = useState(null);
 
+  // Edit Model State
+  const [editingModel, setEditingModel] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editCode, setEditCode] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editQrData, setEditQrData] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
   // Helper to generate code from name
   const generateCodeFromName = (modelName) => {
     if (!modelName) return '';
@@ -212,6 +220,72 @@ export default function ModelsPage() {
     }
   };
 
+  // Open Edit Model Modal
+  const handleOpenEdit = (model) => {
+    setEditingModel(model);
+    setEditName(model.name || '');
+    setEditCode(model.code || '');
+    setEditDescription(model.description || '');
+    setEditQrData(model.qr_data || '');
+  };
+
+  // Submit Model Edit
+  const handleSaveEdit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editingModel) return;
+
+    const trimmedName = editName.trim();
+    const trimmedCode = editCode.trim().toUpperCase();
+
+    if (!trimmedName) {
+      showToast('Model name is required', 'warning');
+      return;
+    }
+    if (!trimmedCode) {
+      showToast('Model code is required', 'warning');
+      return;
+    }
+
+    try {
+      setSavingEdit(true);
+      const res = await fetch('/api/models', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingModel.id,
+          name: trimmedName,
+          code: trimmedCode,
+          description: editDescription.trim() || null,
+          qr_data: editQrData.trim() || null,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to update model');
+      }
+
+      showToast(`Model "${trimmedCode}" updated successfully`, 'success');
+      setModels((prev) =>
+        prev.map((m) =>
+          m.id === editingModel.id
+            ? {
+                ...m,
+                ...result.model,
+                current_stock: m.current_stock, // Preserve calculated stock
+              }
+            : m
+        )
+      );
+      setEditingModel(null);
+    } catch (err) {
+      console.error('Save model edit error:', err);
+      showToast(err.message || 'Error updating model', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   // Filtered models for search
   const filteredModels = models.filter((m) => {
     const q = searchQuery.toLowerCase().trim();
@@ -317,6 +391,16 @@ export default function ModelsPage() {
               />
             </svg>
             <span>View QR</span>
+          </button>
+
+          {/* Edit Model Button */}
+          <button
+            type="button"
+            onClick={() => handleOpenEdit(row)}
+            className="btn-secondary text-xs py-1.5 px-2.5 inline-flex items-center space-x-1 shadow-none text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50 border-indigo-200"
+            title="Edit model details"
+          >
+            <span>✏️ Edit</span>
           </button>
 
           {/* Toggle Active Button */}
@@ -653,6 +737,150 @@ export default function ModelsPage() {
                 modelCode={qrModalModel.code}
                 size={180}
               />
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Edit Cooler Model */}
+        {editingModel && (
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-model-title"
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-lg w-full p-6 sm:p-7 relative animate-scaleUp space-y-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">✏️</span>
+                  <div>
+                    <h3 id="edit-model-title" className="text-lg font-bold text-gray-900">
+                      Edit Cooler Model
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Updating master catalog specifications for {editingModel.code}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingModel(null)}
+                  disabled={savingEdit}
+                  className="text-gray-400 hover:text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full p-1.5 transition-colors"
+                  aria-label="Close modal"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Form */}
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                {/* Model Name */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Model Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="e.g. Jospo Icecool 65 NCG WG"
+                    className="input-field text-sm font-semibold bg-white"
+                    required
+                  />
+                </div>
+
+                {/* Model Code & QR Data */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Model Code <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editCode}
+                      onChange={(e) => setEditCode(e.target.value.toUpperCase())}
+                      placeholder="e.g. ICECOOL-65"
+                      className="input-field text-sm font-mono font-bold bg-white uppercase"
+                      required
+                    />
+                    <span className="text-[10px] text-gray-400 mt-0.5 block">Unique system identifier</span>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      QR Code Payload
+                    </label>
+                    <input
+                      type="text"
+                      value={editQrData}
+                      onChange={(e) => setEditQrData(e.target.value)}
+                      placeholder="e.g. JOSPO-ICECOOL-65"
+                      className="input-field text-sm font-mono font-semibold bg-white"
+                    />
+                    <span className="text-[10px] text-gray-400 mt-0.5 block">Encoded in carton QR labels</span>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Specifications / Description
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="e.g. 65L tank capacity, honeycomb cooling pads, high-speed motor"
+                    className="input-field text-xs bg-white"
+                  />
+                </div>
+
+                {/* Stock Notice */}
+                <div className="bg-amber-50 rounded-xl p-3 border border-amber-200 text-xs text-amber-800 flex items-start space-x-2">
+                  <span className="text-base flex-shrink-0">ℹ️</span>
+                  <span>
+                    Current stock balance of <strong>{editingModel.current_stock || 0} units</strong> and historical transactions will remain preserved.
+                  </span>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditingModel(null)}
+                    disabled={savingEdit}
+                    className="btn-secondary text-xs py-2 px-4"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md"
+                  >
+                    {savingEdit ? (
+                      <>
+                        <svg className="animate-spin -ml-1 mr-1.5 h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>💾 Save Changes</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

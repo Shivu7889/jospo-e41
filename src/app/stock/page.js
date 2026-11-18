@@ -8,6 +8,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
+import { exportToExcel } from '@/lib/exportExcel';
 
 export default function StockPage() {
   const { showToast } = useToast();
@@ -245,6 +246,57 @@ export default function StockPage() {
         item.model_code?.toLowerCase().includes(q)
     );
   }, [stockList, stockSearchQuery]);
+
+  // Export Current Stock to Excel
+  const handleExportStockSummary = () => {
+    if (!filteredStockList.length) {
+      showToast('No stock data available to export.', 'warning');
+      return;
+    }
+
+    const rows = filteredStockList.map((item, idx) => {
+      const stock = item.current_stock ?? 0;
+      let status = 'In Stock';
+      if (stock === 0) status = 'Out of Stock';
+      else if (stock < 10) status = 'Low Stock (< 10)';
+
+      return {
+        'S.No': idx + 1,
+        'Model Code': item.model_code || '',
+        'Model Name': item.model_name || '',
+        'Current Stock (Units)': stock,
+        'Inventory Status': status,
+        'Active': item.is_active ? 'Yes' : 'No',
+      };
+    });
+
+    const dateStr = getTodayIST();
+    exportToExcel(rows, `Jospo_Current_Stock_${dateStr}`, 'Stock Summary');
+    showToast(`Exported ${rows.length} models to Excel`, 'success');
+  };
+
+  // Export Stock Ledger to Excel
+  const handleExportLedger = () => {
+    if (!ledgerEntries.length) {
+      showToast('No ledger transactions available to export.', 'warning');
+      return;
+    }
+
+    const rows = ledgerEntries.map((tx, idx) => ({
+      'S.No': idx + 1,
+      'Timestamp': tx.created_at ? new Date(tx.created_at).toLocaleString('en-IN') : '',
+      'Model Code': tx.model_code || '',
+      'Model Name': tx.model_name || '',
+      'Transaction Type': (tx.transaction_type || '').toUpperCase(),
+      'Quantity Change': tx.quantity > 0 ? `+${tx.quantity}` : `${tx.quantity}`,
+      'Logged By': tx.employee_name || 'Staff',
+      'Transaction Notes': tx.notes || '',
+    }));
+
+    const dateStr = getTodayIST();
+    exportToExcel(rows, `Jospo_Stock_Ledger_${dateStr}`, 'Stock Ledger');
+    showToast(`Exported ${rows.length} ledger transactions to Excel`, 'success');
+  };
 
   // Current Stock Table Columns
   const currentStockColumns = [
@@ -516,28 +568,40 @@ export default function StockPage() {
               </p>
             </div>
 
-            {/* Search Box */}
-            <div className="relative w-full sm:w-64">
-              <input
-                type="text"
-                placeholder="Filter by code or name..."
-                value={stockSearchQuery}
-                onChange={(e) => setStockSearchQuery(e.target.value)}
-                className="input-field text-xs pl-8 pr-3 py-2"
-              />
-              <svg
-                className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            {/* Search Box & Export */}
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
+              <div className="relative w-full sm:w-64">
+                <input
+                  type="text"
+                  placeholder="Filter by code or name..."
+                  value={stockSearchQuery}
+                  onChange={(e) => setStockSearchQuery(e.target.value)}
+                  className="input-field text-xs pl-8 pr-3 py-2 bg-white"
                 />
-              </svg>
+                <svg
+                  className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+              </div>
+              <button
+                type="button"
+                onClick={handleExportStockSummary}
+                disabled={loadingOverview || !filteredStockList.length}
+                className="btn-success text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold whitespace-nowrap"
+                title="Download current stock balances as Excel spreadsheet"
+              >
+                <span>📥</span>
+                <span>Export Excel</span>
+              </button>
             </div>
           </div>
 
@@ -577,10 +641,23 @@ export default function StockPage() {
               </div>
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2 sm:space-x-3">
               <span className="text-xs font-semibold text-gray-500 bg-white border border-gray-200 px-2.5 py-1 rounded-full">
                 {totalLedgerCount} Records
               </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExportLedger();
+                }}
+                disabled={loadingLedger || !ledgerEntries.length}
+                className="btn-success text-xs py-1 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold"
+                title="Download ledger audit history as Excel spreadsheet"
+              >
+                <span>📥</span>
+                <span>Export Ledger</span>
+              </button>
               <button
                 type="button"
                 className="text-gray-400 hover:text-gray-600 p-1"

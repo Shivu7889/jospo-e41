@@ -10,6 +10,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
+import DeliveryChallanModal from '@/components/DeliveryChallanModal';
+import { exportToExcel } from '@/lib/exportExcel';
 
 export default function DispatchListPage() {
   const router = useRouter();
@@ -45,6 +47,9 @@ export default function DispatchListPage() {
 
   // View Details Modal state
   const [viewDetailsModal, setViewDetailsModal] = useState(null);
+
+  // Delivery Challan & Gate Pass Modal state
+  const [challanModalDispatch, setChallanModalDispatch] = useState(null);
 
   // Fetch dispatches
   const fetchDispatches = useCallback(async (isRefresh = false) => {
@@ -243,6 +248,36 @@ export default function DispatchListPage() {
     }
   };
 
+  // Export filtered dispatches to Excel (.xlsx)
+  const handleExportExcel = () => {
+    if (!filteredDispatches.length) {
+      showToast('No dispatches to export matching current filters.', 'warning');
+      return;
+    }
+
+    const rows = filteredDispatches.map((d, idx) => {
+      const itemsSummary = (d.dispatch_items || [])
+        .map((it) => `${it.cooler_models?.code || 'Cooler'}: ${it.quantity} pcs`)
+        .join(', ');
+      return {
+        'S.No': idx + 1,
+        'Dispatch Date': d.dispatch_date || '',
+        'Vehicle Number': d.vehicle_number || '',
+        'Status': (d.status || '').toUpperCase(),
+        'Destination': d.destination || '',
+        'Origin Location': d.from_location || 'Jospo E41',
+        'Total Quantity (pcs)': calculateTotalQty(d.dispatch_items),
+        'Models Breakdown': itemsSummary,
+        'Created By': d.employees?.name || 'Staff',
+        'Remarks': d.remarks || '',
+      };
+    });
+
+    const dateStr = getTodayIST();
+    exportToExcel(rows, `Jospo_Dispatches_${dateStr}`, 'Dispatches');
+    showToast(`Exported ${rows.length} dispatch records to Excel`, 'success');
+  };
+
   // Status Badge Component
   const renderStatusBadge = (status) => {
     switch (status) {
@@ -404,20 +439,32 @@ export default function DispatchListPage() {
                 className="px-2.5 py-1 text-xs border border-gray-300 rounded-md focus:ring-1 focus:ring-primary-500"
               />
             </div>
-            {(dateFrom || dateTo || searchTerm || statusFilter !== 'all') && (
+            <div className="ml-auto flex items-center space-x-3">
+              {(dateFrom || dateTo || searchTerm || statusFilter !== 'all') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDateFrom('');
+                    setDateTo('');
+                    setSearchTerm('');
+                    setStatusFilter('all');
+                  }}
+                  className="text-xs text-primary-600 hover:text-primary-800 font-semibold underline"
+                >
+                  Clear all filters
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  setDateFrom('');
-                  setDateTo('');
-                  setSearchTerm('');
-                  setStatusFilter('all');
-                }}
-                className="text-xs text-primary-600 hover:text-primary-800 font-semibold underline ml-auto"
+                onClick={handleExportExcel}
+                disabled={loading || !filteredDispatches.length}
+                className="btn-success text-xs py-1.5 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold"
+                title="Download filtered dispatches as Excel spreadsheet"
               >
-                Clear all filters
+                <span>📥</span>
+                <span>Export Excel</span>
               </button>
-            )}
+            </div>
           </div>
         </div>
 
@@ -552,6 +599,16 @@ export default function DispatchListPage() {
                                 className="px-2.5 py-1 text-xs font-medium text-gray-700 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
                               >
                                 Details
+                              </button>
+
+                              {/* Gate Pass button */}
+                              <button
+                                type="button"
+                                onClick={() => setChallanModalDispatch(dispatch)}
+                                className="px-2.5 py-1 text-xs font-semibold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 rounded-md transition-colors border border-primary-200 inline-flex items-center space-x-1"
+                                title="Print Delivery Challan & Gate Pass"
+                              >
+                                <span>🖨️ Gate Pass</span>
                               </button>
 
                               {/* Draft actions: Edit, Confirm, Delete */}
@@ -913,10 +970,17 @@ export default function DispatchListPage() {
               </div>
 
               <div className="flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setChallanModalDispatch(viewDetailsModal)}
+                  className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-1.5"
+                >
+                  <span>🖨️ Print Gate Pass</span>
+                </button>
                 {viewDetailsModal.status === 'draft' && (
                   <Link
                     href={`/dispatch/new?id=${viewDetailsModal.id}`}
-                    className="btn-primary text-xs py-2 px-4"
+                    className="btn-secondary text-xs py-2 px-4"
                   >
                     Edit Draft
                   </Link>
@@ -931,6 +995,14 @@ export default function DispatchListPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Modal: Printable Delivery Challan & Gate Pass */}
+        {challanModalDispatch && (
+          <DeliveryChallanModal
+            dispatch={challanModalDispatch}
+            onClose={() => setChallanModalDispatch(null)}
+          />
         )}
       </div>
     </AppShell>

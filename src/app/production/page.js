@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ProductionPage() {
   const { employee } = useAuth();
@@ -618,26 +619,16 @@ export default function ProductionPage() {
                       key={row.id}
                       className="flex items-center gap-2 p-3 bg-gray-50/70 rounded-xl border border-gray-200"
                     >
-                      {/* Model Dropdown */}
+                      {/* Searchable Model Dropdown */}
                       <div className="flex-1 min-w-0">
-                        <select
+                        <SearchableSelect
+                          options={models}
                           value={row.model_id}
-                          onChange={(e) =>
-                            handleRowChange(row.id, 'model_id', e.target.value)
-                          }
+                          onChange={(val) => handleRowChange(row.id, 'model_id', val)}
                           disabled={loadingModels}
-                          className="input-field text-xs bg-white"
+                          placeholder={loadingModels ? 'Loading models...' : '-- Select or Search Model --'}
                           required
-                        >
-                          <option value="">
-                            {loadingModels ? 'Loading models...' : '-- Select Model --'}
-                          </option>
-                          {models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.code} - {m.name}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
 
                       {/* Quantity input */}
@@ -1205,19 +1196,13 @@ export default function ProductionPage() {
                   <label className="text-xs font-bold text-gray-700 block mb-1">
                     Cooler Model <span className="text-red-500">*</span>
                   </label>
-                  <select
+                  <SearchableSelect
+                    options={models}
                     value={editModelId}
-                    onChange={(e) => setEditModelId(e.target.value)}
-                    className="input-field text-xs bg-white font-semibold text-gray-900"
+                    onChange={(val) => setEditModelId(val)}
+                    placeholder="-- Select or Search Model --"
                     required
-                  >
-                    <option value="">-- Select Model --</option>
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.code} - {m.name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
 
                 {/* Quantity & Manpower */}

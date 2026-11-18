@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import { createAdminSupabase } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,7 @@ export async function GET(request) {
   }
 }
 
-// POST: Add new employee profile
+// POST: Add new employee profile (supports 1-step creation with password or manual UUID)
 export async function POST(request) {
   try {
     const auth = await authenticateRequest({ allowedRoles: ['admin'] });
@@ -34,7 +35,7 @@ export async function POST(request) {
     const { supabase } = auth;
     const body = await request.json();
 
-    const { id, name, email, role, is_active = true } = body;
+    const { id, name, email, role, password, is_active = true } = body;
 
     // Validation
     if (!name || !name.trim()) {
@@ -50,12 +51,51 @@ export async function POST(request) {
       );
     }
 
-    // Require ID (auth user UUID)
-    if (!id || !id.trim()) {
+    let authUserId = id ? id.trim() : null;
+
+    // 1-Step Creation: If password is provided, create the login user via Admin API
+    if (password && !authUserId) {
+      if (password.length < 6) {
+        return NextResponse.json(
+          { error: 'Password must be at least 6 characters long' },
+          { status: 400 }
+        );
+      }
+
+      const adminSupabase = createAdminSupabase();
+      if (!adminSupabase) {
+        return NextResponse.json(
+          {
+            error:
+              'SUPABASE_SERVICE_ROLE_KEY is not configured on the server. Please enter the Supabase Auth User ID (UUID) manually or configure the service role key.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const { data: authUser, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
+        email: email.trim().toLowerCase(),
+        password: password,
+        email_confirm: true,
+        user_metadata: { name: name.trim(), role },
+      });
+
+      if (authCreateErr) {
+        return NextResponse.json(
+          { error: `Failed to create login credentials: ${authCreateErr.message}` },
+          { status: 400 }
+        );
+      }
+
+      authUserId = authUser.user.id;
+    }
+
+    // Require ID (auth user UUID) if not created via password
+    if (!authUserId) {
       return NextResponse.json(
         {
           error:
-            'A valid Supabase Auth User ID (UUID) is required to link this employee record with login credentials.',
+            'Either provide a Password to create the login account automatically, or provide the Supabase Auth User ID (UUID).',
         },
         { status: 400 }
       );
@@ -65,7 +105,7 @@ export async function POST(request) {
     const { data, error } = await supabase
       .from('employees')
       .insert({
-        id: id.trim(),
+        id: authUserId,
         name: name.trim(),
         email: email.trim().toLowerCase(),
         role,

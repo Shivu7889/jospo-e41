@@ -198,7 +198,7 @@ export async function PATCH(request) {
     const { supabase } = auth;
 
     const body = await request.json();
-    const { id, is_active, name, description } = body;
+    const { id, is_active, name, description, code, qr_data } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -219,6 +219,38 @@ export async function PATCH(request) {
     }
     if (typeof description !== 'undefined') {
       updatePayload.description = description ? description.trim() : null;
+    }
+    if (typeof code === 'string' && code.trim()) {
+      const cleanCode = code.trim().toUpperCase();
+      const { data: existingCode } = await supabase
+        .from('cooler_models')
+        .select('id')
+        .eq('code', cleanCode)
+        .neq('id', id)
+        .maybeSingle();
+      if (existingCode) {
+        return NextResponse.json(
+          { success: false, error: `Model code "${cleanCode}" is already in use.` },
+          { status: 400 }
+        );
+      }
+      updatePayload.code = cleanCode;
+    }
+    if (typeof qr_data === 'string' && qr_data.trim()) {
+      const cleanQR = qr_data.trim();
+      const { data: existingQR } = await supabase
+        .from('cooler_models')
+        .select('id')
+        .eq('qr_data', cleanQR)
+        .neq('id', id)
+        .maybeSingle();
+      if (existingQR) {
+        return NextResponse.json(
+          { success: false, error: `QR data "${cleanQR}" is already assigned to another model.` },
+          { status: 400 }
+        );
+      }
+      updatePayload.qr_data = cleanQR;
     }
 
     const { data: updatedModel, error: updateError } = await supabase
