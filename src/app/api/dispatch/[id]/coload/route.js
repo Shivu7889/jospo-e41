@@ -24,7 +24,12 @@ export async function POST(request, { params }) {
     const { id } = params;
 
     const body = await request.json().catch(() => ({}));
-    const { items = [], notes = '' } = body;
+    const {
+      items = [],
+      notes = '',
+      is_final_stop = true,
+      next_plant = null,
+    } = body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
@@ -63,7 +68,7 @@ export async function POST(request, { params }) {
     const currentStatus = resolveCoLoadingStatus(dispatch);
     if (currentStatus === 'fully_loaded') {
       return NextResponse.json(
-        { error: 'This vehicle has already completed secondary loading and is fully dispatched.' },
+        { error: 'This vehicle has already completed all loading stops and is fully dispatched.' },
         { status: 400 }
       );
     }
@@ -74,25 +79,27 @@ export async function POST(request, { params }) {
     const isOwner = isOwnerUser(employee);
 
     // Determine the loading plant (must match user plant unless owner)
-    const secondPlant = isOwner ? (scheduledNextPlant || userPlant) : userPlant;
+    const loadingPlant = isOwner
+      ? normalizePlant(body.loading_plant || scheduledNextPlant || userPlant)
+      : userPlant;
 
-    if (!isOwner && scheduledNextPlant && secondPlant !== scheduledNextPlant) {
+    if (!isOwner && scheduledNextPlant && loadingPlant !== scheduledNextPlant) {
       return NextResponse.json(
         {
-          error: `Unauthorized: This vehicle is scheduled for secondary loading at ${scheduledNextPlant} Plant. Your active plant is ${secondPlant} Plant.`,
+          error: `Unauthorized: This vehicle is scheduled for loading at ${scheduledNextPlant} Plant. Your active plant is ${loadingPlant} Plant.`,
         },
         { status: 403 }
       );
     }
 
-    if (secondPlant === originPlant) {
+    if (loadingPlant === originPlant && !isOwner) {
       return NextResponse.json(
         { error: `Secondary loading must occur at a different plant than origin plant (${originPlant}).` },
         { status: 400 }
       );
     }
 
-    // 2. Validate quantities and check stock at secondPlant for each requested item
+    // 2. Validate quantities and check stock at loadingPlant for each requested item
     for (const item of items) {
       const qty = Number(item.quantity);
       if (!qty || qty <= 0) {
@@ -102,12 +109,12 @@ export async function POST(request, { params }) {
         );
       }
 
-      // Check stock at secondPlant
+      // Check stock at loadingPlant
       const { data: stockEntries, error: stockCheckErr } = await supabase
         .from('stock_transactions')
         .select('quantity')
         .eq('model_id', item.model_id)
-        .eq('plant', secondPlant);
+        .eq('plant', loadingPlant);
 
       if (stockCheckErr) {
         console.warn('Stock check query error:', stockCheckErr.message);
@@ -117,7 +124,7 @@ export async function POST(request, { params }) {
       if (availableStock < qty) {
         return NextResponse.json(
           {
-            error: `Insufficient stock at ${secondPlant} Plant for model. Available: ${availableStock}, Requested to load: ${qty}`,
+            error: `Insufficient stock at ${loadingPlant} Plant for model. Available: ${availableStock}, Requested to load: ${qty}`,
           },
           { status: 400 }
         );
@@ -126,13 +133,13 @@ export async function POST(request, { params }) {
 
     const nowIso = new Date().toISOString();
 
-    // 3. Insert line items into dispatch_items
+    // 3. Insert line items into dispatch_items with loaded_plant
     for (const item of items) {
       const itemPayload = {
         dispatch_id: id,
         model_id: item.model_id,
         quantity: Math.abs(Number(item.quantity)),
-        loaded_plant: secondPlant,
+        loaded_plant: loadingPlant,
         loaded_by: employee.id,
       };
 
@@ -141,8 +148,7 @@ export async function POST(request, { params }) {
         .insert(itemPayload);
 
       if (itemInsertErr) {
-        console.warn('Direct insert into dispatch_items failed, retrying without loaded_plant column:', itemInsertErr.message);
-        // Fallback if migration not run yet
+        console.warn('Direct insert into dispatch_items failed, retrying fallback:', itemInsertErr.message);
         await supabase.from('dispatch_items').insert({
           dispatch_id: id,
           model_id: item.model_id,
@@ -151,15 +157,15 @@ export async function POST(request, { params }) {
       }
     }
 
-    // 4. Deduct stock from stock_transactions for the second plant
+    // 4. Deduct stock from stock_transactions for loadingPlant
     const stockDeductions = items.map((item) => ({
       model_id: item.model_id,
       quantity: -Math.abs(Number(item.quantity)),
       transaction_type: 'dispatch',
       reference_id: id,
       employee_id: employee.id,
-      plant: secondPlant,
-      notes: `[Party Dispatch - Co-Load Stop 2] Loaded at ${secondPlant} Plant (Vehicle: ${dispatch.vehicle_number})${
+      plant: loadingPlant,
+      notes: `[Party Dispatch - Co-Load] Loaded at ${loadingPlant} Plant (Vehicle: ${dispatch.vehicle_number})${
         notes ? ` - ${notes.trim()}` : ''
       }`,
     }));
@@ -173,29 +179,50 @@ export async function POST(request, { params }) {
       await supabase.from('stock_transactions').insert(
         stockDeductions.map((entry) => ({
           ...entry,
-          notes: `[Party Dispatch - Co-Load Stop 2] [Plant: ${secondPlant}] Loaded (Vehicle: ${dispatch.vehicle_number})`,
+          notes: `[Party Dispatch - Co-Load] [Plant: ${loadingPlant}] Loaded (Vehicle: ${dispatch.vehicle_number})`,
         }))
       );
     }
 
-    // 5. Update dispatch to 'fully_loaded'
+    // 5. Determine whether vehicle is fully loaded or heading to 3rd plant
+    const isFinal = Boolean(is_final_stop) || !next_plant;
+    const nextStopPlant = isFinal ? null : normalizePlant(next_plant);
+    const newStatus = isFinal ? 'fully_loaded' : 'part_loaded';
+
+    // Track Stop 2 vs Stop 3 plant
+    const hasSecondPlant = Boolean(dispatch.second_plant);
+    const isThirdPlant = hasSecondPlant && dispatch.second_plant !== loadingPlant;
+
+    const secondPlantValue = hasSecondPlant ? dispatch.second_plant : loadingPlant;
+    const thirdPlantValue = isThirdPlant ? loadingPlant : (dispatch.third_plant || null);
+
     const updatedRemarks = formatDispatchRemarks(dispatch.remarks, resolveDispatchType(dispatch), {
       isCoLoading: true,
-      nextLoadingPlant: scheduledNextPlant || secondPlant,
-      status: 'fully_loaded',
-      secondPlant: secondPlant,
+      nextLoadingPlant: nextStopPlant,
+      status: newStatus,
+      secondPlant: secondPlantValue,
+      thirdPlant: thirdPlantValue,
     });
 
     const updatePayload = {
       is_coloading: true,
-      coloading_status: 'fully_loaded',
-      second_plant: secondPlant,
-      second_plant_employee_id: employee.id,
-      second_plant_confirmed_at: nowIso,
-      second_plant_notes: notes ? notes.trim() : null,
+      coloading_status: newStatus,
+      next_loading_plant: nextStopPlant,
       remarks: updatedRemarks,
       updated_at: nowIso,
     };
+
+    if (!hasSecondPlant) {
+      updatePayload.second_plant = loadingPlant;
+      updatePayload.second_plant_employee_id = employee.id;
+      updatePayload.second_plant_confirmed_at = nowIso;
+      updatePayload.second_plant_notes = notes ? notes.trim() : null;
+    } else if (isThirdPlant) {
+      updatePayload.third_plant = loadingPlant;
+      updatePayload.third_plant_employee_id = employee.id;
+      updatePayload.third_plant_confirmed_at = nowIso;
+      updatePayload.third_plant_notes = notes ? notes.trim() : null;
+    }
 
     let { error: updateErr } = await supabase
       .from('dispatches')
@@ -203,13 +230,21 @@ export async function POST(request, { params }) {
       .eq('id', id);
 
     if (updateErr) {
-      console.warn('Direct dispatch update failed, retrying fallback remarks:', updateErr.message);
+      console.warn('Direct dispatch update failed, retrying fallback without third_plant columns:', updateErr.message);
+      const fallbackPayload = {
+        is_coloading: true,
+        coloading_status: newStatus,
+        next_loading_plant: nextStopPlant,
+        remarks: updatedRemarks,
+        updated_at: nowIso,
+      };
+      if (!hasSecondPlant) {
+        fallbackPayload.second_plant = loadingPlant;
+        fallbackPayload.second_plant_confirmed_at = nowIso;
+      }
       await supabase
         .from('dispatches')
-        .update({
-          remarks: updatedRemarks,
-          updated_at: nowIso,
-        })
+        .update(fallbackPayload)
         .eq('id', id);
     }
 
@@ -217,12 +252,18 @@ export async function POST(request, { params }) {
     const previousQty = (dispatch.dispatch_items || []).reduce((acc, it) => acc + Number(it.quantity), 0);
     const totalVehicleQty = previousQty + addedQty;
 
+    const responseMessage = isFinal
+      ? `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} is now FULLY LOADED (${totalVehicleQty} total units dispatched to party).`
+      : `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} has been dispatched to ${nextStopPlant} Plant for final loading (${totalVehicleQty} units loaded so far).`;
+
     return NextResponse.json({
       success: true,
-      message: `Successfully loaded ${addedQty} cooler(s) from ${secondPlant} Plant! Vehicle ${dispatch.vehicle_number} is now fully loaded (${totalVehicleQty} total units).`,
-      second_plant: secondPlant,
+      message: responseMessage,
+      loading_plant: loadingPlant,
       added_quantity: addedQty,
       total_vehicle_quantity: totalVehicleQty,
+      is_final_stop: isFinal,
+      next_loading_plant: nextStopPlant,
       confirmed_at: nowIso,
     });
   } catch (err) {

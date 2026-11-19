@@ -23,6 +23,9 @@ import {
   resolveSecondPlant,
   resolveItemLoadedPlant,
   getCoLoadingBadge,
+  isDispatchRelevantToPlant,
+  getDispatchLoadedPlants,
+  formatCoLoadingRoute,
 } from '@/lib/dispatch';
 import { usePlant } from '@/contexts/PlantContext';
 import {
@@ -159,11 +162,9 @@ export default function DispatchListPage() {
   // Filtered dispatches (scoped to activePlant)
   const filteredDispatches = useMemo(() => {
     return dispatches.filter((d) => {
-      // Plant scope: if activePlant is not ALL, origin must match activePlant OR secondary co-loading plant must match activePlant
+      // Plant scope: if activePlant is not ALL, dispatch must be relevant to activePlant
       if (activePlant !== ALL_PLANTS_ID) {
-        const originPlant = normalizePlant(d.from_location);
-        const secondPlant = resolveSecondPlant(d);
-        if (originPlant !== activePlant && secondPlant !== activePlant) return false;
+        if (!isDispatchRelevantToPlant(d, activePlant)) return false;
       }
       // Status filter
       if (statusFilter !== 'all' && d.status !== statusFilter) {
@@ -256,7 +257,7 @@ export default function DispatchListPage() {
     const todayStr = getTodayIST();
     const relevant = activePlant === ALL_PLANTS_ID
       ? dispatches
-      : dispatches.filter((d) => normalizePlant(d.from_location) === activePlant);
+      : dispatches.filter((d) => isDispatchRelevantToPlant(d, activePlant));
 
     const total = relevant.length;
     const drafts = relevant.filter((d) => d.status === 'draft').length;
@@ -265,7 +266,15 @@ export default function DispatchListPage() {
     ).length;
     const totalUnitsDispatched = relevant
       .filter((d) => d.status === 'confirmed')
-      .reduce((sum, d) => sum + calculateTotalQty(d.dispatch_items), 0);
+      .reduce((sum, d) => {
+        if (activePlant === ALL_PLANTS_ID) {
+          return sum + calculateTotalQty(d.dispatch_items);
+        }
+        const plantItems = (d.dispatch_items || []).filter(
+          (it) => resolveItemLoadedPlant(it, d) === activePlant
+        );
+        return sum + calculateTotalQty(plantItems);
+      }, 0);
 
     return { total, drafts, confirmedToday, totalUnitsDispatched };
   }, [dispatches, activePlant]);
@@ -623,8 +632,8 @@ export default function DispatchListPage() {
                       <div className="text-xs space-y-1 text-gray-600 mb-3">
                         <div className="flex items-center justify-between">
                           <span className="text-gray-500">Route:</span>
-                          <span className="font-semibold text-gray-800">
-                            🏭 {originPlant} ➔ 🏭 {nextPlant}
+                          <span className="font-semibold text-gray-800 truncate max-w-[170px]" title={`${getDispatchLoadedPlants(v).join(' ➔ ')} ➔ ${nextPlant}`}>
+                            {getDispatchLoadedPlants(v).join(' ➔ ')} ➔ {nextPlant}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
@@ -632,7 +641,7 @@ export default function DispatchListPage() {
                           <span className="font-bold text-gray-900 truncate max-w-[150px]">{v.destination}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-gray-500">Loaded at {originPlant}:</span>
+                          <span className="text-gray-500">Loaded Prior Stops:</span>
                           <span className="font-extrabold text-indigo-700">{loadedQty} pcs</span>
                         </div>
                       </div>
@@ -1101,21 +1110,17 @@ export default function DispatchListPage() {
                                     <div className="flex items-center space-x-2">
                                       <span className="font-bold text-amber-900">Multi-Plant Route:</span>
                                       <span className="font-semibold text-gray-800">
-                                        Stop 1: 🏭 {normalizePlant(dispatch.from_location)}
-                                      </span>
-                                      <span className="text-amber-600 font-bold">➔</span>
-                                      <span className="font-semibold text-gray-800">
-                                        Stop 2: 🏭 {resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Second Plant'}
+                                        {formatCoLoadingRoute(dispatch)}
                                       </span>
                                     </div>
                                     <div>
                                       {resolveCoLoadingStatus(dispatch) === 'part_loaded' ? (
                                         <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
-                                          ⏳ Part Loaded (Awaiting Stop 2)
+                                          ⏳ Part Loaded
                                         </span>
                                       ) : (
                                         <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                          ✅ Fully Loaded (Stop 1 + Stop 2 Complete)
+                                          ✅ Fully Loaded
                                         </span>
                                       )}
                                     </div>
@@ -1775,34 +1780,50 @@ export default function DispatchListPage() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold flex items-center space-x-1.5 text-amber-900">
                       <span>🚚</span>
-                      <span>Multi-Plant Co-Loading System (साझा गाड़ी लोडिंग)</span>
+                      <span>Multi-Plant Co-Loading Chain (साझा गाड़ी लोडिंग)</span>
                     </span>
                     {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' ? (
                       <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
-                        ⏳ Part Loaded (Stop 1 Done)
+                        ⏳ Part Loaded (In Progress)
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        ✅ Fully Loaded (Stop 1 + Stop 2 Complete)
+                        ✅ Fully Loaded (All Stops Complete)
                       </span>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] bg-white/80 p-2.5 rounded-lg border border-amber-200/60 mb-2">
-                    <div>
-                      <span className="text-gray-500 block">Stop 1 (Origin):</span>
-                      <span className="font-bold text-gray-900">🏭 {normalizePlant(viewDetailsModal.from_location)}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block">Stop 2 (Co-Load):</span>
-                      <span className="font-bold text-gray-900">
-                        🏭 {resolveSecondPlant(viewDetailsModal) || resolveNextLoadingPlant(viewDetailsModal) || 'Designated Plant'}
+
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 mb-2">
+                    <span className="text-gray-500 block text-[11px] font-semibold mb-1">
+                      Multi-Stop Loading Route:
+                    </span>
+                    <div className="font-bold text-gray-900 flex flex-wrap items-center gap-1.5 text-[11px]">
+                      {getDispatchLoadedPlants(viewDetailsModal).map((plantName, pIdx) => (
+                        <React.Fragment key={plantName}>
+                          <span className="bg-amber-100 border border-amber-200 px-2 py-0.5 rounded text-amber-900">
+                            Stop {pIdx + 1}: 🏭 {plantName}
+                          </span>
+                          <span className="text-amber-600 font-bold">➔</span>
+                        </React.Fragment>
+                      ))}
+                      {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' && resolveNextLoadingPlant(viewDetailsModal) && (
+                        <>
+                          <span className="bg-orange-100 border border-orange-300 text-orange-900 px-2 py-0.5 rounded animate-pulse font-extrabold">
+                            Next Stop: 🏭 {resolveNextLoadingPlant(viewDetailsModal)}
+                          </span>
+                          <span className="text-amber-600 font-bold">➔</span>
+                        </>
+                      )}
+                      <span className="bg-blue-50 border border-blue-200 text-blue-900 px-2 py-0.5 rounded font-extrabold">
+                        🏢 {viewDetailsModal.destination}
                       </span>
                     </div>
                   </div>
+
                   {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' && (
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-amber-800 text-[11px]">
-                        Arriving at {resolveNextLoadingPlant(viewDetailsModal)} to load remaining models.
+                        Arriving at {resolveNextLoadingPlant(viewDetailsModal) || 'Next Plant'} to continue loading.
                       </span>
                       <button
                         type="button"

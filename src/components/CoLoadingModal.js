@@ -3,23 +3,21 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
-import { getPlantMeta, normalizePlant } from '@/lib/plants';
+import { getPlantMeta, normalizePlant, PLANTS } from '@/lib/plants';
 import { resolveItemLoadedPlant } from '@/lib/dispatch';
 
-export default function CoLoadingModal({ dispatch, activePlant, onClose, onSuccess }) {
+export default function CoLoadingModal({ dispatch, activePlant, currentPlant: propPlant, onClose, onSuccess }) {
   const { showToast } = useToast();
 
-  const currentPlant = normalizePlant(activePlant || 'D4');
+  const currentPlant = normalizePlant(propPlant || activePlant || 'D4');
   const plantMeta = getPlantMeta(currentPlant);
   const originPlant = normalizePlant(dispatch?.from_location || 'E41 G2');
-  const originMeta = getPlantMeta(originPlant);
 
   const [loadingModels, setLoadingModels] = useState(true);
   const [availableModels, setAvailableModels] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
   // New items to load from current plant
-  // [{ id: 'item-1', model_id: '', quantity: 1 }]
   const [newItems, setNewItems] = useState([
     { id: `coload-${Date.now()}-1`, model_id: '', quantity: 1 },
   ]);
@@ -48,17 +46,25 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
     fetchPlantModels();
   }, [fetchPlantModels]);
 
-  // Existing items already loaded at Plant 1
-  const existingItems = useMemo(() => {
-    return (dispatch?.dispatch_items || []).filter((item) => {
+  // Existing items already loaded at prior stops (grouped by plant)
+  const existingByPlant = useMemo(() => {
+    const groups = {};
+    (dispatch?.dispatch_items || []).forEach((item) => {
       const p = resolveItemLoadedPlant(item, dispatch);
-      return p !== currentPlant;
+      if (p !== currentPlant) {
+        if (!groups[p]) groups[p] = [];
+        groups[p].push(item);
+      }
     });
+    return groups;
   }, [dispatch, currentPlant]);
 
   const existingTotalQty = useMemo(() => {
-    return existingItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
-  }, [existingItems]);
+    return (dispatch?.dispatch_items || []).reduce((acc, it) => {
+      const p = resolveItemLoadedPlant(it, dispatch);
+      return p !== currentPlant ? acc + (Number(it.quantity) || 0) : acc;
+    }, 0);
+  }, [dispatch, currentPlant]);
 
   const newTotalQty = useMemo(() => {
     return newItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
@@ -66,7 +72,34 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
 
   const grandTotalQty = existingTotalQty + newTotalQty;
 
-  // Add line item row
+  // Track all plants involved so far
+  const alreadyLoadedPlants = useMemo(() => {
+    const plants = new Set();
+    if (dispatch?.from_location) plants.add(normalizePlant(dispatch.from_location));
+    (dispatch?.dispatch_items || []).forEach((it) => {
+      const p = resolveItemLoadedPlant(it, dispatch);
+      if (p) plants.add(p);
+    });
+    plants.add(currentPlant);
+    return Array.from(plants);
+  }, [dispatch, currentPlant]);
+
+  // Unvisited plants (remaining candidates for Stop 3)
+  const unvisitedPlants = useMemo(() => {
+    return PLANTS.filter((p) => !alreadyLoadedPlants.includes(p.id));
+  }, [alreadyLoadedPlants]);
+
+  // Choice between finishing dispatch or sending to 3rd plant
+  const [isFinalStop, setIsFinalStop] = useState(true);
+  const [nextPlant, setNextPlant] = useState(unvisitedPlants[0]?.id || '');
+
+  useEffect(() => {
+    if (unvisitedPlants.length > 0 && !nextPlant) {
+      setNextPlant(unvisitedPlants[0].id);
+    }
+  }, [unvisitedPlants, nextPlant]);
+
+  // Line item helpers
   const handleAddRow = () => {
     setNewItems((prev) => [
       ...prev,
@@ -74,7 +107,6 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
     ]);
   };
 
-  // Remove line item row
   const handleRemoveRow = (rowId) => {
     setNewItems((prev) => {
       const filtered = prev.filter((it) => it.id !== rowId);
@@ -82,7 +114,6 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
     });
   };
 
-  // Update line item
   const handleUpdateItem = (rowId, field, value) => {
     setNewItems((prev) =>
       prev.map((it) => {
@@ -131,6 +162,9 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
       return;
     }
 
+    const isFinal = unvisitedPlants.length === 0 ? true : isFinalStop;
+    const designatedNextPlant = (!isFinal && nextPlant) ? nextPlant : null;
+
     try {
       setSubmitting(true);
       const res = await fetch(`/api/dispatch/${dispatch.id}/coload`, {
@@ -147,6 +181,8 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
             };
           }),
           notes,
+          is_final_stop: isFinal,
+          next_plant: designatedNextPlant,
         }),
       });
 
@@ -155,7 +191,7 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
         throw new Error(data.error || 'Failed to complete co-loading');
       }
 
-      showToast(data.message || 'Vehicle fully loaded and dispatched!', 'success');
+      showToast(data.message || 'Vehicle loading confirmed successfully!', 'success');
       if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
@@ -179,11 +215,11 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
               <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
                 <span>Multi-Plant Co-Loading</span>
                 <span className="text-[10px] bg-indigo-100 text-indigo-800 font-extrabold px-2 py-0.5 rounded-full uppercase">
-                  Stop 2 Loading
+                  {alreadyLoadedPlants.length >= 3 ? 'Stop 3 (Final)' : `Stop ${alreadyLoadedPlants.length}`}
                 </span>
               </h3>
               <p className="text-xs text-gray-500">
-                Load remaining models from <strong>{currentPlant} Plant</strong> onto vehicle{' '}
+                Loading at <strong>{currentPlant} Plant</strong> onto vehicle{' '}
                 <span className="font-mono font-bold text-gray-900">{dispatch?.vehicle_number}</span>.
               </p>
             </div>
@@ -198,91 +234,93 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
         </div>
 
         {/* Vehicle & Party Summary Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 bg-gray-50 p-3 rounded-xl border border-gray-200 text-xs">
+        <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 text-xs grid grid-cols-2 sm:grid-cols-3 gap-2">
           <div>
-            <span className="text-gray-500 block text-[11px]">Vehicle Number:</span>
-            <span className="font-mono font-bold text-sm text-gray-900">{dispatch?.vehicle_number}</span>
+            <span className="text-gray-500 block">Truck / Vehicle:</span>
+            <span className="font-mono font-bold text-gray-900">{dispatch?.vehicle_number}</span>
           </div>
           <div>
-            <span className="text-gray-500 block text-[11px]">Party Destination:</span>
-            <span className="font-bold text-primary-800 truncate block">{dispatch?.destination}</span>
+            <span className="text-gray-500 block">Final Destination:</span>
+            <span className="font-semibold text-gray-900 truncate block">{dispatch?.destination}</span>
           </div>
           <div className="col-span-2 sm:col-span-1">
-            <span className="text-gray-500 block text-[11px]">Origin Plant (Stop 1):</span>
-            <span className="font-semibold text-gray-900 flex items-center space-x-1">
-              <span>{originMeta.icon}</span>
-              <span>{originMeta.name}</span>
-            </span>
+            <span className="text-gray-500 block">Previously Loaded:</span>
+            <span className="font-bold text-indigo-700">{existingTotalQty} units</span>
           </div>
         </div>
 
-        {/* SECTION 1: Already Loaded Items at Origin Plant (Read-Only) */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider flex items-center space-x-1.5">
-              <span>🏭 Step 1: Already Loaded from {originPlant} Plant</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">
-                {existingTotalQty} pcs on board
+        {/* Previously Loaded Items by Plant (Read-Only) */}
+        {Object.keys(existingByPlant).length > 0 && (
+          <div className="border border-gray-200 rounded-xl p-3 bg-gray-50/60 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider flex items-center space-x-1.5">
+                <span>📦 Already Loaded on Vehicle</span>
+              </h4>
+              <span className="text-xs font-bold text-gray-600">
+                {existingTotalQty} units total
               </span>
-            </h4>
-          </div>
+            </div>
 
-          <div className="border border-emerald-200 bg-emerald-50/40 rounded-xl overflow-hidden">
-            <table className="min-w-full divide-y divide-emerald-100 text-xs">
-              <thead className="bg-emerald-100/60">
-                <tr>
-                  <th className="px-3 py-1.5 text-left font-bold text-emerald-900">Model Name</th>
-                  <th className="px-3 py-1.5 text-left font-bold text-emerald-900">Code</th>
-                  <th className="px-3 py-1.5 text-right font-bold text-emerald-900">Loaded Qty</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-emerald-100/70 bg-white">
-                {existingItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="text-center py-2 text-gray-400 italic text-[11px]">
-                      No previous items found.
-                    </td>
-                  </tr>
-                ) : (
-                  existingItems.map((it, idx) => (
-                    <tr key={it.id || idx}>
-                      <td className="px-3 py-1.5 font-semibold text-gray-900">{it.cooler_models?.name}</td>
-                      <td className="px-3 py-1.5 font-mono text-gray-500">{it.cooler_models?.code}</td>
-                      <td className="px-3 py-1.5 text-right font-bold text-emerald-800">
-                        {it.quantity} pcs
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <div className="space-y-2">
+              {Object.entries(existingByPlant).map(([plantName, plantItems]) => {
+                const subtotal = plantItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
+                return (
+                  <div key={plantName} className="bg-white rounded-lg border border-gray-200 p-2.5 shadow-2xs">
+                    <div className="flex items-center justify-between text-xs font-bold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">
+                      <span className="flex items-center space-x-1.5 text-primary-800">
+                        <span>🏭</span>
+                        <span>Loaded at {plantName} Plant</span>
+                      </span>
+                      <span className="text-gray-600 font-extrabold">{subtotal} pcs</span>
+                    </div>
+                    <div className="space-y-1">
+                      {plantItems.map((it, idx) => (
+                        <div key={it.id || idx} className="flex items-center justify-between text-[11px] text-gray-600">
+                          <span className="font-medium">
+                            <strong className="text-gray-900 font-mono">{it.cooler_models?.code}</strong> - {it.cooler_models?.name}
+                          </span>
+                          <span className="font-bold text-gray-900">{it.quantity} pcs</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* SECTION 2: Add Items from Current Plant */}
-        <form onSubmit={handleSubmitCoLoad} className="space-y-3 pt-2 border-t border-gray-100">
+        {/* Current Plant Loading Form */}
+        <form onSubmit={handleSubmitCoLoad} className="space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
-              <span>🏭 Step 2: Load Items from {currentPlant} Plant</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold border ${plantMeta.tagColor}`}>
-                Current Stop
-              </span>
-            </h4>
+            <div>
+              <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
+                <span>➕ Add Models from {currentPlant} Plant</span>
+              </h4>
+              <p className="text-[11px] text-gray-500">
+                Stock will be deducted from {currentPlant} inventory upon confirmation.
+              </p>
+            </div>
             <button
               type="button"
               onClick={handleAddRow}
-              className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline flex items-center space-x-1"
+              disabled={loadingModels}
+              className="text-xs font-bold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-md border border-primary-200 inline-flex items-center space-x-1 transition-colors"
             >
-              <span>+ Add Another Model</span>
+              <span>+ Add Model</span>
             </button>
           </div>
 
           {loadingModels ? (
-            <div className="py-6 text-center">
-              <LoadingSpinner message={`Loading ${currentPlant} models...`} size="sm" />
+            <div className="py-8 text-center bg-gray-50 rounded-xl border border-gray-200">
+              <LoadingSpinner message={`Loading models for ${currentPlant}...`} size="sm" />
+            </div>
+          ) : availableModels.length === 0 ? (
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 text-center">
+              No active cooler models found for {currentPlant} plant.
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
               {newItems.map((item, index) => {
                 const selectedModel = availableModels.find((m) => m.id === item.model_id);
                 const currentStock = selectedModel?.current_stock ?? 0;
@@ -291,10 +329,10 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
                 return (
                   <div
                     key={item.id}
-                    className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 space-y-2"
+                    className="p-3 bg-white rounded-xl border border-gray-200 shadow-2xs space-y-2 transition-all hover:border-gray-300"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-indigo-900">
+                      <span className="text-[11px] font-bold text-gray-600">
                         Item #{index + 1}
                       </span>
                       {newItems.length > 1 && (
@@ -380,6 +418,102 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
             />
           </div>
 
+          {/* Multi-Plant Route Decision (Final Stop vs 3rd Plant) */}
+          {unvisitedPlants.length > 0 ? (
+            <div className="p-3.5 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-300 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-amber-950 flex items-center space-x-1.5">
+                  <span>🛑 Is this the final stop for this vehicle?</span>
+                </span>
+                <span className="text-[10px] font-bold text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded-full border border-amber-300">
+                  {alreadyLoadedPlants.length} of 3 Plants Loaded
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                <label
+                  className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start space-x-2 ${
+                    isFinalStop
+                      ? 'bg-white border-emerald-500 ring-2 ring-emerald-500 shadow-xs'
+                      : 'bg-white/60 border-amber-200 hover:bg-white'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="stopType"
+                    checked={isFinalStop}
+                    onChange={() => setIsFinalStop(true)}
+                    className="mt-0.5 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="font-bold text-gray-900 block">
+                      ✅ Vehicle is Full (Final Stop)
+                    </span>
+                    <span className="text-[11px] text-gray-600 block mt-0.5">
+                      वाहन पूरी तरह भर गया है ➔ सीधे पार्टी ({dispatch?.destination}) को रवाना करें।
+                    </span>
+                  </div>
+                </label>
+
+                <label
+                  className={`p-2.5 rounded-xl border cursor-pointer transition-all flex items-start space-x-2 ${
+                    !isFinalStop
+                      ? 'bg-white border-amber-500 ring-2 ring-amber-500 shadow-xs'
+                      : 'bg-white/60 border-amber-200 hover:bg-white'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="stopType"
+                    checked={!isFinalStop}
+                    onChange={() => setIsFinalStop(false)}
+                    className="mt-0.5 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="font-bold text-gray-900 block">
+                      🚚 Send to 3rd Plant (तीसरा स्टॉप)
+                    </span>
+                    <span className="text-[11px] text-gray-600 block mt-0.5">
+                      वाहन में अभी जगह है ➔ तीसरे प्लांट पर और मॉडल लोड होंगे।
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {!isFinalStop && (
+                <div className="pt-2 border-t border-amber-200/70 flex flex-col sm:flex-row sm:items-center gap-2">
+                  <span className="text-xs font-bold text-amber-950 whitespace-nowrap">
+                    अगला लोडिंग प्लांट चुनें: <span className="text-red-500">*</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {unvisitedPlants.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setNextPlant(p.id)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all flex items-center space-x-1 ${
+                          nextPlant === p.id
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-amber-100'
+                        }`}
+                      >
+                        <span>{p.icon}</span>
+                        <span>{p.shortName} Plant</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center space-x-2">
+              <span className="text-base">🎉</span>
+              <span>
+                <strong>All 3 Plants Completed:</strong> तीनों मैन्युफैक्चरिंग प्लांट्स (E41 G2, C116, D4) से माल लोड हो चुका है। यह फाइनल स्टॉप है।
+              </span>
+            </div>
+          )}
+
           {/* Grand Total Summary Box */}
           <div className="p-3 bg-gradient-to-r from-gray-900 to-indigo-950 text-white rounded-xl flex items-center justify-between">
             <div>
@@ -387,7 +521,7 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
                 Vehicle Consolidated Load Preview:
               </span>
               <span className="text-xs text-gray-300">
-                {originPlant}: <strong>{existingTotalQty} pcs</strong> + {currentPlant}:{' '}
+                Prior Stops: <strong>{existingTotalQty} pcs</strong> + {currentPlant}:{' '}
                 <strong>{newTotalQty} pcs</strong>
               </span>
             </div>
@@ -412,9 +546,19 @@ export default function CoLoadingModal({ dispatch, activePlant, onClose, onSucce
             <button
               type="submit"
               disabled={submitting || newTotalQty <= 0 || stockDeficits.length > 0}
-              className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md font-bold"
+              className={`btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md font-bold ${
+                !isFinalStop && unvisitedPlants.length > 0
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                  : ''
+              }`}
             >
-              <span>{submitting ? 'Confirming Loading...' : '✅ Complete Loading & Finalize Dispatch'}</span>
+              <span>
+                {submitting
+                  ? 'Confirming Loading...'
+                  : !isFinalStop && unvisitedPlants.length > 0
+                  ? `🚚 Complete & Send to ${nextPlant || '3rd Plant'}`
+                  : '✅ Complete Loading & Finalize Dispatch'}
+              </span>
             </button>
           </div>
         </form>

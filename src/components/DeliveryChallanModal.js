@@ -7,6 +7,7 @@ import {
   resolveNextLoadingPlant,
   resolveSecondPlant,
   resolveItemLoadedPlant,
+  formatCoLoadingRoute,
 } from '@/lib/dispatch';
 import { getPlantMeta } from '@/lib/plants';
 
@@ -139,9 +140,8 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               {isCoLoad && (
                 <>
                   <p className="text-[11px] text-gray-600 mt-1.5">Loading Stop Points:</p>
-                  <p className="font-bold text-gray-900">
-                    Stop 1: {dispatch.from_location} → Stop 2:{' '}
-                    {resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Plant 2'}
+                  <p className="font-bold text-gray-900 leading-snug">
+                    {formatCoLoadingRoute(dispatch)}
                   </p>
                 </>
               )}
@@ -236,26 +236,24 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
 
           {/* Signature Blocks */}
           {isCoLoad ? (
-            <div className="grid grid-cols-4 gap-2 pt-6 border-t-2 border-dashed border-gray-400 text-center text-[10px]">
-              <div>
-                <div className="h-10"></div>
-                <div className="border-t border-gray-700 pt-1 font-semibold">
-                  Stop 1 ({dispatch.from_location})
+            <div className="pt-6 border-t-2 border-dashed border-gray-400">
+              <div className="flex flex-wrap items-end justify-between gap-3 text-center text-[10px]">
+                {Object.keys(byPlantSummary).map((plantName, pIdx) => (
+                  <div key={plantName} className="flex-1 min-w-[90px]">
+                    <div className="h-10"></div>
+                    <div className="border-t border-gray-700 pt-1 font-semibold">
+                      Stop {pIdx + 1} ({plantName})
+                    </div>
+                  </div>
+                ))}
+                <div className="flex-1 min-w-[90px]">
+                  <div className="h-10"></div>
+                  <div className="border-t border-gray-700 pt-1 font-semibold">Driver / Carrier</div>
                 </div>
-              </div>
-              <div>
-                <div className="h-10"></div>
-                <div className="border-t border-gray-700 pt-1 font-semibold">
-                  Stop 2 ({resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Plant 2'})
+                <div className="flex-1 min-w-[90px]">
+                  <div className="h-10"></div>
+                  <div className="border-t border-gray-700 pt-1 font-semibold">Security Gate Pass</div>
                 </div>
-              </div>
-              <div>
-                <div className="h-10"></div>
-                <div className="border-t border-gray-700 pt-1 font-semibold">Driver / Carrier</div>
-              </div>
-              <div>
-                <div className="h-10"></div>
-                <div className="border-t border-gray-700 pt-1 font-semibold">Security Gate Pass</div>
               </div>
             </div>
           ) : (

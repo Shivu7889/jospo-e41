@@ -13,7 +13,11 @@ ALTER TABLE public.dispatches
   ADD COLUMN IF NOT EXISTS second_plant TEXT,
   ADD COLUMN IF NOT EXISTS second_plant_employee_id UUID REFERENCES public.employees(id),
   ADD COLUMN IF NOT EXISTS second_plant_confirmed_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS second_plant_notes TEXT;
+  ADD COLUMN IF NOT EXISTS second_plant_notes TEXT,
+  ADD COLUMN IF NOT EXISTS third_plant TEXT,
+  ADD COLUMN IF NOT EXISTS third_plant_employee_id UUID REFERENCES public.employees(id),
+  ADD COLUMN IF NOT EXISTS third_plant_confirmed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS third_plant_notes TEXT;
 
 -- Index for fast lookup of incoming co-loading vehicles at each plant
 CREATE INDEX IF NOT EXISTS idx_dispatches_coloading 

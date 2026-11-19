@@ -110,19 +110,78 @@ export function resolveItemLoadedPlant(item, dispatch) {
 }
 
 /**
- * Returns badge metadata for co-loading status
+ * Returns an array of all distinct plants that have loaded items into this dispatch
+ */
+export function getDispatchLoadedPlants(dispatch) {
+  if (!dispatch) return [];
+  const plants = new Set();
+  if (dispatch.from_location) {
+    plants.add(normalizePlant(dispatch.from_location));
+  }
+  if (Array.isArray(dispatch.dispatch_items)) {
+    dispatch.dispatch_items.forEach((item) => {
+      const p = resolveItemLoadedPlant(item, dispatch);
+      if (p) plants.add(p);
+    });
+  }
+  if (dispatch.second_plant) {
+    plants.add(normalizePlant(dispatch.second_plant));
+  }
+  if (dispatch.third_plant) {
+    plants.add(normalizePlant(dispatch.third_plant));
+  }
+  return Array.from(plants);
+}
+
+/**
+ * Checks whether this dispatch belongs to, or is scheduled to visit, a given plant
+ */
+export function isDispatchRelevantToPlant(dispatch, plant) {
+  if (!dispatch || !plant) return false;
+  const p = normalizePlant(plant);
+  if (normalizePlant(dispatch.from_location) === p) return true;
+  if (resolveNextLoadingPlant(dispatch) === p) return true;
+  if (resolveSecondPlant(dispatch) === p) return true;
+  if (dispatch.third_plant && normalizePlant(dispatch.third_plant) === p) return true;
+  if (dispatch.dispatch_items?.some((it) => resolveItemLoadedPlant(it, dispatch) === p)) return true;
+  return false;
+}
+
+/**
+ * Formats the full multi-plant chain route string
+ * e.g. "E41 G2 ➔ C116 ➔ D4 ➔ Party: XYZ"
+ */
+export function formatCoLoadingRoute(dispatch) {
+  if (!dispatch) return '';
+  const loadedPlants = getDispatchLoadedPlants(dispatch);
+  const nextPlant = resolveNextLoadingPlant(dispatch);
+  const status = resolveCoLoadingStatus(dispatch);
+  const dest = dispatch.destination || 'Party';
+
+  if (!isCoLoadingDispatch(dispatch)) {
+    return `🏭 ${normalizePlant(dispatch.from_location || 'E41 G2')} ➔ 🏢 ${dest}`;
+  }
+
+  const parts = loadedPlants.map((p, idx) => `Stop ${idx + 1}: 🏭 ${p}`);
+  if (status === 'part_loaded' && nextPlant && !loadedPlants.includes(nextPlant)) {
+    parts.push(`Next: 🏭 ${nextPlant}`);
+  }
+  return parts.join(' ➔ ') + ` ➔ 🏢 ${dest}`;
+}
+
+/**
+ * Returns badge metadata for co-loading status (supports 2 and 3 plant chains)
  */
 export function getCoLoadingBadge(dispatch) {
   const status = resolveCoLoadingStatus(dispatch);
-  const originPlant = normalizePlant(dispatch?.from_location || 'E41 G2');
+  const loadedPlants = getDispatchLoadedPlants(dispatch);
   const nextPlant = resolveNextLoadingPlant(dispatch);
-  const secondPlant = resolveSecondPlant(dispatch) || nextPlant;
 
   if (status === 'part_loaded') {
     return {
       status: 'part_loaded',
-      label: `Part Load (${originPlant} → Next: ${nextPlant || 'Next Plant'})`,
-      shortLabel: `Part Load (${nextPlant || 'Stop 2'})`,
+      label: `Part Load (${loadedPlants.join(' + ')} ➔ Next: ${nextPlant || 'Next Plant'})`,
+      shortLabel: `Part Load (➔ ${nextPlant || 'Next'})`,
       icon: '⏳',
       badgeClass: 'bg-amber-50 text-amber-800 border-amber-300',
       pillClass: 'bg-amber-100 text-amber-900',
@@ -133,8 +192,8 @@ export function getCoLoadingBadge(dispatch) {
   if (status === 'fully_loaded') {
     return {
       status: 'fully_loaded',
-      label: `Fully Loaded (${originPlant} + ${secondPlant || 'Stop 2'})`,
-      shortLabel: `Co-Loaded (${originPlant} + ${secondPlant || 'Stop 2'})`,
+      label: `Fully Loaded (${loadedPlants.join(' + ')})`,
+      shortLabel: `Co-Loaded (${loadedPlants.join(' + ')})`,
       icon: '✅',
       badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-300',
       pillClass: 'bg-emerald-100 text-emerald-900',
@@ -153,6 +212,7 @@ export function cleanDispatchRemarks(remarks) {
     .replace(/\[NextPlant:\s*[^\]]+\]/gi, '')
     .replace(/\[CoLoadingStatus:\s*[^\]]+\]/gi, '')
     .replace(/\[SecondPlant:\s*[^\]]+\]/gi, '')
+    .replace(/\[ThirdPlant:\s*[^\]]+\]/gi, '')
     .trim();
 }
 
@@ -171,6 +231,9 @@ export function formatDispatchRemarks(remarks, dispatchType = 'party', coLoading
     }
     if (coLoadingOpts.secondPlant) {
       tags.push(`[SecondPlant: ${normalizePlant(coLoadingOpts.secondPlant)}]`);
+    }
+    if (coLoadingOpts.thirdPlant) {
+      tags.push(`[ThirdPlant: ${normalizePlant(coLoadingOpts.thirdPlant)}]`);
     }
   }
 
