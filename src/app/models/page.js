@@ -488,7 +488,7 @@ export default function ModelsPage() {
   }, [isOwnerConsolidated, actionLoadingId]);
 
   return (
-    <AppShell allowedRoles={['admin']}>
+    <AppShell allowedRoles={['admin', 'production']}>
       <div className="space-y-8">
         {/* Page Title & Overview */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 pb-5">

@@ -14,11 +14,15 @@ import { useState, useRef, useEffect, useMemo } from 'react';
  * @param {boolean} [props.disabled=false]
  * @param {boolean} [props.required=false]
  * @param {string} [props.className='']
+ * @param {Function} [props.onAddNew] - (searchTerm) => void
+ * @param {string} [props.addNewLabel='Add New Model']
  */
 export default function SearchableSelect({
   options = [],
   value,
   onChange,
+  onAddNew,
+  addNewLabel = 'Add New Model',
   placeholder = '-- Select Model --',
   disabled = false,
   required = false,
@@ -266,11 +270,44 @@ export default function SearchableSelect({
                 );
               })
             ) : (
-              <li className="px-3 py-4 text-center text-gray-400 text-xs italic">
-                No cooler models matching "{searchTerm}"
+              <li className="px-3 py-5 text-center">
+                <p className="text-gray-500 text-xs italic mb-2.5">
+                  {searchTerm ? `No cooler models matching "${searchTerm}"` : 'No models available in this list'}
+                </p>
+                {onAddNew && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onAddNew(searchTerm);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-primary-700 bg-primary-50 border border-primary-200 rounded-lg hover:bg-primary-100 transition shadow-sm"
+                  >
+                    <span>➕</span>
+                    <span>{addNewLabel} {searchTerm ? `"${searchTerm}"` : ''}</span>
+                  </button>
+                )}
               </li>
             )}
           </ul>
+
+          {/* Sticky footer for quick model addition when list has options */}
+          {onAddNew && filteredOptions.length > 0 && (
+            <div className="p-2 bg-gray-50/90 border-t border-gray-100 flex items-center justify-between">
+              <span className="text-[11px] text-gray-500">Model not in list?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  onAddNew(searchTerm);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary-600 hover:text-primary-800 hover:underline"
+              >
+                <span>➕</span>
+                <span>{addNewLabel}</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

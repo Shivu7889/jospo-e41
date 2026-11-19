@@ -179,7 +179,7 @@ export async function GET(request) {
  */
 export async function POST(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner', 'production'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
@@ -188,8 +188,15 @@ export async function POST(request) {
 
     const trimmedName = typeof name === 'string' ? name.trim() : '';
     const trimmedCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
-    const trimmedQr = typeof qr_data === 'string' ? qr_data.trim() : '';
-    const assignedPlant = normalizePlant(manufacturing_plant || DEFAULT_PLANT_ID);
+    let trimmedQr = typeof qr_data === 'string' ? qr_data.trim() : '';
+
+    // Auto-generate QR data if omitted
+    if (!trimmedQr && trimmedCode) {
+      trimmedQr = `JOSPO-${trimmedCode.replace(/[^A-Z0-9]/g, '')}`;
+    }
+
+    const userPlant = auth.employee?.plant ? normalizePlant(auth.employee.plant) : null;
+    const assignedPlant = normalizePlant(manufacturing_plant || userPlant || DEFAULT_PLANT_ID);
     const formattedDesc = formatModelDescription(description || '', assignedPlant);
 
     if (!trimmedName) {
@@ -228,17 +235,22 @@ export async function POST(request) {
     }
 
     // Check QR data uniqueness
-    const { data: existingQR } = await supabase
+    let { data: existingQR } = await supabase
       .from('cooler_models')
       .select('id, qr_data')
       .eq('qr_data', trimmedQr)
       .maybeSingle();
 
     if (existingQR) {
-      return NextResponse.json(
-        { success: false, error: `QR data "${trimmedQr}" is already in use by another model.` },
-        { status: 400 }
-      );
+      // If QR was auto-generated, append random 4-digit number to avoid conflict
+      if (!qr_data || !qr_data.trim()) {
+        trimmedQr = `${trimmedQr}-${Math.floor(1000 + Math.random() * 9000)}`;
+      } else {
+        return NextResponse.json(
+          { success: false, error: `QR data "${trimmedQr}" is already in use by another model.` },
+          { status: 400 }
+        );
+      }
     }
 
     // Insert new cooler model (try with manufacturing_plant column, fallback to description tag)
@@ -305,7 +317,7 @@ export async function POST(request) {
  */
 export async function PATCH(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner', 'production'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 

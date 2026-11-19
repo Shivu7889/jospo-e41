@@ -70,6 +70,17 @@ export default function ProductionPage() {
   const [deletingEntry, setDeletingEntry] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Add New Cooler Model Modal State (Empowers shop floor & production staff)
+  const [showAddModelModal, setShowAddModelModal] = useState(false);
+  const [addModelTargetRowId, setAddModelTargetRowId] = useState(null);
+  const [addModelCallback, setAddModelCallback] = useState(null);
+  const [newModelName, setNewModelName] = useState('');
+  const [newModelCode, setNewModelCode] = useState('');
+  const [newModelPlant, setNewModelPlant] = useState(entryPlant);
+  const [newModelDesc, setNewModelDesc] = useState('');
+  const [newModelQr, setNewModelQr] = useState('');
+  const [savingNewModel, setSavingNewModel] = useState(false);
+
   // Helper to determine if an entry was created / logged today
   const isEntryFromToday = useCallback((row) => {
     if (!row) return false;
@@ -344,6 +355,99 @@ export default function ProductionPage() {
     setRows((prev) =>
       prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
     );
+  };
+
+  // Helper to suggest a clean model code from model name
+  const generateModelCodeFromName = (nameStr) => {
+    if (!nameStr) return '';
+    return nameStr
+      .toUpperCase()
+      .replace(/^JOSPO\s+/i, '')
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  };
+
+  // Open the Add Model modal (can be triggered by button, empty state, or dropdown search)
+  const handleOpenAddModelModal = useCallback((rowId = null, initialSearch = '', callback = null) => {
+    setAddModelTargetRowId(rowId);
+    setAddModelCallback(() => callback);
+    const searchClean = (initialSearch || '').trim();
+    setNewModelName(searchClean);
+    if (searchClean) {
+      const code = generateModelCodeFromName(searchClean);
+      setNewModelCode(code);
+      setNewModelQr(code ? `JOSPO-${code.replace(/[^A-Z0-9]/g, '')}` : '');
+    } else {
+      setNewModelCode('');
+      setNewModelQr('');
+    }
+    setNewModelDesc('');
+    setNewModelPlant(entryPlant || DEFAULT_PLANT_ID);
+    setShowAddModelModal(true);
+  }, [entryPlant]);
+
+  // Submit new model creation
+  const handleCreateNewModel = async (e) => {
+    e.preventDefault();
+    const cleanName = newModelName.trim();
+    const cleanCode = newModelCode.trim().toUpperCase();
+    const targetPlant = normalizePlant(newModelPlant || entryPlant);
+
+    if (!cleanName) {
+      showToast('Model Name is required', 'error');
+      return;
+    }
+    if (!cleanCode) {
+      showToast('Model Code is required', 'error');
+      return;
+    }
+
+    try {
+      setSavingNewModel(true);
+      const qrData = newModelQr.trim() || `JOSPO-${cleanCode.replace(/[^A-Z0-9]/g, '')}`;
+
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cleanName,
+          code: cleanCode,
+          description: newModelDesc.trim(),
+          qr_data: qrData,
+          manufacturing_plant: targetPlant,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to create new model');
+      }
+
+      showToast(`Model ${cleanCode} added successfully for ${targetPlant}!`, 'success');
+
+      // Refresh models list so the new model is available in dropdowns
+      await fetchModels();
+
+      // If opened from a specific row, select this model in that row
+      if (addModelTargetRowId) {
+        handleRowChange(addModelTargetRowId, 'model_id', data.model.id);
+      } else if (typeof addModelCallback === 'function') {
+        addModelCallback(data.model.id);
+      }
+
+      setShowAddModelModal(false);
+      setNewModelName('');
+      setNewModelCode('');
+      setNewModelDesc('');
+      setNewModelQr('');
+      setAddModelTargetRowId(null);
+      setAddModelCallback(null);
+    } catch (err) {
+      console.error('Error creating model:', err);
+      showToast(err.message || 'Could not create cooler model', 'error');
+    } finally {
+      setSavingNewModel(false);
+    }
   };
 
   // Calculate total quantity across all valid rows
@@ -692,22 +796,35 @@ export default function ProductionPage() {
                     <label className="label mb-0">
                       Models & Quantities ({manufacturableModels.length} manufacturable at {entryPlant}) <span className="text-red-500">*</span>
                     </label>
-                    <span className="text-[11px] text-gray-400">
-                      Units manufactured
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenAddModelModal()}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 bg-primary-50 border border-primary-200 px-2.5 py-1 rounded-lg hover:bg-primary-100 transition shadow-sm"
+                    >
+                      <span>➕</span>
+                      <span>Add New Model</span>
+                    </button>
                   </div>
-
 
                   {/* Empty Models Notice */}
                   {!loadingModels && manufacturableModels.length === 0 && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-center justify-between">
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div className="flex items-center space-x-2">
                         <span>⚠️</span>
                         <span>No models are currently designated for assembly at <strong>{entryPlant}</strong>.</span>
                       </div>
-                      <Link href="/models" className="font-bold text-amber-800 underline hover:text-amber-950">
-                        Assign in Models →
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAddModelModal()}
+                          className="font-bold text-xs bg-amber-600 text-white px-3 py-1 rounded-lg hover:bg-amber-700 shadow-sm"
+                        >
+                          ➕ Add Model for {entryPlant}
+                        </button>
+                        <Link href="/models" className="font-bold text-amber-800 underline hover:text-amber-950">
+                          Assign in Models →
+                        </Link>
+                      </div>
                     </div>
                   )}
 
@@ -722,12 +839,14 @@ export default function ProductionPage() {
                           options={manufacturableModels}
                           value={row.model_id}
                           onChange={(val) => handleRowChange(row.id, 'model_id', val)}
-                          disabled={loadingModels || manufacturableModels.length === 0}
+                          onAddNew={(search) => handleOpenAddModelModal(row.id, search)}
+                          addNewLabel="Add New Model"
+                          disabled={loadingModels}
                           placeholder={
                             loadingModels
                               ? 'Loading models...'
                               : manufacturableModels.length === 0
-                              ? `No models assigned to ${entryPlant}`
+                              ? `No models for ${entryPlant} - Click to Add`
                               : `-- Select ${entryPlant} Model (${manufacturableModels.length} available) --`
                           }
                           required
@@ -1323,6 +1442,8 @@ export default function ProductionPage() {
                     options={models}
                     value={editModelId}
                     onChange={(val) => setEditModelId(val)}
+                    onAddNew={(search) => handleOpenAddModelModal(null, search, (newId) => setEditModelId(newId))}
+                    addNewLabel="Add New Model"
                     placeholder="-- Select or Search Model --"
                     required
                   />
@@ -1511,6 +1632,168 @@ export default function ProductionPage() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ADD NEW COOLER MODEL MODAL (Empowers production employee to register new models on the fly) */}
+        {showAddModelModal && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-scaleUp border-t-4 border-primary-600">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <span className="text-2xl">❄️</span>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Add New Cooler Model
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Register a new cooler model to manufacture at <strong>{newModelPlant || entryPlant}</strong>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddModelModal(false)}
+                  disabled={savingNewModel}
+                  className="text-gray-400 hover:text-gray-600 p-1 text-base font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateNewModel} className="space-y-4">
+                {/* Model Name */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Model Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newModelName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewModelName(val);
+                      const autoCode = generateModelCodeFromName(val);
+                      setNewModelCode(autoCode);
+                      setNewModelQr(autoCode ? `JOSPO-${autoCode.replace(/[^A-Z0-9]/g, '')}` : '');
+                    }}
+                    placeholder="e.g. Jospo Icecool 65 NCG WG"
+                    className="input-field text-xs bg-white font-medium"
+                    required
+                    autoFocus
+                  />
+                  <span className="text-[10px] text-gray-400 mt-0.5 block">
+                    Full commercial name of the cooler
+                  </span>
+                </div>
+
+                {/* Model Code & Plant Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Model Code <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newModelCode}
+                      onChange={(e) => {
+                        const codeVal = e.target.value.toUpperCase();
+                        setNewModelCode(codeVal);
+                        setNewModelQr(codeVal ? `JOSPO-${codeVal.replace(/[^A-Z0-9]/g, '')}` : '');
+                      }}
+                      placeholder="e.g. ICECOOL-65-NCG-WG"
+                      className="input-field text-xs font-mono font-bold bg-white"
+                      required
+                    />
+                    <span className="text-[10px] text-gray-400 mt-0.5 block">
+                      Barcode code & stock identifier
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Manufacturing Plant <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={newModelPlant}
+                      onChange={(e) => setNewModelPlant(e.target.value)}
+                      className="input-field text-xs font-bold bg-white text-gray-900"
+                      required
+                    >
+                      {Object.keys(PLANTS).map((pKey) => (
+                        <option key={pKey} value={pKey}>
+                          🏭 {pKey} ({PLANTS[pKey].name})
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-gray-400 mt-0.5 block">
+                      Plant where this cooler is made
+                    </span>
+                  </div>
+                </div>
+
+                {/* Description / Specs */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Description / Specifications <span className="text-gray-400 font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newModelDesc}
+                    onChange={(e) => setNewModelDesc(e.target.value)}
+                    placeholder="e.g. 65L Desert Cooler, Honeycomb Pad, CG/WG"
+                    className="input-field text-xs bg-white"
+                  />
+                </div>
+
+                {/* QR Data Preview */}
+                <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <span>🏷️</span>
+                    <div>
+                      <span className="font-semibold">QR Code Data: </span>
+                      <span className="font-mono font-bold text-primary-700">
+                        {newModelQr || (newModelCode ? `JOSPO-${newModelCode.replace(/[^A-Z0-9]/g, '')}` : 'Auto-generated')}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full">
+                    Auto-generated
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModelModal(false)}
+                    disabled={savingNewModel}
+                    className="btn-secondary text-xs py-2 px-3"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingNewModel || !newModelName.trim() || !newModelCode.trim()}
+                    className="btn-primary text-xs py-2 px-4 shadow-sm font-bold inline-flex items-center space-x-1.5"
+                  >
+                    {savingNewModel ? (
+                      <>
+                        <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <span>Creating Model...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>➕</span>
+                        <span>Add Model & Select</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

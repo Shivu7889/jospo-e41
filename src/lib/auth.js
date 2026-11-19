@@ -26,7 +26,7 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
 
   const { data: employee, error: empError } = await supabase
     .from('employees')
-    .select('id, name, email, role, is_active')
+    .select('id, name, email, role, plant, is_active')
     .eq('id', user.id)
     .single();
 

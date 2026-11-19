@@ -36,7 +36,7 @@ const NAV_ITEMS = [
     label: 'Models',
     href: '/models',
     icon: '⚙️',
-    roles: ['owner', 'admin'],
+    roles: ['owner', 'admin', 'production'],
   },
   {
     label: 'Reports',
