@@ -97,6 +97,19 @@ function NewDispatchContent() {
   const [dispatchDate, setDispatchDate] = useState(todayStr);
   const [remarks, setRemarks] = useState('');
 
+  // Multi-Plant Co-Loading State (Shared Vehicle)
+  const [isCoLoading, setIsCoLoading] = useState(false);
+  const [nextLoadingPlant, setNextLoadingPlant] = useState(
+    defaultPlant === 'E41 G2' ? 'D4' : (defaultPlant === 'C116' ? 'D4' : 'E41 G2')
+  );
+
+  useEffect(() => {
+    if (nextLoadingPlant === fromLocation) {
+      const other = PLANTS.find((p) => p.id !== fromLocation);
+      if (other) setNextLoadingPlant(other.id);
+    }
+  }, [fromLocation, nextLoadingPlant]);
+
   // Items State - Step 2: Scanned & Manual Items
   // Item structure: { model_id, model_name, model_code, quantity, available_stock, scanned_serials: [] }
   const [items, setItems] = useState([]);
@@ -1025,7 +1038,12 @@ function NewDispatchContent() {
       const serialsTag = `Verified Box Serials:\n${serialEntries.join('\n')}`;
       finalRemarks = finalRemarks ? `${finalRemarks}\n\n${serialsTag}` : serialsTag;
     }
-    const formatted = formatDispatchRemarks(finalRemarks, dispatchType);
+    const isCoLoad = dispatchType === 'party' && Boolean(isCoLoading);
+    const formatted = formatDispatchRemarks(finalRemarks, dispatchType, {
+      isCoLoading: isCoLoad,
+      nextLoadingPlant: isCoLoad ? nextLoadingPlant : null,
+      status: isCoLoad ? 'part_loaded' : null,
+    });
     const destPlant = dispatchType === 'local' ? normalizePlant(destination) : null;
     return formatPlantRemarks(formatted, {
       plant: fromLocation,
@@ -1051,6 +1069,8 @@ function NewDispatchContent() {
       const originPlant = normalizePlant(fromLocation);
       const destPlant = dispatchType === 'local' ? normalizePlant(destination) : null;
       const transferStatus = dispatchType === 'local' ? 'in_transit' : 'completed';
+      const isCoLoad = dispatchType === 'party' && Boolean(isCoLoading);
+      const nextPlant = isCoLoad ? normalizePlant(nextLoadingPlant) : null;
 
       let targetDispatchId = editId;
 
@@ -1067,10 +1087,14 @@ function NewDispatchContent() {
             transfer_status: transferStatus,
             dispatch_date: dispatchDate,
             dispatch_type: dispatchType,
+            is_coloading: isCoLoad,
+            next_loading_plant: nextPlant,
+            coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
             remarks: getCompiledRemarks(),
             items: items.map((item) => ({
               model_id: item.model_id,
               quantity: parseInt(item.quantity, 10) || 1,
+              loaded_plant: originPlant,
             })),
           }),
         });
@@ -1090,6 +1114,9 @@ function NewDispatchContent() {
           transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
+          is_coloading: isCoLoad,
+          next_loading_plant: nextPlant,
+          coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
           remarks: getCompiledRemarks(),
           status: 'draft',
           employee_id: employee.id,
@@ -1106,11 +1133,17 @@ function NewDispatchContent() {
           (insertError.message?.includes('destination_plant') ||
             insertError.message?.includes('transfer_status') ||
             insertError.message?.includes('dispatch_type') ||
+            insertError.message?.includes('is_coloading') ||
+            insertError.message?.includes('next_loading_plant') ||
+            insertError.message?.includes('coloading_status') ||
             insertError.code === 'PGRST204')
         ) {
           delete insertPayload.destination_plant;
           delete insertPayload.transfer_status;
           delete insertPayload.dispatch_type;
+          delete insertPayload.is_coloading;
+          delete insertPayload.next_loading_plant;
+          delete insertPayload.coloading_status;
           const retryRes = await supabase
             .from('dispatches')
             .insert(insertPayload)
@@ -1128,11 +1161,23 @@ function NewDispatchContent() {
           dispatch_id: targetDispatchId,
           model_id: item.model_id,
           quantity: parseInt(item.quantity, 10) || 1,
+          loaded_plant: originPlant,
+          loaded_by: employee.id,
         }));
 
-        const { error: itemsError } = await supabase
+        let { error: itemsError } = await supabase
           .from('dispatch_items')
           .insert(itemsToInsert);
+
+        if (itemsError && itemsError.message?.includes('loaded_plant')) {
+          const fallbackItems = items.map((item) => ({
+            dispatch_id: targetDispatchId,
+            model_id: item.model_id,
+            quantity: parseInt(item.quantity, 10) || 1,
+          }));
+          const fbRes = await supabase.from('dispatch_items').insert(fallbackItems);
+          itemsError = fbRes.error;
+        }
 
         if (itemsError) throw itemsError;
       }
@@ -1263,6 +1308,9 @@ function NewDispatchContent() {
         await supabase.from('dispatch_items').delete().eq('dispatch_id', editId);
       } else {
         // Insert new draft dispatch record
+        const isCoLoad = dispatchType === 'party' && Boolean(isCoLoading);
+        const nextPlant = isCoLoad ? normalizePlant(nextLoadingPlant) : null;
+
         const insertPayload = {
           vehicle_number: vehicleNumber.trim().toUpperCase(),
           from_location: originPlant,
@@ -1271,6 +1319,9 @@ function NewDispatchContent() {
           transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
+          is_coloading: isCoLoad,
+          next_loading_plant: nextPlant,
+          coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
           remarks: getCompiledRemarks(),
           status: 'draft',
           employee_id: employee.id,
@@ -1287,11 +1338,17 @@ function NewDispatchContent() {
           (insertError.message?.includes('destination_plant') ||
             insertError.message?.includes('transfer_status') ||
             insertError.message?.includes('dispatch_type') ||
+            insertError.message?.includes('is_coloading') ||
+            insertError.message?.includes('next_loading_plant') ||
+            insertError.message?.includes('coloading_status') ||
             insertError.code === 'PGRST204')
         ) {
           delete insertPayload.destination_plant;
           delete insertPayload.transfer_status;
           delete insertPayload.dispatch_type;
+          delete insertPayload.is_coloading;
+          delete insertPayload.next_loading_plant;
+          delete insertPayload.coloading_status;
           const retryRes = await supabase
             .from('dispatches')
             .insert(insertPayload)
@@ -1310,11 +1367,23 @@ function NewDispatchContent() {
         dispatch_id: targetDispatchId,
         model_id: item.model_id,
         quantity: parseInt(item.quantity, 10) || 1,
+        loaded_plant: originPlant,
+        loaded_by: employee.id,
       }));
 
-      const { error: itemsError } = await supabase
+      let { error: itemsError } = await supabase
         .from('dispatch_items')
         .insert(itemsToInsert);
+
+      if (itemsError && itemsError.message?.includes('loaded_plant')) {
+        const fallbackItems = items.map((item) => ({
+          dispatch_id: targetDispatchId,
+          model_id: item.model_id,
+          quantity: parseInt(item.quantity, 10) || 1,
+        }));
+        const fbRes = await supabase.from('dispatch_items').insert(fallbackItems);
+        itemsError = fbRes.error;
+      }
 
       if (itemsError) throw itemsError;
 
@@ -1776,6 +1845,56 @@ function NewDispatchContent() {
                 </div>
               )}
             </div>
+
+            {/* Multi-Plant Co-Loading Option for Party Dispatch */}
+            {dispatchType === 'party' && (
+              <div className="p-3.5 bg-gradient-to-r from-blue-50/70 to-indigo-50/70 rounded-xl border border-blue-200/90 space-y-3">
+                <label className="flex items-start space-x-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isCoLoading}
+                    onChange={(e) => setIsCoLoading(e.target.checked)}
+                    className="mt-0.5 rounded text-primary-600 focus:ring-primary-500 w-4 h-4 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-gray-900 flex items-center space-x-1.5">
+                      <span>🚚 Multi-Plant Co-Loading (गाड़ी आगे अन्य प्लांट पर भी लोड होगी)</span>
+                      <span className="text-[10px] bg-blue-200 text-blue-900 font-extrabold px-1.5 py-0.5 rounded uppercase">
+                        Part Load
+                      </span>
+                    </span>
+                    <span className="text-[11px] text-gray-600 block mt-0.5">
+                      गाड़ी <strong>{normalizePlant(fromLocation)}</strong> से आंशिक लोड (Part Load) होकर दूसरे प्लांट पर जाएगी और वहां से बाकी मॉडल लोड करके पार्टी को रवाना होगी।
+                    </span>
+                  </div>
+                </label>
+
+                {isCoLoading && (
+                  <div className="pt-2.5 border-t border-blue-200/60 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <label className="text-xs font-bold text-gray-800 whitespace-nowrap">
+                      अगला लोडिंग प्लांट (Next Stop): <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {PLANTS.filter((p) => p.id !== normalizePlant(fromLocation)).map((otherPlant) => (
+                        <button
+                          key={otherPlant.id}
+                          type="button"
+                          onClick={() => setNextLoadingPlant(otherPlant.id)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all flex items-center space-x-1 ${
+                            nextLoadingPlant === otherPlant.id
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <span>{otherPlant.icon}</span>
+                          <span>{otherPlant.shortName} Plant</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Dispatch Date */}
             <div>
@@ -2258,6 +2377,17 @@ function NewDispatchContent() {
               </span>
               <span className="font-semibold text-primary-800">{destination}</span>
             </div>
+            {dispatchType === 'party' && isCoLoading && (
+              <div className="col-span-2 sm:col-span-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-2">
+                <span className="text-base">🚚</span>
+                <div>
+                  <span className="font-bold text-blue-900 block">Multi-Plant Co-Loading Active (Part Load)</span>
+                  <span className="text-gray-600 block text-[11px]">
+                    Stop 1: <strong>{fromLocation}</strong> (Loading now) → Stop 2: <strong>{nextLoadingPlant} Plant</strong> (Remaining models) → Final: <strong>{destination}</strong>
+                  </span>
+                </div>
+              </div>
+            )}
             {remarks && (
               <div className="col-span-2 sm:col-span-3 pt-2 border-t border-gray-200">
                 <span className="text-gray-500 block">Remarks:</span>

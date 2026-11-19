@@ -11,8 +11,19 @@ import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import DeliveryChallanModal from '@/components/DeliveryChallanModal';
+import CoLoadingModal from '@/components/CoLoadingModal';
 import { exportToExcel } from '@/lib/exportExcel';
-import { resolveDispatchType, getDispatchTypeMeta, cleanDispatchRemarks } from '@/lib/dispatch';
+import {
+  resolveDispatchType,
+  getDispatchTypeMeta,
+  cleanDispatchRemarks,
+  isCoLoadingDispatch,
+  resolveCoLoadingStatus,
+  resolveNextLoadingPlant,
+  resolveSecondPlant,
+  resolveItemLoadedPlant,
+  getCoLoadingBadge,
+} from '@/lib/dispatch';
 import { usePlant } from '@/contexts/PlantContext';
 import {
   PLANTS,
@@ -71,6 +82,9 @@ export default function DispatchListPage() {
   // Delivery Challan & Gate Pass Modal state
   const [challanModalDispatch, setChallanModalDispatch] = useState(null);
 
+  // Multi-Plant Co-Loading Modal State
+  const [coLoadingModalData, setCoLoadingModalData] = useState(null);
+
   // Edit Dispatch Modal state (Admin can edit any dispatch)
   const [editDispatchModal, setEditDispatchModal] = useState(null);
   const [editDispatchType, setEditDispatchType] = useState('party');
@@ -92,9 +106,7 @@ export default function DispatchListPage() {
         .select(`
           *,
           dispatch_items(
-            id,
-            quantity,
-            model_id,
+            *,
             cooler_models(
               id,
               name,
@@ -147,10 +159,11 @@ export default function DispatchListPage() {
   // Filtered dispatches (scoped to activePlant)
   const filteredDispatches = useMemo(() => {
     return dispatches.filter((d) => {
-      // Plant scope: if activePlant is not ALL, origin must match activePlant
+      // Plant scope: if activePlant is not ALL, origin must match activePlant OR secondary co-loading plant must match activePlant
       if (activePlant !== ALL_PLANTS_ID) {
         const originPlant = normalizePlant(d.from_location);
-        if (originPlant !== activePlant) return false;
+        const secondPlant = resolveSecondPlant(d);
+        if (originPlant !== activePlant && secondPlant !== activePlant) return false;
       }
       // Status filter
       if (statusFilter !== 'all' && d.status !== statusFilter) {
@@ -191,6 +204,22 @@ export default function DispatchListPage() {
       return true;
     });
   }, [dispatches, activePlant, statusFilter, typeFilter, dateFrom, dateTo, searchTerm]);
+
+  // Incoming vehicles waiting for secondary co-loading at this plant
+  const incomingCoLoadVehicles = useMemo(() => {
+    return dispatches.filter((d) => {
+      if (d.status !== 'confirmed') return false;
+      if (!isCoLoadingDispatch(d)) return false;
+      const status = resolveCoLoadingStatus(d);
+      if (status !== 'part_loaded') return false;
+
+      const nextPlant = resolveNextLoadingPlant(d);
+      if (activePlant !== ALL_PLANTS_ID) {
+        if (nextPlant !== activePlant) return false;
+      }
+      return true;
+    });
+  }, [dispatches, activePlant]);
 
   // Inbound transfers list (confirmed local transfers received or in-transit to this plant)
   const filteredInboundTransfers = useMemo(() => {
@@ -550,6 +579,88 @@ export default function DispatchListPage() {
           />
         </div>
 
+        {/* Incoming Co-Loading Vehicles Alert Banner */}
+        {incomingCoLoadVehicles.length > 0 && (
+          <div className="bg-gradient-to-r from-amber-500/10 via-amber-50 to-orange-500/10 border-2 border-amber-300 rounded-2xl p-4 sm:p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+              <div className="flex items-center space-x-2.5">
+                <span className="text-2xl">🚚</span>
+                <div>
+                  <h3 className="text-base font-extrabold text-amber-950 flex items-center space-x-2">
+                    <span>Part-Loaded Vehicles Arriving for Co-Loading</span>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-black bg-amber-500 text-white shadow-xs">
+                      {incomingCoLoadVehicles.length} {incomingCoLoadVehicles.length === 1 ? 'Vehicle' : 'Vehicles'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-amber-800">
+                    {activePlant === ALL_PLANTS_ID
+                      ? 'Partially loaded vehicles awaiting secondary loading at their designated next plant.'
+                      : `These vehicles are arriving at ${activePlant} to load remaining items for party dispatch.`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {incomingCoLoadVehicles.map((v) => {
+                const originPlant = normalizePlant(v.from_location);
+                const nextPlant = resolveNextLoadingPlant(v) || 'Second Plant';
+                const loadedQty = calculateTotalQty(v.dispatch_items);
+                return (
+                  <div
+                    key={v.id}
+                    className="bg-white/90 backdrop-blur-xs border border-amber-200 rounded-xl p-3.5 shadow-xs flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-black text-sm bg-gray-100 px-2 py-0.5 rounded text-gray-900 border border-gray-200">
+                          {v.vehicle_number}
+                        </span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                          ⏳ Part Loaded
+                        </span>
+                      </div>
+                      <div className="text-xs space-y-1 text-gray-600 mb-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Route:</span>
+                          <span className="font-semibold text-gray-800">
+                            🏭 {originPlant} ➔ 🏭 {nextPlant}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Destination Party:</span>
+                          <span className="font-bold text-gray-900 truncate max-w-[150px]">{v.destination}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Loaded at {originPlant}:</span>
+                          <span className="font-extrabold text-indigo-700">{loadedQty} pcs</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-amber-100 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewDetailsModal(v)}
+                        className="text-xs text-gray-600 hover:text-gray-900 underline font-medium"
+                      >
+                        View Items
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCoLoadingModalData(v)}
+                        className="btn-primary text-xs py-1.5 px-3 bg-amber-600 hover:bg-amber-700 text-white font-bold inline-flex items-center space-x-1.5 shadow-sm"
+                      >
+                        <span>➕ Load Models</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Main Tabs: Outward Dispatches vs Inbound Inter-Plant Transfers */}
         <div className="flex border-b border-gray-200 gap-3">
           <button
@@ -813,6 +924,16 @@ export default function DispatchListPage() {
                                   🏢 Party
                                 </span>
                               )}
+                              {(() => {
+                                const cl = getCoLoadingBadge(dispatch);
+                                if (!cl) return null;
+                                return (
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border w-fit ${cl.badgeClass}`}>
+                                    <span>{cl.icon}</span>
+                                    <span className="ml-1">{cl.shortLabel}</span>
+                                  </span>
+                                );
+                              })()}
                               <div className="flex items-center space-x-1.5 text-xs">
                                 <span className="text-gray-500">{dispatch.from_location}</span>
                                 <span className="text-primary-600">→</span>
@@ -847,6 +968,20 @@ export default function DispatchListPage() {
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center justify-end space-x-2">
+                              {/* Co-Loading action for second plant */}
+                              {dispatch.status === 'confirmed' &&
+                                isCoLoadingDispatch(dispatch) &&
+                                resolveCoLoadingStatus(dispatch) === 'part_loaded' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCoLoadingModalData(dispatch)}
+                                    className="px-2.5 py-1 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
+                                    title={`Complete secondary loading at ${resolveNextLoadingPlant(dispatch) || 'second plant'}`}
+                                  >
+                                    <span>➕ Load Models</span>
+                                  </button>
+                                )}
+
                               {/* Details button always available */}
                               <button
                                 type="button"
@@ -961,6 +1096,32 @@ export default function DispatchListPage() {
                                   </span>
                                 </div>
 
+                                {isCoLoadingDispatch(dispatch) && (
+                                  <div className="mb-3 p-2.5 rounded-lg bg-amber-50/80 border border-amber-200 text-xs flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="font-bold text-amber-900">Multi-Plant Route:</span>
+                                      <span className="font-semibold text-gray-800">
+                                        Stop 1: 🏭 {normalizePlant(dispatch.from_location)}
+                                      </span>
+                                      <span className="text-amber-600 font-bold">➔</span>
+                                      <span className="font-semibold text-gray-800">
+                                        Stop 2: 🏭 {resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Second Plant'}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      {resolveCoLoadingStatus(dispatch) === 'part_loaded' ? (
+                                        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
+                                          ⏳ Part Loaded (Awaiting Stop 2)
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                          ✅ Fully Loaded (Stop 1 + Stop 2 Complete)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
                                 {(!dispatch.dispatch_items || dispatch.dispatch_items.length === 0) ? (
                                   <p className="text-xs text-gray-500 italic py-2">
                                     No items recorded for this dispatch yet.
@@ -972,6 +1133,7 @@ export default function DispatchListPage() {
                                         <tr className="text-gray-500 text-left">
                                           <th className="py-1.5 px-3 font-semibold uppercase">Model Code</th>
                                           <th className="py-1.5 px-3 font-semibold uppercase">Model Name</th>
+                                          <th className="py-1.5 px-3 font-semibold uppercase">Loaded At Plant</th>
                                           <th className="py-1.5 px-3 font-semibold uppercase text-right">Quantity</th>
                                         </tr>
                                       </thead>
@@ -984,6 +1146,11 @@ export default function DispatchListPage() {
                                             <td className="py-2 px-3">
                                               <span className="font-bold text-gray-900 block">{item.cooler_models?.name || 'Cooler Model'}</span>
                                               <span className="font-mono text-gray-400 text-[10px]">{item.cooler_models?.code}</span>
+                                            </td>
+                                            <td className="py-2 px-3">
+                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-gray-100 text-gray-800 border border-gray-200">
+                                                🏭 {resolveItemLoadedPlant(item, dispatch)}
+                                              </span>
                                             </td>
                                             <td className="py-2 px-3 text-right font-extrabold text-gray-900">
                                               {item.quantity} pcs
@@ -1602,6 +1769,57 @@ export default function DispatchListPage() {
                 </div>
               )}
 
+              {/* Co-Loading Multi-Plant Route Summary */}
+              {isCoLoadingDispatch(viewDetailsModal) && (
+                <div className="mb-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-xl p-3.5 text-xs text-amber-950">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold flex items-center space-x-1.5 text-amber-900">
+                      <span>🚚</span>
+                      <span>Multi-Plant Co-Loading System (साझा गाड़ी लोडिंग)</span>
+                    </span>
+                    {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' ? (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
+                        ⏳ Part Loaded (Stop 1 Done)
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        ✅ Fully Loaded (Stop 1 + Stop 2 Complete)
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] bg-white/80 p-2.5 rounded-lg border border-amber-200/60 mb-2">
+                    <div>
+                      <span className="text-gray-500 block">Stop 1 (Origin):</span>
+                      <span className="font-bold text-gray-900">🏭 {normalizePlant(viewDetailsModal.from_location)}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block">Stop 2 (Co-Load):</span>
+                      <span className="font-bold text-gray-900">
+                        🏭 {resolveSecondPlant(viewDetailsModal) || resolveNextLoadingPlant(viewDetailsModal) || 'Designated Plant'}
+                      </span>
+                    </div>
+                  </div>
+                  {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' && (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-amber-800 text-[11px]">
+                        Arriving at {resolveNextLoadingPlant(viewDetailsModal)} to load remaining models.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = viewDetailsModal;
+                          setViewDetailsModal(null);
+                          setCoLoadingModalData(d);
+                        }}
+                        className="btn-primary text-xs py-1 px-3 bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                      >
+                        ➕ Load Models Now
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-2">
                 Items ({viewDetailsModal.dispatch_items?.length || 0})
               </h4>
@@ -1611,6 +1829,7 @@ export default function DispatchListPage() {
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold text-gray-600">Model Name</th>
                       <th className="px-3 py-2 text-left font-semibold text-gray-600">Model Code</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Loaded At</th>
                       <th className="px-3 py-2 text-right font-semibold text-gray-600">Quantity</th>
                     </tr>
                   </thead>
@@ -1620,6 +1839,11 @@ export default function DispatchListPage() {
                         <td className="px-3 py-2 font-bold text-gray-900">{item.cooler_models?.name}</td>
                         <td className="px-3 py-2 font-mono text-gray-500 text-[11px]">
                           {item.cooler_models?.code}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-800 border border-gray-200">
+                            🏭 {resolveItemLoadedPlant(item, viewDetailsModal)}
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-right font-bold text-gray-900">{item.quantity} pcs</td>
                       </tr>
@@ -1795,6 +2019,23 @@ export default function DispatchListPage() {
           <DeliveryChallanModal
             dispatch={challanModalDispatch}
             onClose={() => setChallanModalDispatch(null)}
+          />
+        )}
+
+        {/* Modal: Secondary Plant Co-Loading Modal */}
+        {coLoadingModalData && (
+          <CoLoadingModal
+            dispatch={coLoadingModalData}
+            currentPlant={
+              activePlant === ALL_PLANTS_ID
+                ? resolveNextLoadingPlant(coLoadingModalData) || 'D4'
+                : activePlant
+            }
+            onClose={() => setCoLoadingModalData(null)}
+            onSuccess={async () => {
+              setCoLoadingModalData(null);
+              await fetchDispatches(true);
+            }}
           />
         )}
       </div>

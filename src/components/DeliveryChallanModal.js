@@ -1,21 +1,37 @@
 'use client';
 
-import { getDispatchTypeMeta, cleanDispatchRemarks } from '@/lib/dispatch';
+import {
+  getDispatchTypeMeta,
+  cleanDispatchRemarks,
+  isCoLoadingDispatch,
+  resolveNextLoadingPlant,
+  resolveSecondPlant,
+  resolveItemLoadedPlant,
+} from '@/lib/dispatch';
+import { getPlantMeta } from '@/lib/plants';
 
 /**
  * DeliveryChallanModal
  * Official printable Delivery Challan & Gate Pass for dispatched coolers.
+ * Supports single-plant dispatches and multi-plant consolidated party dispatches.
  * Optimized for both desktop preview and A4 black-and-white printing.
  */
 export default function DeliveryChallanModal({ dispatch, onClose }) {
   if (!dispatch) return null;
 
   const typeMeta = getDispatchTypeMeta(dispatch);
+  const isCoLoad = isCoLoadingDispatch(dispatch);
 
   const totalQuantity = (dispatch.dispatch_items || []).reduce(
     (acc, it) => acc + (Number(it.quantity) || 0),
     0
   );
+
+  const byPlantSummary = {};
+  (dispatch.dispatch_items || []).forEach((item) => {
+    const p = resolveItemLoadedPlant(item, dispatch);
+    byPlantSummary[p] = (byPlantSummary[p] || 0) + (Number(item.quantity) || 0);
+  });
 
   const challanNo = `JSP-DC-${(dispatch.id || '').slice(0, 8).toUpperCase()}`;
 
@@ -36,11 +52,17 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
             <span className="text-xl">🖨️</span>
             <div>
               <h3 className="text-base font-bold text-gray-900">
-                {typeMeta.type === 'local' ? 'Inter-Plant Transfer Gate Pass' : 'Delivery Challan & Gate Pass'}
+                {typeMeta.type === 'local'
+                  ? 'Inter-Plant Transfer Gate Pass'
+                  : isCoLoad
+                  ? 'Consolidated Multi-Plant Delivery Challan'
+                  : 'Delivery Challan & Gate Pass'}
               </h3>
               <p className="text-xs text-gray-500">
                 {typeMeta.type === 'local'
                   ? 'Official stock transfer documentation to our other plant division'
+                  : isCoLoad
+                  ? 'Official consolidated challan showing loading breakdown from multiple plants'
                   : 'Official dispatch documentation for driver & gate security'}
               </p>
             </div>
@@ -74,11 +96,13 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               JOSPO APPLIANCES PRIVATE LIMITED
             </h1>
             <p className="text-[11px] text-gray-600 font-medium">
-              E41 Industrial Area, Manufacturing Division • Customer Care: support@jospo.com
+              E41 • D4 • C116 Manufacturing Facilities • Customer Care: support@jospo.com
             </p>
             <div className="mt-2 inline-block px-4 py-1 bg-gray-900 text-white font-bold text-xs uppercase tracking-wider rounded print:bg-black print:text-white">
               {typeMeta.type === 'local'
                 ? 'INTER-PLANT STOCK TRANSFER CHALLAN / VEHICLE GATE PASS'
+                : isCoLoad
+                ? 'CONSOLIDATED MULTI-PLANT DELIVERY CHALLAN / VEHICLE GATE PASS'
                 : 'DELIVERY CHALLAN / VEHICLE GATE PASS'}
             </div>
           </div>
@@ -92,11 +116,16 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               <p className="font-bold text-gray-900 inline-flex items-center space-x-1">
                 <span>{typeMeta.icon}</span>
                 <span>{typeMeta.label}</span>
+                {isCoLoad && (
+                  <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-extrabold">
+                    MULTI-PLANT LOAD
+                  </span>
+                )}
               </p>
               <p className="text-[11px] text-gray-600 mt-1.5">Dispatch Date:</p>
               <p className="font-bold text-gray-900">{dispatch.dispatch_date || 'N/A'}</p>
               <p className="text-[11px] text-gray-600 mt-1.5">Origin Factory:</p>
-              <p className="font-semibold text-gray-900">{dispatch.from_location || 'Jospo E41 Factory'}</p>
+              <p className="font-semibold text-gray-900">{dispatch.from_location || 'Jospo Factory'}</p>
             </div>
             <div>
               <p className="text-[11px] text-gray-600">Vehicle / Truck No:</p>
@@ -107,6 +136,15 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
                 {typeMeta.type === 'local' ? 'Destination Plant / Receiving Unit:' : 'Destination / Consignee:'}
               </p>
               <p className="font-bold text-gray-900">{dispatch.destination || 'N/A'}</p>
+              {isCoLoad && (
+                <>
+                  <p className="text-[11px] text-gray-600 mt-1.5">Loading Stop Points:</p>
+                  <p className="font-bold text-gray-900">
+                    Stop 1: {dispatch.from_location} → Stop 2:{' '}
+                    {resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Plant 2'}
+                  </p>
+                </>
+              )}
               <p className="text-[11px] text-gray-600 mt-1.5">Authorized Dispatcher:</p>
               <p className="font-semibold text-gray-900">{dispatch.employees?.name || 'Authorized Staff'}</p>
             </div>
@@ -126,31 +164,40 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
                   <th className="border border-gray-400 px-2 py-1.5 text-[11px] font-bold">
                     Cooler Model Description
                   </th>
+                  <th className="border border-gray-400 px-2 py-1.5 text-[11px] font-bold text-center">
+                    Loaded At
+                  </th>
                   <th className="border border-gray-400 px-2 py-1.5 text-[11px] font-bold text-right w-24">
                     Qty (Units)
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {(dispatch.dispatch_items || []).map((item, index) => (
-                  <tr key={item.id || index}>
-                    <td className="border border-gray-400 px-2 py-1.5 text-center font-mono text-[11px]">
-                      {index + 1}
-                    </td>
-                    <td className="border border-gray-400 px-2 py-1.5 font-mono font-bold text-[11px]">
-                      {item.cooler_models?.code || 'N/A'}
-                    </td>
-                    <td className="border border-gray-400 px-2 py-1.5 text-[11px]">
-                      {item.cooler_models?.name || 'Air Cooler Unit'}
-                    </td>
-                    <td className="border border-gray-400 px-2 py-1.5 text-right font-bold text-[11px]">
-                      {Number(item.quantity || 0).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                {(dispatch.dispatch_items || []).map((item, index) => {
+                  const loadedPlant = resolveItemLoadedPlant(item, dispatch);
+                  return (
+                    <tr key={item.id || index}>
+                      <td className="border border-gray-400 px-2 py-1.5 text-center font-mono text-[11px]">
+                        {index + 1}
+                      </td>
+                      <td className="border border-gray-400 px-2 py-1.5 font-mono font-bold text-[11px]">
+                        {item.cooler_models?.code || 'N/A'}
+                      </td>
+                      <td className="border border-gray-400 px-2 py-1.5 text-[11px]">
+                        {item.cooler_models?.name || 'Air Cooler Unit'}
+                      </td>
+                      <td className="border border-gray-400 px-2 py-1.5 text-center text-[11px] font-semibold">
+                        {loadedPlant}
+                      </td>
+                      <td className="border border-gray-400 px-2 py-1.5 text-right font-bold text-[11px]">
+                        {Number(item.quantity || 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {/* Total Row */}
                 <tr className="bg-gray-50 font-bold border-t-2 border-gray-900 print:bg-gray-100">
-                  <td colSpan={3} className="border border-gray-400 px-3 py-2 text-right uppercase text-[11px]">
+                  <td colSpan={4} className="border border-gray-400 px-3 py-2 text-right uppercase text-[11px]">
                     Total Manufactured Units Dispatched:
                   </td>
                   <td className="border border-gray-400 px-2 py-2 text-right font-extrabold text-sm font-mono">
@@ -160,6 +207,20 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               </tbody>
             </table>
           </div>
+
+          {/* Plant Loading Breakdown Summary for Co-Loading */}
+          {isCoLoad && Object.keys(byPlantSummary).length > 1 && (
+            <div className="mb-4 p-2 bg-gray-50 border border-gray-300 rounded text-[11px] flex flex-wrap items-center justify-between font-mono print:bg-white print:border-gray-400">
+              <span className="font-bold uppercase text-[10px]">Plant Loading Breakdown:</span>
+              <div className="space-x-3">
+                {Object.entries(byPlantSummary).map(([plant, qty]) => (
+                  <span key={plant} className="font-bold">
+                    🏭 {plant}: {qty} pcs
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Remarks */}
           {cleanDispatchRemarks(dispatch.remarks) && (
@@ -173,32 +234,46 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
             Certified that the above mentioned items have been thoroughly inspected, tested, and dispatched in sound condition in sealed export cartons. Driver must verify total count before leaving factory premises.
           </div>
 
-          {/* 3 Signature Blocks */}
-          <div className="grid grid-cols-3 gap-3 pt-6 border-t-2 border-dashed border-gray-400 text-center">
-            <div>
-              <div className="h-10"></div>
-              <div className="border-t border-gray-700 pt-1">
-                <p className="font-bold text-[11px]">Store Incharge</p>
-                <p className="text-[10px] text-gray-500">Prepared &amp; Loaded</p>
+          {/* Signature Blocks */}
+          {isCoLoad ? (
+            <div className="grid grid-cols-4 gap-2 pt-6 border-t-2 border-dashed border-gray-400 text-center text-[10px]">
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">
+                  Stop 1 ({dispatch.from_location})
+                </div>
+              </div>
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">
+                  Stop 2 ({resolveSecondPlant(dispatch) || resolveNextLoadingPlant(dispatch) || 'Plant 2'})
+                </div>
+              </div>
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">Driver / Carrier</div>
+              </div>
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">Security Gate Pass</div>
               </div>
             </div>
-
-            <div>
-              <div className="h-10"></div>
-              <div className="border-t border-gray-700 pt-1">
-                <p className="font-bold text-[11px]">Security Gate Officer</p>
-                <p className="text-[10px] text-gray-500">Physical Exit Checked</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-3 pt-6 border-t-2 border-dashed border-gray-400 text-center">
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">Prepared By (Stores)</div>
+              </div>
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">Authorized Signatory</div>
+              </div>
+              <div>
+                <div className="h-10"></div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">Driver / Carrier Signature</div>
               </div>
             </div>
-
-            <div>
-              <div className="h-10"></div>
-              <div className="border-t border-gray-700 pt-1">
-                <p className="font-bold text-[11px]">Driver / Transporter</p>
-                <p className="text-[10px] text-gray-500">Sign &amp; Mobile No</p>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

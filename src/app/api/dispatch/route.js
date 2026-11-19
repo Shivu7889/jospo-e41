@@ -84,6 +84,8 @@ export async function POST(request) {
       dispatch_date = getTodayIST(),
       remarks,
       dispatch_type = 'party',
+      is_coloading = false,
+      next_loading_plant = null,
       items = [],
       auto_confirm = false,
     } = body;
@@ -93,6 +95,9 @@ export async function POST(request) {
     const destPlant = normalizedType === 'local'
       ? (destination_plant ? destination_plant.trim() : (destination.trim()))
       : null;
+
+    const isCoLoad = normalizedType === 'party' && Boolean(is_coloading);
+    const nextPlant = isCoLoad && next_loading_plant ? next_loading_plant.trim() : null;
 
     // 1. Validation
     if (!vehicle_number || !vehicle_number.trim()) {
@@ -145,9 +150,13 @@ export async function POST(request) {
       }
     }
 
-    // 3. Insert dispatch record with dispatch_type, destination_plant, transfer_status and fallback remarks
+    // 3. Insert dispatch record with dispatch_type, destination_plant, co-loading, and fallback remarks
     const initialTransferStatus = normalizedType === 'local' ? 'in_transit' : 'completed';
-    let compiledRemarks = formatDispatchRemarks(remarks, normalizedType);
+    let compiledRemarks = formatDispatchRemarks(remarks, normalizedType, {
+      isCoLoading: isCoLoad,
+      nextLoadingPlant: nextPlant,
+      status: isCoLoad ? 'part_loaded' : null,
+    });
     if (destPlant) {
       compiledRemarks = `[DestPlant: ${destPlant}] [TransferStatus: ${initialTransferStatus}] ${compiledRemarks}`.trim();
     }
@@ -163,6 +172,9 @@ export async function POST(request) {
       dispatch_type: normalizedType,
       destination_plant: destPlant,
       transfer_status: initialTransferStatus,
+      is_coloading: isCoLoad,
+      next_loading_plant: nextPlant,
+      coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
     };
 
     let { data: dispatchRecord, error: dispatchError } = await supabase
@@ -171,10 +183,21 @@ export async function POST(request) {
       .select()
       .single();
 
-    // Fallback if destination_plant or dispatch_type column does not exist yet in Supabase schema cache
-    if (dispatchError && (dispatchError.message?.includes('destination_plant') || dispatchError.message?.includes('transfer_status') || dispatchError.code === 'PGRST204')) {
+    // Fallback if destination_plant, is_coloading, etc. column does not exist yet in Supabase schema cache
+    if (
+      dispatchError &&
+      (dispatchError.message?.includes('destination_plant') ||
+        dispatchError.message?.includes('transfer_status') ||
+        dispatchError.message?.includes('is_coloading') ||
+        dispatchError.message?.includes('next_loading_plant') ||
+        dispatchError.message?.includes('coloading_status') ||
+        dispatchError.code === 'PGRST204')
+    ) {
       delete insertPayload.destination_plant;
       delete insertPayload.transfer_status;
+      delete insertPayload.is_coloading;
+      delete insertPayload.next_loading_plant;
+      delete insertPayload.coloading_status;
       if (dispatchError.message?.includes('dispatch_type')) {
         delete insertPayload.dispatch_type;
       }
@@ -196,11 +219,24 @@ export async function POST(request) {
       dispatch_id: dispatchRecord.id,
       model_id: it.model_id,
       quantity: Number(it.quantity),
+      loaded_plant: normalizedFromPlant,
+      loaded_by: employeeId,
     }));
 
-    const { error: itemsError } = await supabase
+    let { error: itemsError } = await supabase
       .from('dispatch_items')
       .insert(lineItems);
+
+    if (itemsError && itemsError.message?.includes('loaded_plant')) {
+      // Fallback if loaded_plant column not added yet
+      const fallbackItems = items.map((it) => ({
+        dispatch_id: dispatchRecord.id,
+        model_id: it.model_id,
+        quantity: Number(it.quantity),
+      }));
+      const fbResult = await supabase.from('dispatch_items').insert(fallbackItems);
+      itemsError = fbResult.error;
+    }
 
     if (itemsError) {
       // Rollback dispatch header
