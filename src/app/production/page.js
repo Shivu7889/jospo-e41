@@ -16,6 +16,8 @@ import {
   DEFAULT_PLANT_ID,
   normalizePlant,
   getPlantMeta,
+  isModelManufacturableAtPlant,
+  resolveModelManufacturingPlant,
 } from '@/lib/plants';
 
 export default function ProductionPage() {
@@ -96,25 +98,32 @@ export default function ProductionPage() {
   const [logEntries, setLogEntries] = useState([]);
   const [loadingLog, setLoadingLog] = useState(true);
 
-  // Fetch active cooler models for the dropdown
+  // Fetch active cooler models for the dropdown (including manufacturing plant)
   const fetchModels = useCallback(async () => {
     try {
       setLoadingModels(true);
-      const { data, error } = await supabase
-        .from('cooler_models')
-        .select('id, name, code, is_active')
-        .eq('is_active', true)
-        .order('code', { ascending: true });
-
-      if (error) throw error;
-      setModels(data || []);
+      const res = await fetch('/api/models?active_only=true');
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setModels(data.models || []);
+      } else {
+        throw new Error(data.error || 'Failed to load models');
+      }
     } catch (err) {
       console.error('Error fetching models:', err);
       showToast('Could not load cooler models list', 'error');
     } finally {
       setLoadingModels(false);
     }
-  }, [supabase, showToast]);
+  }, [showToast]);
+
+  // Models permitted to be manufactured at the active entry plant
+  // E41 G2: only E41 G2 models
+  // C116: only C116 models
+  // D4: only D4 models (cannot add E41 G2 or C116 production; those arrive via transfer)
+  const manufacturableModels = useMemo(() => {
+    return models.filter((m) => isModelManufacturableAtPlant(m, entryPlant));
+  }, [models, entryPlant]);
 
   // Fetch contractor list from /api/contractors
   const fetchThekedars = useCallback(async () => {
@@ -674,12 +683,38 @@ export default function ProductionPage() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="label mb-0">
-                      Models & Quantities <span className="text-red-500">*</span>
+                      Models & Quantities ({manufacturableModels.length} manufacturable at {entryPlant}) <span className="text-red-500">*</span>
                     </label>
                     <span className="text-[11px] text-gray-400">
                       Units manufactured
                     </span>
                   </div>
+
+                  {/* D4 Central Hub Notice */}
+                  {entryPlant === 'D4' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-start space-x-2">
+                      <span className="text-base flex-shrink-0">ℹ️</span>
+                      <div className="space-y-0.5">
+                        <p className="font-bold">Plant D4 Central Warehouse Rule:</p>
+                        <p className="text-[11px] text-blue-800 leading-relaxed">
+                          Plant D4 only assembles D4-designated models. Cooler models manufactured at E41 G2 and C116 are received via <strong>Inbound Transfers</strong> under Dispatches and cannot be added as direct production here.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Empty Models Notice */}
+                  {!loadingModels && manufacturableModels.length === 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span>⚠️</span>
+                        <span>No models are currently designated for assembly at <strong>{entryPlant}</strong>.</span>
+                      </div>
+                      <Link href="/models" className="font-bold text-amber-800 underline hover:text-amber-950">
+                        Assign in Models →
+                      </Link>
+                    </div>
+                  )}
 
                   {rows.map((row, index) => (
                     <div
@@ -689,11 +724,17 @@ export default function ProductionPage() {
                       {/* Searchable Model Dropdown */}
                       <div className="flex-1 min-w-0">
                         <SearchableSelect
-                          options={models}
+                          options={manufacturableModels}
                           value={row.model_id}
                           onChange={(val) => handleRowChange(row.id, 'model_id', val)}
-                          disabled={loadingModels}
-                          placeholder={loadingModels ? 'Loading models...' : '-- Select or Search Model --'}
+                          disabled={loadingModels || manufacturableModels.length === 0}
+                          placeholder={
+                            loadingModels
+                              ? 'Loading models...'
+                              : manufacturableModels.length === 0
+                              ? `No models assigned to ${entryPlant}`
+                              : `-- Select ${entryPlant} Model (${manufacturableModels.length} available) --`
+                          }
                           required
                         />
                       </div>

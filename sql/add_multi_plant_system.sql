@@ -15,14 +15,22 @@ ALTER TABLE public.employees
   ADD CONSTRAINT employees_role_check 
   CHECK (role IN ('owner', 'admin', 'production', 'dispatch'));
 
--- 2. PRODUCTION ENTRIES: Add plant column
+-- 2. COOLER MODELS: Add manufacturing_plant column
+-- Designates which facility manufactures this model (E41 G2, C116, or D4)
+ALTER TABLE public.cooler_models 
+  ADD COLUMN IF NOT EXISTS manufacturing_plant TEXT NOT NULL DEFAULT 'E41 G2';
+
+CREATE INDEX IF NOT EXISTS idx_cooler_models_manufacturing_plant 
+  ON public.cooler_models(manufacturing_plant);
+
+-- 3. PRODUCTION ENTRIES: Add plant column
 ALTER TABLE public.production_entries 
   ADD COLUMN IF NOT EXISTS plant TEXT NOT NULL DEFAULT 'E41 G2';
 
 CREATE INDEX IF NOT EXISTS idx_production_plant 
   ON public.production_entries(plant, production_date);
 
--- 3. DISPATCHES: Add multi-plant transfer columns
+-- 4. DISPATCHES: Add multi-plant transfer columns
 ALTER TABLE public.dispatches 
   ADD COLUMN IF NOT EXISTS destination_plant TEXT,
   ADD COLUMN IF NOT EXISTS transfer_status TEXT DEFAULT 'completed',

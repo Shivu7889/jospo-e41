@@ -238,6 +238,7 @@ export default function StockPage() {
         'S.No': idx + 1,
         'Model Code': item.model_code || '',
         'Model Name': item.model_name || '',
+        'Manufacturing Facility': item.manufacturing_plant || 'E41 G2',
         'Current Stock (Units)': stock,
         'Inventory Status': status,
         'Active': item.is_active ? 'Yes' : 'No',
@@ -289,6 +290,24 @@ export default function StockPage() {
           key: 'model_name',
           label: 'Cooler Model',
           render: (val) => <span className="font-semibold text-gray-900 text-sm">{val}</span>,
+        },
+        {
+          key: 'manufacturing_plant',
+          label: 'Mfg Facility',
+          render: (val) => {
+            const plant = val || 'E41 G2';
+            const badgeColor =
+              plant === 'E41 G2'
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                : plant === 'D4'
+                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+            return (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${badgeColor}`}>
+                🏭 {plant}
+              </span>
+            );
+          },
         },
         {
           key: 'e41_stock',
@@ -388,7 +407,42 @@ export default function StockPage() {
       {
         key: 'model_name',
         label: 'Model Name',
-        render: (val) => <span className="font-semibold text-gray-900 text-sm">{val}</span>,
+        render: (val, row) => (
+          <div>
+            <span className="font-semibold text-gray-900 text-sm block">{val}</span>
+            {activePlant === 'D4' && (
+              <span className="text-[10px] inline-flex items-center mt-0.5">
+                {row.is_transferred_to_hub ? (
+                  <span className="text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium">
+                    🚚 Transferred from {row.manufacturing_plant || 'E41 G2'}
+                  </span>
+                ) : (
+                  <span className="text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded font-medium">
+                    🏭 D4 Manufactured
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: 'manufacturing_plant',
+        label: 'Mfg Facility',
+        render: (val) => {
+          const plant = val || 'E41 G2';
+          const badgeColor =
+            plant === 'E41 G2'
+              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+              : plant === 'D4'
+              ? 'bg-purple-50 text-purple-700 border-purple-200'
+              : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+          return (
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${badgeColor}`}>
+              🏭 {plant}
+            </span>
+          );
+        },
       },
       {
         key: 'current_stock',
@@ -695,6 +749,48 @@ export default function StockPage() {
 
         {/* SECTION 2: Current Stock Table */}
         <div className="space-y-4">
+          {/* Plant Role & Stock Policy Informative Banner */}
+          {activePlant === 'D4' ? (
+            <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-200 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-purple-950 shadow-xs">
+              <span className="text-xl flex-shrink-0">🏢</span>
+              <div>
+                <p className="font-bold text-purple-900">Plant D4 — Central Warehouse Hub & Assembly</p>
+                <p className="text-purple-700 mt-0.5 leading-relaxed">
+                  Displays complete central stock for <strong>all cooler models</strong>. Units manufactured at <strong>E41 G2</strong> and <strong>C116</strong> arrive here via inbound local transfers. Plant D4 also directly manufactures and stocks its own designated models.
+                </p>
+              </div>
+            </div>
+          ) : activePlant === 'E41 G2' ? (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-indigo-950 shadow-xs">
+              <span className="text-xl flex-shrink-0">🏭</span>
+              <div>
+                <p className="font-bold text-indigo-900">Plant E41 G2 — Manufacturing Stock</p>
+                <p className="text-indigo-700 mt-0.5 leading-relaxed">
+                  Displays stock exclusively for cooler models manufactured at <strong>E41 G2</strong>. Finished units are transferred locally to <strong>D4 Central Hub</strong> or dispatched to external parties.
+                </p>
+              </div>
+            </div>
+          ) : activePlant === 'C116' ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-emerald-950 shadow-xs">
+              <span className="text-xl flex-shrink-0">🏭</span>
+              <div>
+                <p className="font-bold text-emerald-900">Plant C116 — Manufacturing Stock</p>
+                <p className="text-emerald-700 mt-0.5 leading-relaxed">
+                  Displays stock exclusively for cooler models manufactured at <strong>C116</strong>. Finished units are transferred locally to <strong>D4 Central Hub</strong> or dispatched to external parties.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-blue-950 shadow-xs">
+              <span className="text-xl flex-shrink-0">👑</span>
+              <div>
+                <p className="font-bold text-blue-900">Consolidated Multi-Plant Inventory Matrix (Owner View)</p>
+                <p className="text-blue-700 mt-0.5 leading-relaxed">
+                  Complete enterprise overview showing manufacturing origins, individual plant balances across <strong>E41 G2</strong>, <strong>D4</strong>, and <strong>C116</strong>, and aggregate on-hand units.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-gray-900 flex items-center space-x-2">

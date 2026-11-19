@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerSupabase, createAdminSupabase } from '@/lib/supabase-server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
-import { normalizePlant } from '@/lib/plants';
+import { normalizePlant, resolveModelManufacturingPlant, ALL_PLANTS_ID } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
@@ -334,18 +334,30 @@ export async function POST(request) {
       }
     }
 
-    // Fetch all cooler models referenced to verify they exist and are active
+    // Fetch all cooler models referenced to verify they exist, are active, and belong to this plant
     const modelIds = [...new Set(rawItems.map((i) => i.model_id))];
-    const { data: modelsData, error: modelsError } = await supabase
+    let modelsData = null;
+    const { data: mDataWithPlant, error: mErrWithPlant } = await supabase
       .from('cooler_models')
-      .select('id, name, code, is_active')
+      .select('id, name, code, is_active, description, manufacturing_plant')
       .in('id', modelIds);
 
-    if (modelsError || !modelsData) {
+    if (mErrWithPlant && (mErrWithPlant.code === 'PGRST204' || mErrWithPlant.message?.includes('manufacturing_plant'))) {
+      const { data: fbData, error: fbErr } = await supabase
+        .from('cooler_models')
+        .select('id, name, code, is_active, description')
+        .in('id', modelIds);
+      if (fbErr || !fbData) throw new Error('Failed to verify cooler models.');
+      modelsData = fbData;
+    } else if (mErrWithPlant || !mDataWithPlant) {
       throw new Error('Failed to verify cooler models.');
+    } else {
+      modelsData = mDataWithPlant;
     }
 
     const modelsMap = Object.fromEntries(modelsData.map((m) => [m.id, m]));
+    const targetPlant = normalizePlant(body.plant || employee.plant || 'E41 G2');
+
     for (const item of rawItems) {
       const model = modelsMap[item.model_id];
       if (!model) {
@@ -359,6 +371,18 @@ export async function POST(request) {
           {
             success: false,
             error: `Model "${model.name} (${model.code})" is marked inactive and cannot accept production entries.`,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Check plant manufacturing authorization
+      const modelMfgPlant = resolveModelManufacturingPlant(model);
+      if (targetPlant !== ALL_PLANTS_ID && modelMfgPlant !== targetPlant) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Model "${model.code}" is manufactured exclusively at plant "${modelMfgPlant}". Plant "${targetPlant}" cannot assemble or record production for this model. (Material must be transferred via dispatch).`,
           },
           { status: 400 }
         );

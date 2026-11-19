@@ -1,12 +1,24 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import {
+  normalizePlant,
+  resolveModelManufacturingPlant,
+  formatModelDescription,
+  isModelManufacturableAtPlant,
+  isModelVisibleInPlantStock,
+  DEFAULT_PLANT_ID,
+  ALL_PLANTS_ID,
+} from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/models
  * List cooler models with their current stock from current_stock view
- * Query param: active_only (boolean, default: true)
+ * Query params:
+ * - active_only (boolean, default: true)
+ * - for_plant (string, e.g. 'E41 G2', 'D4', 'C116', 'ALL')
+ * - view ('production' | 'stock' | 'all')
  */
 export async function GET(request) {
   try {
@@ -16,23 +28,41 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const activeOnlyParam = searchParams.get('active_only');
     const activeOnly = activeOnlyParam !== 'false';
+    const forPlant = searchParams.get('for_plant') || '';
+    const view = searchParams.get('view') || '';
 
-    // 1. Fetch cooler models
-    let modelsQuery = supabase
+    // 1. Fetch cooler models (dual-mode: native manufacturing_plant column with fallback)
+    let models = [];
+    let queryWithPlant = supabase
       .from('cooler_models')
-      .select('id, name, code, description, qr_data, is_active, created_at, updated_at')
+      .select('id, name, code, description, qr_data, is_active, created_at, updated_at, manufacturing_plant')
       .order('code', { ascending: true });
 
     if (activeOnly) {
-      modelsQuery = modelsQuery.eq('is_active', true);
+      queryWithPlant = queryWithPlant.eq('is_active', true);
     }
 
-    const { data: models, error: modelsError } = await modelsQuery;
-    if (modelsError) {
-      throw modelsError;
+    const { data: dataWithPlant, error: errorWithPlant } = await queryWithPlant;
+
+    if (errorWithPlant && (errorWithPlant.code === 'PGRST204' || errorWithPlant.message?.includes('manufacturing_plant'))) {
+      let fallbackQuery = supabase
+        .from('cooler_models')
+        .select('id, name, code, description, qr_data, is_active, created_at, updated_at')
+        .order('code', { ascending: true });
+
+      if (activeOnly) {
+        fallbackQuery = fallbackQuery.eq('is_active', true);
+      }
+      const { data: fallbackData, error: fallbackError } = await fallbackQuery;
+      if (fallbackError) throw fallbackError;
+      models = fallbackData || [];
+    } else if (errorWithPlant) {
+      throw errorWithPlant;
+    } else {
+      models = dataWithPlant || [];
     }
 
-    // 2. Fetch stock levels from current_stock view
+    // 2. Fetch stock levels
     let stockMap = {};
     const { data: stockData, error: stockError } = await supabase
       .from('current_stock')
@@ -43,7 +73,6 @@ export async function GET(request) {
         stockMap[row.model_id] = Number(row.current_stock ?? 0);
       });
     } else {
-      // Fallback: calculate stock from stock_transactions directly
       try {
         const { data: txData } = await supabase
           .from('stock_transactions')
@@ -58,11 +87,30 @@ export async function GET(request) {
       }
     }
 
-    // 3. Combine model data with current stock
-    const modelsWithStock = (models || []).map((m) => ({
-      ...m,
-      current_stock: stockMap[m.id] ?? 0,
-    }));
+    // 3. Attach normalized manufacturing_plant and stock
+    let modelsWithStock = (models || []).map((m) => {
+      const resolvedPlant = resolveModelManufacturingPlant(m);
+      return {
+        ...m,
+        manufacturing_plant: resolvedPlant,
+        current_stock: stockMap[m.id] ?? 0,
+      };
+    });
+
+    // 4. Apply plant filtering based on user perspective:
+    // - If view === 'production': filter by what this plant can assemble/manufacture
+    //   (E41 G2 can only assemble E41 G2 models; C116 can only assemble C116 models;
+    //    D4 can only assemble D4 models — E41 G2 and C116 models arrive at D4 only via transfer!)
+    if (view === 'production' && forPlant && forPlant !== ALL_PLANTS_ID) {
+      modelsWithStock = modelsWithStock.filter((m) => isModelManufacturableAtPlant(m, forPlant));
+    } else if (view === 'stock' && forPlant && forPlant !== ALL_PLANTS_ID) {
+      // - If view === 'stock': E41 G2 only sees E41 G2 models; C116 only sees C116 models;
+      //   D4 sees ALL models because it holds stock of everything!
+      modelsWithStock = modelsWithStock.filter((m) => isModelVisibleInPlantStock(m, forPlant));
+    } else if (forPlant && forPlant !== ALL_PLANTS_ID && !view) {
+      // General filter by manufacturing plant if explicitly requested
+      modelsWithStock = modelsWithStock.filter((m) => m.manufacturing_plant === normalizePlant(forPlant));
+    }
 
     return NextResponse.json({
       success: true,
@@ -81,23 +129,23 @@ export async function GET(request) {
 /**
  * POST /api/models
  * Create a new cooler model
- * Body: { name, code, description, qr_data }
- * Required role: admin
+ * Body: { name, code, description, qr_data, manufacturing_plant }
+ * Required role: admin or owner
  */
 export async function POST(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
-    // 3. Parse and validate body
     const body = await request.json();
-    const { name, code, description, qr_data } = body;
+    const { name, code, description, qr_data, manufacturing_plant } = body;
 
     const trimmedName = typeof name === 'string' ? name.trim() : '';
     const trimmedCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
     const trimmedQr = typeof qr_data === 'string' ? qr_data.trim() : '';
-    const trimmedDesc = typeof description === 'string' ? description.trim() : null;
+    const assignedPlant = normalizePlant(manufacturing_plant || DEFAULT_PLANT_ID);
+    const formattedDesc = formatModelDescription(description || '', assignedPlant);
 
     if (!trimmedName) {
       return NextResponse.json(
@@ -148,29 +196,48 @@ export async function POST(request) {
       );
     }
 
-    // 4. Insert new cooler model
-    const { data: newModel, error: insertError } = await supabase
+    // Insert new cooler model (try with manufacturing_plant column, fallback to description tag)
+    let newModel = null;
+    let insertRes = await supabase
       .from('cooler_models')
       .insert({
         name: trimmedName,
         code: trimmedCode,
-        description: trimmedDesc || null,
+        description: formattedDesc,
         qr_data: trimmedQr,
+        manufacturing_plant: assignedPlant,
         is_active: true,
       })
       .select()
       .single();
 
-    if (insertError) {
-      throw insertError;
+    if (insertRes.error && (insertRes.error.code === 'PGRST204' || insertRes.error.message?.includes('manufacturing_plant'))) {
+      const fallbackInsert = await supabase
+        .from('cooler_models')
+        .insert({
+          name: trimmedName,
+          code: trimmedCode,
+          description: formattedDesc,
+          qr_data: trimmedQr,
+          is_active: true,
+        })
+        .select()
+        .single();
+      if (fallbackInsert.error) throw fallbackInsert.error;
+      newModel = fallbackInsert.data;
+    } else if (insertRes.error) {
+      throw insertRes.error;
+    } else {
+      newModel = insertRes.data;
     }
 
     return NextResponse.json(
       {
         success: true,
-        message: `Model ${trimmedCode} created successfully.`,
+        message: `Model ${trimmedCode} created successfully (Assigned to ${assignedPlant}).`,
         model: {
           ...newModel,
+          manufacturing_plant: assignedPlant,
           current_stock: 0,
         },
       },
@@ -187,18 +254,18 @@ export async function POST(request) {
 
 /**
  * PATCH /api/models
- * Update model status (toggle active/inactive)
- * Body: { id, is_active }
- * Required role: admin
+ * Update model status or details
+ * Body: { id, is_active, name, description, code, qr_data, manufacturing_plant }
+ * Required role: admin or owner
  */
 export async function PATCH(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
     const body = await request.json();
-    const { id, is_active, name, description, code, qr_data } = body;
+    const { id, is_active, name, description, code, qr_data, manufacturing_plant } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -216,9 +283,6 @@ export async function PATCH(request) {
     }
     if (typeof name === 'string' && name.trim()) {
       updatePayload.name = name.trim();
-    }
-    if (typeof description !== 'undefined') {
-      updatePayload.description = description ? description.trim() : null;
     }
     if (typeof code === 'string' && code.trim()) {
       const cleanCode = code.trim().toUpperCase();
@@ -253,20 +317,51 @@ export async function PATCH(request) {
       updatePayload.qr_data = cleanQR;
     }
 
-    const { data: updatedModel, error: updateError } = await supabase
+    let assignedPlant = null;
+    if (typeof manufacturing_plant === 'string' && manufacturing_plant.trim()) {
+      assignedPlant = normalizePlant(manufacturing_plant);
+      updatePayload.manufacturing_plant = assignedPlant;
+    }
+
+    if (typeof description !== 'undefined' || assignedPlant) {
+      const baseDesc = typeof description !== 'undefined' ? description : '';
+      if (assignedPlant) {
+        updatePayload.description = formatModelDescription(baseDesc, assignedPlant);
+      } else if (typeof description !== 'undefined') {
+        updatePayload.description = description ? description.trim() : null;
+      }
+    }
+
+    let updatedModel = null;
+    let updateRes = await supabase
       .from('cooler_models')
       .update(updatePayload)
       .eq('id', id)
       .select()
       .single();
 
-    if (updateError) {
-      throw updateError;
+    if (updateRes.error && (updateRes.error.code === 'PGRST204' || updateRes.error.message?.includes('manufacturing_plant'))) {
+      delete updatePayload.manufacturing_plant;
+      const fallbackUpdate = await supabase
+        .from('cooler_models')
+        .update(updatePayload)
+        .eq('id', id)
+        .select()
+        .single();
+      if (fallbackUpdate.error) throw fallbackUpdate.error;
+      updatedModel = fallbackUpdate.data;
+    } else if (updateRes.error) {
+      throw updateRes.error;
+    } else {
+      updatedModel = updateRes.data;
     }
 
     return NextResponse.json({
       success: true,
-      model: updatedModel,
+      model: {
+        ...updatedModel,
+        manufacturing_plant: resolveModelManufacturingPlant(updatedModel),
+      },
     });
   } catch (error) {
     console.error('API /api/models PATCH error:', error);

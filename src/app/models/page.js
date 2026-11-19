@@ -15,6 +15,7 @@ export default function ModelsPage() {
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
   const [qrData, setQrData] = useState('');
+  const [manufacturingPlant, setManufacturingPlant] = useState('E41 G2');
   const [codeManuallyEdited, setCodeManuallyEdited] = useState(false);
   const [qrManuallyEdited, setQrManuallyEdited] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -23,6 +24,7 @@ export default function ModelsPage() {
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [plantFilter, setPlantFilter] = useState('ALL');
   const [filterActiveOnly, setFilterActiveOnly] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState(null);
 
@@ -35,6 +37,7 @@ export default function ModelsPage() {
   const [editCode, setEditCode] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editQrData, setEditQrData] = useState('');
+  const [editManufacturingPlant, setEditManufacturingPlant] = useState('E41 G2');
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Helper to generate code from name
@@ -137,6 +140,7 @@ export default function ModelsPage() {
           code: code.trim().toUpperCase(),
           description: description.trim() || null,
           qr_data: qrData.trim(),
+          manufacturing_plant: manufacturingPlant,
         }),
       });
 
@@ -145,7 +149,7 @@ export default function ModelsPage() {
         throw new Error(result.error || 'Failed to create model');
       }
 
-      showToast(`Model "${result.model.code}" created successfully!`, 'success');
+      showToast(`Model "${result.model.code}" created successfully for ${manufacturingPlant}!`, 'success');
 
       // Optimistically add the new model immediately to the list
       if (result.model) {
@@ -161,6 +165,7 @@ export default function ModelsPage() {
       setCode('');
       setDescription('');
       setQrData('');
+      setManufacturingPlant('E41 G2');
       setCodeManuallyEdited(false);
       setQrManuallyEdited(false);
 
@@ -227,6 +232,7 @@ export default function ModelsPage() {
     setEditCode(model.code || '');
     setEditDescription(model.description || '');
     setEditQrData(model.qr_data || '');
+    setEditManufacturingPlant(model.manufacturing_plant || 'E41 G2');
   };
 
   // Submit Model Edit
@@ -257,6 +263,7 @@ export default function ModelsPage() {
           code: trimmedCode,
           description: editDescription.trim() || null,
           qr_data: editQrData.trim() || null,
+          manufacturing_plant: editManufacturingPlant,
         }),
       });
 
@@ -272,6 +279,7 @@ export default function ModelsPage() {
             ? {
                 ...m,
                 ...result.model,
+                manufacturing_plant: editManufacturingPlant,
                 current_stock: m.current_stock, // Preserve calculated stock
               }
             : m
@@ -286,8 +294,11 @@ export default function ModelsPage() {
     }
   };
 
-  // Filtered models for search
+  // Filtered models for search & plant filter
   const filteredModels = models.filter((m) => {
+    if (plantFilter !== 'ALL' && (m.manufacturing_plant || 'E41 G2') !== plantFilter) {
+      return false;
+    }
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
@@ -323,6 +334,29 @@ export default function ModelsPage() {
           )}
         </div>
       ),
+    },
+    {
+      key: 'manufacturing_plant',
+      label: 'Manufacturing Facility',
+      render: (val, row) => {
+        const p = val || row.manufacturing_plant || 'E41 G2';
+        const isD4 = p === 'D4';
+        const isC116 = p === 'C116';
+        return (
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${
+              isD4
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : isC116
+                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+            }`}
+          >
+            <span>🏭</span>
+            <span>{p} Plant</span>
+          </span>
+        );
+      },
     },
     {
       key: 'qr_data',
@@ -483,7 +517,7 @@ export default function ModelsPage() {
           </div>
 
           <form onSubmit={handleCreateModel} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               {/* Model Name */}
               <div>
                 <label className="label">
@@ -517,6 +551,26 @@ export default function ModelsPage() {
                 />
                 <span className="text-[11px] text-gray-400 mt-1 block">
                   Short unique code identifier
+                </span>
+              </div>
+
+              {/* Manufacturing Facility */}
+              <div>
+                <label className="label">
+                  Manufacturing Facility <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={manufacturingPlant}
+                  onChange={(e) => setManufacturingPlant(e.target.value)}
+                  className="input-field text-xs font-semibold bg-white"
+                  required
+                >
+                  <option value="E41 G2">🏭 E41 G2 (Unit 1)</option>
+                  <option value="C116">🏭 C116 (Unit 3)</option>
+                  <option value="D4">🏭 D4 (Unit 2 & Central Hub)</option>
+                </select>
+                <span className="text-[11px] text-gray-400 mt-1 block">
+                  Plant that manufactures this model
                 </span>
               </div>
 
@@ -607,7 +661,7 @@ export default function ModelsPage() {
 
         {/* SECTION 2: Models List */}
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-gray-900">Registered Cooler Models</h2>
               <p className="text-xs text-gray-500 mt-0.5">
@@ -615,8 +669,30 @@ export default function ModelsPage() {
               </p>
             </div>
 
-            {/* Filters & Search */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            {/* Plant Filter Pills & Search */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
+                {[
+                  { id: 'ALL', label: 'All Plants' },
+                  { id: 'E41 G2', label: '🏭 E41 G2' },
+                  { id: 'C116', label: '🏭 C116' },
+                  { id: 'D4', label: '🏭 D4' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setPlantFilter(tab.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                      plantFilter === tab.id
+                        ? 'bg-white text-gray-900 shadow-xs border border-gray-200'
+                        : 'text-gray-500 hover:text-gray-900'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
               {/* Search */}
               <div className="relative">
                 <input
@@ -826,6 +902,26 @@ export default function ModelsPage() {
                     />
                     <span className="text-[10px] text-gray-400 mt-0.5 block">Encoded in carton QR labels</span>
                   </div>
+                </div>
+
+                {/* Manufacturing Facility */}
+                <div>
+                  <label className="text-xs font-bold text-gray-700 block mb-1">
+                    Manufacturing Facility <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editManufacturingPlant}
+                    onChange={(e) => setEditManufacturingPlant(e.target.value)}
+                    className="input-field text-xs font-semibold bg-white"
+                    required
+                  >
+                    <option value="E41 G2">🏭 E41 G2 (Unit 1)</option>
+                    <option value="C116">🏭 C116 (Unit 3)</option>
+                    <option value="D4">🏭 D4 (Unit 2 & Central Hub)</option>
+                  </select>
+                  <span className="text-[10px] text-gray-400 mt-0.5 block">
+                    Designated plant allowed to assemble and log production for this model
+                  </span>
                 </div>
 
                 {/* Description */}

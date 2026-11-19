@@ -1,16 +1,25 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
-import { normalizePlant, isOwnerUser, ALL_PLANTS_ID } from '@/lib/plants';
+import {
+  normalizePlant,
+  isOwnerUser,
+  resolveModelManufacturingPlant,
+  isModelVisibleInPlantStock,
+  ALL_PLANTS_ID,
+} from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/stock
  * Returns stock scoped to plant or consolidated multi-plant matrix
- * Query params:
- *   - model_id (optional: filter stock view by specific model)
- *   - plant (optional: 'ALL', 'E41 G2', 'D4', 'C116')
+ * Special Business Topology:
+ * - E41 G2: Only E41 G2 manufactured models are visible in stock.
+ * - C116: Only C116 manufactured models are visible in stock.
+ * - D4: ALL models (E41 G2, C116, and D4) are visible in stock, because D4 is the
+ *   central hub / storage where transferred goods from E41 G2 and C116 accumulate.
+ * - ALL: Owner consolidated view across all 3 facilities.
  */
 export async function GET(request) {
   try {
@@ -29,10 +38,10 @@ export async function GET(request) {
 
     const todayStr = getTodayIST();
 
-    // 1. Fetch active cooler models
+    // 1. Fetch active cooler models (dual-mode: native manufacturing_plant with fallback)
     let cmQuery = supabase
       .from('cooler_models')
-      .select('id, name, code, description, is_active')
+      .select('id, name, code, description, is_active, manufacturing_plant')
       .eq('is_active', true)
       .order('code', { ascending: true });
 
@@ -40,8 +49,26 @@ export async function GET(request) {
       cmQuery = cmQuery.eq('id', modelIdFilter);
     }
 
-    const { data: models, error: modelsErr } = await cmQuery;
-    if (modelsErr) throw modelsErr;
+    let { data: rawModels, error: modelsErr } = await cmQuery;
+    if (modelsErr && (modelsErr.code === 'PGRST204' || modelsErr.message?.includes('manufacturing_plant'))) {
+      let fbQuery = supabase
+        .from('cooler_models')
+        .select('id, name, code, description, is_active')
+        .eq('is_active', true)
+        .order('code', { ascending: true });
+      if (modelIdFilter) fbQuery = fbQuery.eq('id', modelIdFilter);
+      const fbResult = await fbQuery;
+      if (fbResult.error) throw fbResult.error;
+      rawModels = fbResult.data;
+    } else if (modelsErr) {
+      throw modelsErr;
+    }
+
+    // Filter models visible in stock for this plant
+    // D4 and ALL see ALL models; E41 G2 only sees E41 G2 models; C116 only sees C116 models
+    const visibleModels = (rawModels || []).filter((m) =>
+      isModelVisibleInPlantStock(m, targetPlant)
+    );
 
     // 2. Fetch stock transactions with plant info
     let txQuery = supabase
@@ -50,7 +77,6 @@ export async function GET(request) {
 
     let { data: transactions, error: txErr } = await txQuery;
     if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
-      // Fallback if plant column doesn't exist yet
       const fbTx = await supabase.from('stock_transactions').select('model_id, quantity, notes');
       transactions = fbTx.data || [];
     }
@@ -82,11 +108,12 @@ export async function GET(request) {
     });
 
     // Format currentStock array based on targetPlant
-    const currentStock = (models || []).map((m) => {
+    const currentStock = visibleModels.map((m) => {
       const e41Qty = stockMapByPlant['E41 G2'][m.id] || 0;
       const d4Qty = stockMapByPlant['D4'][m.id] || 0;
       const c116Qty = stockMapByPlant['C116'][m.id] || 0;
       const totalQty = stockMapByPlant.total[m.id] || 0;
+      const mfgPlant = resolveModelManufacturingPlant(m);
 
       let effectiveStock = totalQty;
       if (targetPlant === 'E41 G2') effectiveStock = e41Qty;
@@ -97,6 +124,9 @@ export async function GET(request) {
         model_id: m.id,
         model_name: m.name,
         model_code: m.code,
+        manufacturing_plant: mfgPlant,
+        // In D4, indicate if model is locally transferred from E41 G2 / C116 or manufactured at D4
+        is_transferred_to_hub: targetPlant === 'D4' && mfgPlant !== 'D4',
         current_stock: effectiveStock,
         plant_breakdown: {
           'E41 G2': e41Qty,
@@ -160,7 +190,7 @@ export async function GET(request) {
           totalStock: Math.max(0, totalStock),
           todayProduction,
           todayDispatch,
-          activeModelsCount: models.length,
+          activeModelsCount: visibleModels.length,
         },
         timestamp: new Date().toISOString(),
       },

@@ -193,3 +193,65 @@ export function resolveTransferStatus(dispatch) {
   }
   return 'completed';
 }
+
+/**
+ * Clean model description of [MfgPlant: ...] tags
+ */
+export function cleanModelDescription(desc) {
+  if (!desc) return '';
+  return desc.replace(/\[(?:MfgPlant|Plant):\s*[^\]]+\]/gi, '').trim();
+}
+
+/**
+ * Format model description with fallback [MfgPlant: ...] tag
+ */
+export function formatModelDescription(desc, plant) {
+  const clean = cleanModelDescription(desc);
+  const tag = `[MfgPlant: ${normalizePlant(plant)}]`;
+  return clean ? `${tag} ${clean}` : tag;
+}
+
+/**
+ * Resolve which manufacturing plant owns/produces this model.
+ * E41 G2, C116, or D4.
+ */
+export function resolveModelManufacturingPlant(model, defaultPlant = DEFAULT_PLANT_ID) {
+  if (model?.manufacturing_plant) {
+    return normalizePlant(model.manufacturing_plant);
+  }
+  if (model?.description) {
+    const match = model.description.match(/\[(?:MfgPlant|Plant):\s*([^\]]+)\]/i);
+    if (match && match[1]) {
+      return normalizePlant(match[1]);
+    }
+  }
+  return normalizePlant(defaultPlant);
+}
+
+/**
+ * Check if a plant is allowed to manufacture / add production for this model.
+ * - E41 G2: only manufactures E41 G2 models.
+ * - C116: only manufactures C116 models.
+ * - D4: only manufactures D4 models (cannot add production for E41 G2 / C116 models).
+ * - ALL / Owner: permitted based on active plant selection.
+ */
+export function isModelManufacturableAtPlant(model, plant) {
+  if (!plant || plant === ALL_PLANTS_ID) return true;
+  const mfgPlant = resolveModelManufacturingPlant(model);
+  return normalizePlant(plant) === mfgPlant;
+}
+
+/**
+ * Check if a model should be visible in a plant's physical stock overview.
+ * - E41 G2: only E41 G2 models.
+ * - C116: only C116 models.
+ * - D4: ALL models (E41 G2, C116, and D4) because D4 is the central storage hub receiving transfers from both!
+ * - ALL (Owner): ALL models.
+ */
+export function isModelVisibleInPlantStock(model, plant) {
+  const norm = normalizePlant(plant);
+  if (norm === ALL_PLANTS_ID || norm === 'D4') return true;
+  const mfgPlant = resolveModelManufacturingPlant(model);
+  return norm === mfgPlant;
+}
+

@@ -137,13 +137,23 @@ function NewDispatchContent() {
 
       // 1. Try fetching via API stock route scoped to the origin plant
       try {
-        const res = await fetch(`/api/stock?plant=${plantToLoad}`);
+        const res = await fetch(`/api/stock?plant=${encodeURIComponent(plantToLoad)}`);
         if (res.ok) {
           const data = await res.json();
-          if (data.success && data.stock?.length > 0) {
-            loadedModels = data.stock;
-            data.stock.forEach((m) => {
-              loadedStocks[m.id] = m.current_stock ?? 0;
+          const stockItems = data.currentStock || data.stock || [];
+          if (data.success && stockItems.length > 0) {
+            loadedModels = stockItems.map((m) => ({
+              id: m.model_id || m.id,
+              name: m.model_name || m.name,
+              code: m.model_code || m.code,
+              qr_data: m.qr_data || m.model_code || m.code,
+              manufacturing_plant: m.manufacturing_plant,
+              current_stock: m.current_stock ?? 0,
+              is_active: true,
+            }));
+            stockItems.forEach((m) => {
+              const mid = m.model_id || m.id;
+              loadedStocks[mid] = m.current_stock ?? 0;
             });
           }
         }
@@ -154,7 +164,7 @@ function NewDispatchContent() {
       // 2. Try fetching via /api/models route if stock API failed
       if (loadedModels.length === 0) {
         try {
-          const res = await fetch('/api/models?active_only=true');
+          const res = await fetch(`/api/models?active_only=true&for_plant=${encodeURIComponent(plantToLoad)}&view=stock`);
           if (res.ok) {
             const data = await res.json();
             if (data.success && data.models?.length > 0) {
@@ -1579,7 +1589,12 @@ function NewDispatchContent() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
                 <button
                   type="button"
-                  onClick={() => setDispatchType('party')}
+                  onClick={() => {
+                    setDispatchType('party');
+                    if (['E41 G2', 'D4', 'C116'].includes(destination)) {
+                      setDestination('');
+                    }
+                  }}
                   className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 ${
                     dispatchType === 'party'
                       ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
@@ -1608,7 +1623,13 @@ function NewDispatchContent() {
 
                 <button
                   type="button"
-                  onClick={() => setDispatchType('local')}
+                  onClick={() => {
+                    setDispatchType('local');
+                    if (!destination || destination === 'Party' || !['E41 G2', 'D4', 'C116'].includes(destination)) {
+                      const defaultDest = (fromLocation === 'E41 G2' || fromLocation === 'C116') ? 'D4' : (getOtherPlants(fromLocation)[0]?.id || 'E41 G2');
+                      setDestination(defaultDest);
+                    }
+                  }}
                   className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 ${
                     dispatchType === 'local'
                       ? 'bg-purple-50/80 border-purple-500 ring-2 ring-purple-500/20 shadow-xs'
@@ -1725,22 +1746,27 @@ function NewDispatchContent() {
               />
               {dispatchType === 'local' && (
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-gray-400 font-medium">Select Receiving Plant:</span>
-                  {getOtherPlants(fromLocation).map((otherPlant) => (
-                    <button
-                      key={otherPlant.id}
-                      type="button"
-                      onClick={() => setDestination(otherPlant.id)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1 ${
-                        normalizePlant(destination) === otherPlant.id
-                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
-                          : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                      }`}
-                    >
-                      <span>🏭</span>
-                      <span>{otherPlant.name}</span>
-                    </button>
-                  ))}
+                  <span className="text-[10px] text-gray-500 font-semibold">Select Receiving Plant:</span>
+                  {getOtherPlants(fromLocation).map((otherPlant) => {
+                    const isD4Hub = otherPlant.id === 'D4';
+                    return (
+                      <button
+                        key={otherPlant.id}
+                        type="button"
+                        onClick={() => setDestination(otherPlant.id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1.5 ${
+                          normalizePlant(destination) === otherPlant.id
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                            : isD4Hub
+                            ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200 ring-1 ring-purple-400/40'
+                            : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                        }`}
+                      >
+                        <span>{isD4Hub ? '🏢' : '🏭'}</span>
+                        <span>{otherPlant.name} {isD4Hub && '⭐ (Central Hub)'}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
