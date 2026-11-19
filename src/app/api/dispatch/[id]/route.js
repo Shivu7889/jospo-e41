@@ -1,6 +1,15 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
-import { formatDispatchRemarks } from '@/lib/dispatch';
+import {
+  formatDispatchRemarks,
+  resolveDispatchType,
+  isCoLoadingDispatch,
+  resolveCoLoadingStatus,
+  resolveNextLoadingPlant,
+  resolveSecondPlant,
+  resolveItemLoadedPlant,
+} from '@/lib/dispatch';
+import { normalizePlant } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +21,7 @@ export async function GET(request, { params }) {
     const { supabase } = auth;
     const { id } = params;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('dispatches')
       .select(`
         *,
@@ -20,6 +29,8 @@ export async function GET(request, { params }) {
           id,
           quantity,
           model_id,
+          loaded_plant,
+          loaded_by,
           cooler_models(
             id,
             name,
@@ -41,6 +52,39 @@ export async function GET(request, { params }) {
       .eq('id', id)
       .single();
 
+    if (error && (error.code === 'PGRST204' || error.message?.includes('loaded_plant'))) {
+      const fallbackQuery = await supabase
+        .from('dispatches')
+        .select(`
+          *,
+          dispatch_items(
+            id,
+            quantity,
+            model_id,
+            cooler_models(
+              id,
+              name,
+              code,
+              qr_data
+            )
+          ),
+          employees!dispatches_employee_id_fkey(
+            id,
+            name,
+            email,
+            role
+          ),
+          cancelled_by_employee:employees!dispatches_cancelled_by_fkey(
+            id,
+            name
+          )
+        `)
+        .eq('id', id)
+        .single();
+      data = fallbackQuery.data;
+      error = fallbackQuery.error;
+    }
+
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }
@@ -52,7 +96,7 @@ export async function GET(request, { params }) {
   }
 }
 
-// PUT: Update draft dispatch (header info or items)
+// PUT: Update dispatch (header info, co-loading route, or line items with stock sync)
 export async function PUT(request, { params }) {
   try {
     const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
@@ -64,14 +108,14 @@ export async function PUT(request, { params }) {
     // Verify existing dispatch status and metadata
     let { data: existing, error: checkError } = await supabase
       .from('dispatches')
-      .select('status, remarks, dispatch_type')
+      .select('id, status, remarks, dispatch_type, from_location, destination, destination_plant, transfer_status, is_coloading, coloading_status, next_loading_plant, second_plant, third_plant, vehicle_number')
       .eq('id', id)
       .single();
 
-    if (checkError && (checkError.message?.includes('dispatch_type') || checkError.code === 'PGRST204')) {
+    if (checkError && checkError.code === 'PGRST204') {
       const fallbackCheck = await supabase
         .from('dispatches')
-        .select('status, remarks')
+        .select('id, status, remarks, from_location, destination, vehicle_number')
         .eq('id', id)
         .single();
       existing = fallbackCheck.data;
@@ -82,11 +126,12 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
-    const isAdmin = auth.employee.role === 'admin' || auth.employee.role === 'owner';
+    const isOwnerOrAdmin = auth.employee.role === 'admin' || auth.employee.role === 'owner';
+    const isDispatchStaff = auth.employee.role === 'dispatch';
 
-    if (existing.status !== 'draft' && !isAdmin) {
+    if (!isOwnerOrAdmin && !isDispatchStaff) {
       return NextResponse.json(
-        { error: `Cannot edit dispatch with status "${existing.status}". Only Admins can modify non-draft dispatches.` },
+        { error: 'You do not have permission to modify dispatches.' },
         { status: 403 }
       );
     }
@@ -100,6 +145,11 @@ export async function PUT(request, { params }) {
       remarks,
       dispatch_type,
       transfer_status,
+      is_coloading,
+      coloading_status,
+      next_loading_plant,
+      second_plant,
+      third_plant,
       items,
     } = body;
 
@@ -112,11 +162,50 @@ export async function PUT(request, { params }) {
     if (dispatch_date !== undefined) updateFields.dispatch_date = dispatch_date;
     if (dispatch_type !== undefined) updateFields.dispatch_type = dispatch_type === 'local' ? 'local' : 'party';
 
-    if (remarks !== undefined || dispatch_type !== undefined || destination_plant !== undefined) {
-      const effectiveType = dispatch_type || existing.dispatch_type || (existing.remarks?.includes('[Type: Local]') ? 'local' : 'party');
-      let compRemarks = formatDispatchRemarks(remarks !== undefined ? remarks : existing.remarks, effectiveType);
+    // Co-loading fields
+    const effectiveIsCoLoading = is_coloading !== undefined ? Boolean(is_coloading) : isCoLoadingDispatch(existing);
+    const effectiveCoLoadingStatus = coloading_status !== undefined
+      ? coloading_status
+      : (effectiveIsCoLoading ? resolveCoLoadingStatus(existing) : null);
+
+    let effectiveNextLoadingPlant = null;
+    if (effectiveIsCoLoading && effectiveCoLoadingStatus === 'part_loaded') {
+      effectiveNextLoadingPlant = next_loading_plant !== undefined
+        ? (next_loading_plant ? normalizePlant(next_loading_plant) : null)
+        : resolveNextLoadingPlant(existing);
+    }
+
+    if (is_coloading !== undefined || coloading_status !== undefined || next_loading_plant !== undefined) {
+      updateFields.is_coloading = effectiveIsCoLoading;
+      updateFields.coloading_status = effectiveCoLoadingStatus;
+      updateFields.next_loading_plant = effectiveNextLoadingPlant;
+    }
+    if (second_plant !== undefined) updateFields.second_plant = second_plant ? normalizePlant(second_plant) : null;
+    if (third_plant !== undefined) updateFields.third_plant = third_plant ? normalizePlant(third_plant) : null;
+
+    const effectiveType = dispatch_type || existing.dispatch_type || resolveDispatchType(existing);
+
+    if (
+      remarks !== undefined ||
+      dispatch_type !== undefined ||
+      destination_plant !== undefined ||
+      is_coloading !== undefined ||
+      coloading_status !== undefined ||
+      next_loading_plant !== undefined
+    ) {
+      let compRemarks = formatDispatchRemarks(
+        remarks !== undefined ? remarks : existing.remarks,
+        effectiveType,
+        {
+          isCoLoading: effectiveIsCoLoading,
+          status: effectiveCoLoadingStatus,
+          nextLoadingPlant: effectiveNextLoadingPlant,
+          secondPlant: updateFields.second_plant !== undefined ? updateFields.second_plant : existing.second_plant,
+          thirdPlant: updateFields.third_plant !== undefined ? updateFields.third_plant : existing.third_plant,
+        }
+      );
       const destPlant = destination_plant !== undefined ? destination_plant : (existing.destination_plant || null);
-      if (destPlant) {
+      if (destPlant && effectiveType === 'local') {
         compRemarks = `[DestPlant: ${destPlant}] ${compRemarks}`.trim();
       }
       updateFields.remarks = compRemarks;
@@ -131,10 +220,26 @@ export async function PUT(request, { params }) {
       .select()
       .single();
 
-    // Fallback if destination_plant, transfer_status, or dispatch_type column does not exist yet in database
-    if (updateError && (updateError.message?.includes('destination_plant') || updateError.message?.includes('transfer_status') || updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
+    // Fallback if destination_plant, transfer_status, is_coloading, or dispatch_type column does not exist
+    if (
+      updateError &&
+      (updateError.message?.includes('destination_plant') ||
+        updateError.message?.includes('transfer_status') ||
+        updateError.message?.includes('dispatch_type') ||
+        updateError.message?.includes('is_coloading') ||
+        updateError.message?.includes('coloading_status') ||
+        updateError.message?.includes('next_loading_plant') ||
+        updateError.message?.includes('second_plant') ||
+        updateError.message?.includes('third_plant') ||
+        updateError.code === 'PGRST204')
+    ) {
       delete updateFields.destination_plant;
       delete updateFields.transfer_status;
+      delete updateFields.is_coloading;
+      delete updateFields.coloading_status;
+      delete updateFields.next_loading_plant;
+      delete updateFields.second_plant;
+      delete updateFields.third_plant;
       if (updateError.message?.includes('dispatch_type')) {
         delete updateFields.dispatch_type;
       }
@@ -152,9 +257,8 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: updateError.message }, { status: 400 });
     }
 
-    // If items are provided, validate and safely replace line items
+    // If items are provided, validate and update line items with stock synchronization
     if (Array.isArray(items)) {
-      // Validate line items before deleting anything
       for (const it of items) {
         const qty = Number(it.quantity);
         if (!it.model_id) {
@@ -165,13 +269,76 @@ export async function PUT(request, { params }) {
         }
       }
 
-      // Fetch existing items as backup in case replacement fails
+      // Fetch existing items with details
       const { data: previousItems } = await supabase
         .from('dispatch_items')
-        .select('model_id, quantity')
+        .select('id, model_id, quantity, loaded_plant, loaded_by')
         .eq('dispatch_id', id);
 
-      // Delete existing line items
+      const originPlant = normalizePlant(updateFields.from_location || existing.from_location || 'E41 G2');
+
+      const lineItems = items.map((it) => {
+        const itemPlant = normalizePlant(it.loaded_plant || originPlant);
+        return {
+          dispatch_id: id,
+          model_id: it.model_id,
+          quantity: Number(it.quantity),
+          loaded_plant: itemPlant,
+          loaded_by: it.loaded_by || auth.employee.id,
+        };
+      });
+
+      // If this dispatch is confirmed, verify warehouse stock availability for any increases
+      if (existing.status === 'confirmed') {
+        const oldTotals = {};
+        (previousItems || []).forEach((p) => {
+          const plant = normalizePlant(p.loaded_plant || resolveItemLoadedPlant(p, existing) || originPlant);
+          const key = `${p.model_id}__${plant}`;
+          oldTotals[key] = (oldTotals[key] || 0) + Number(p.quantity);
+        });
+
+        const newTotals = {};
+        lineItems.forEach((n) => {
+          const key = `${n.model_id}__${n.loaded_plant}`;
+          newTotals[key] = (newTotals[key] || 0) + Number(n.quantity);
+        });
+
+        for (const [key, newQty] of Object.entries(newTotals)) {
+          const oldQty = oldTotals[key] || 0;
+          const delta = newQty - oldQty;
+          if (delta > 0) {
+            const [modelId, plant] = key.split('__');
+            const { data: plantSt } = await supabase
+              .from('stock_transactions')
+              .select('quantity, plant')
+              .eq('model_id', modelId);
+
+            let currentWarehouseStock = 0;
+            if (plantSt) {
+              currentWarehouseStock = plantSt
+                .filter((st) => normalizePlant(st.plant || 'E41 G2') === plant)
+                .reduce((sum, st) => sum + Number(st.quantity || 0), 0);
+            }
+
+            if (currentWarehouseStock < delta) {
+              const { data: mData } = await supabase
+                .from('cooler_models')
+                .select('name, code')
+                .eq('id', modelId)
+                .single();
+              const modelDesc = mData ? `${mData.name} (${mData.code})` : modelId;
+              return NextResponse.json(
+                {
+                  error: `Insufficient stock at plant ${plant} for ${modelDesc}. Available in warehouse: ${currentWarehouseStock}, additional required: ${delta}.`,
+                },
+                { status: 400 }
+              );
+            }
+          }
+        }
+      }
+
+      // Safely replace line items
       const { error: delError } = await supabase
         .from('dispatch_items')
         .delete()
@@ -181,43 +348,57 @@ export async function PUT(request, { params }) {
         return NextResponse.json({ error: delError.message }, { status: 400 });
       }
 
-      if (items.length > 0) {
-        const lineItems = items.map((it) => ({
-          dispatch_id: id,
-          model_id: it.model_id,
-          quantity: Number(it.quantity),
-        }));
-
-        const { error: insertItemsError } = await supabase
+      if (lineItems.length > 0) {
+        let { error: insertItemsError } = await supabase
           .from('dispatch_items')
           .insert(lineItems);
+
+        if (insertItemsError && insertItemsError.message?.includes('loaded_plant')) {
+          const fallbackItems = lineItems.map(({ loaded_plant, loaded_by, ...rest }) => rest);
+          const fbResult = await supabase.from('dispatch_items').insert(fallbackItems);
+          insertItemsError = fbResult.error;
+        }
 
         if (insertItemsError) {
           // Rollback: restore previous items
           if (previousItems && previousItems.length > 0) {
-            const rollbackItems = previousItems.map((p) => ({ ...p, dispatch_id: id }));
-            await supabase.from('dispatch_items').insert(rollbackItems);
+            await supabase.from('dispatch_items').insert(previousItems);
           }
           return NextResponse.json({ error: insertItemsError.message }, { status: 400 });
         }
+      }
 
-        // If this dispatch was already confirmed, update stock ledger transactions
-        if (existing.status === 'confirmed') {
-          await supabase
-            .from('stock_transactions')
-            .delete()
-            .eq('reference_id', id)
-            .eq('transaction_type', 'dispatch');
+      // If dispatch is confirmed, synchronize stock transactions with exact plant attribution
+      if (existing.status === 'confirmed') {
+        await supabase
+          .from('stock_transactions')
+          .delete()
+          .eq('reference_id', id)
+          .eq('transaction_type', 'dispatch');
 
-          const stockTxs = items.map((it) => ({
+        if (lineItems.length > 0) {
+          const vNum = updateFields.vehicle_number || existing.vehicle_number || '';
+          const stockTxs = lineItems.map((it) => ({
             model_id: it.model_id,
             transaction_type: 'dispatch',
             quantity: -Number(it.quantity),
             reference_id: id,
             employee_id: auth.employee.id,
-            notes: 'Dispatch updated by Admin',
+            plant: it.loaded_plant,
+            notes: `[Dispatch Updated] Loaded at ${it.loaded_plant} (Vehicle: ${vNum})`,
           }));
-          await supabase.from('stock_transactions').insert(stockTxs);
+
+          let { error: stockInsertError } = await supabase
+            .from('stock_transactions')
+            .insert(stockTxs);
+
+          if (stockInsertError && stockInsertError.message?.includes('plant')) {
+            const fallbackTxs = stockTxs.map(({ plant, ...rest }) => ({
+              ...rest,
+              notes: `[Dispatch Updated] [Plant: ${plant}] (Vehicle: ${vNum})`,
+            }));
+            await supabase.from('stock_transactions').insert(fallbackTxs);
+          }
         }
       }
     }

@@ -88,7 +88,7 @@ export default function DispatchListPage() {
   // Multi-Plant Co-Loading Modal State
   const [coLoadingModalData, setCoLoadingModalData] = useState(null);
 
-  // Edit Dispatch Modal state (Admin can edit any dispatch)
+  // Edit Dispatch Modal state (Admin & Dispatch can edit dispatch items & co-loading status)
   const [editDispatchModal, setEditDispatchModal] = useState(null);
   const [editDispatchType, setEditDispatchType] = useState('party');
   const [editVehicleNumber, setEditVehicleNumber] = useState('');
@@ -96,7 +96,41 @@ export default function DispatchListPage() {
   const [editFromLocation, setEditFromLocation] = useState('E41 G2');
   const [editDispatchDate, setEditDispatchDate] = useState('');
   const [editRemarks, setEditRemarks] = useState('');
+  const [editIsCoLoading, setEditIsCoLoading] = useState(false);
+  const [editCoLoadingStatus, setEditCoLoadingStatus] = useState('not_applicable');
+  const [editNextLoadingPlant, setEditNextLoadingPlant] = useState('D4');
+  const [editSecondPlant, setEditSecondPlant] = useState('');
+  const [editThirdPlant, setEditThirdPlant] = useState('');
+  const [editItems, setEditItems] = useState([]);
+  const [availableModels, setAvailableModels] = useState([]);
+  const [newItemModelId, setNewItemModelId] = useState('');
+  const [newItemQty, setNewItemQty] = useState(1);
+  const [newItemPlant, setNewItemPlant] = useState('E41 G2');
   const [savingDispatchEdit, setSavingDispatchEdit] = useState(false);
+
+  // Preload cooler models catalog for item editor dropdown
+  useEffect(() => {
+    async function loadCatalog() {
+      try {
+        const res = await fetch('/api/models?view=all');
+        if (res.ok) {
+          const json = await res.json();
+          const list = json.data || json || [];
+          if (Array.isArray(list) && list.length > 0) {
+            setAvailableModels(list);
+            return;
+          }
+        }
+        if (supabase) {
+          const { data } = await supabase.from('cooler_models').select('*').eq('is_active', true).order('code');
+          if (data) setAvailableModels(data);
+        }
+      } catch (err) {
+        console.warn('Failed to preload models for edit modal:', err);
+      }
+    }
+    loadCatalog();
+  }, [supabase]);
 
   // Fetch dispatches
   const fetchDispatches = useCallback(async (isRefresh = false) => {
@@ -390,15 +424,116 @@ export default function DispatchListPage() {
     }
   };
 
-  // Open Edit Dispatch Modal (for Admin)
+  // Open Edit Dispatch Modal (for Admin & Dispatch staff)
   const handleOpenEditDispatch = (dispatch) => {
     setEditDispatchModal(dispatch);
     setEditDispatchType(resolveDispatchType(dispatch));
     setEditVehicleNumber(dispatch.vehicle_number || '');
     setEditDestination(dispatch.destination || '');
-    setEditFromLocation(dispatch.from_location || 'Jospo E41');
+    const origin = normalizePlant(dispatch.from_location || 'E41 G2');
+    setEditFromLocation(origin);
     setEditDispatchDate(dispatch.dispatch_date || getTodayIST());
     setEditRemarks(cleanDispatchRemarks(dispatch.remarks || ''));
+
+    // Co-loading status
+    const isCoLoad = isCoLoadingDispatch(dispatch);
+    setEditIsCoLoading(isCoLoad);
+    const coStatus = resolveCoLoadingStatus(dispatch);
+    setEditCoLoadingStatus(coStatus === 'not_applicable' ? (isCoLoad ? 'part_loaded' : 'not_applicable') : coStatus);
+    const nextPlant = resolveNextLoadingPlant(dispatch) || (origin === 'E41 G2' ? 'C116' : (origin === 'C116' ? 'D4' : 'E41 G2'));
+    setEditNextLoadingPlant(nextPlant);
+    setEditSecondPlant(resolveSecondPlant(dispatch) || '');
+    setEditThirdPlant(dispatch.third_plant || '');
+
+    // Map existing line items
+    const mappedItems = (dispatch.dispatch_items || []).map((di, idx) => {
+      const plant = resolveItemLoadedPlant(di, dispatch);
+      return {
+        tempId: di.id || `item-${idx}-${Date.now()}`,
+        id: di.id,
+        model_id: di.model_id,
+        model_name: di.cooler_models?.name || 'Cooler Model',
+        model_code: di.cooler_models?.code || '',
+        quantity: di.quantity,
+        loaded_plant: plant,
+      };
+    });
+    setEditItems(mappedItems);
+
+    // Reset new item inputs
+    setNewItemModelId('');
+    setNewItemQty(1);
+    setNewItemPlant(origin);
+  };
+
+  // Update item quantity
+  const handleUpdateItemQty = (index, deltaOrVal) => {
+    setEditItems((prev) => {
+      const next = [...prev];
+      const item = { ...next[index] };
+      let newQty = typeof deltaOrVal === 'number' ? item.quantity + deltaOrVal : parseInt(deltaOrVal, 10);
+      if (isNaN(newQty) || newQty < 1) newQty = 1;
+      item.quantity = newQty;
+      next[index] = item;
+      return next;
+    });
+  };
+
+  // Update item plant attribution
+  const handleUpdateItemPlant = (index, newPlant) => {
+    setEditItems((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], loaded_plant: normalizePlant(newPlant) };
+      return next;
+    });
+  };
+
+  // Remove item from edit list
+  const handleRemoveItem = (index) => {
+    setEditItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Add new cooler model to edit list
+  const handleAddEditItem = () => {
+    if (!newItemModelId) {
+      showToast('Please select a cooler model to add', 'warning');
+      return;
+    }
+    const qty = parseInt(newItemQty, 10);
+    if (!qty || qty <= 0) {
+      showToast('Quantity must be at least 1', 'warning');
+      return;
+    }
+    const selectedModel = availableModels.find((m) => m.id === newItemModelId);
+    const targetPlant = normalizePlant(newItemPlant || editFromLocation || 'E41 G2');
+
+    setEditItems((prev) => {
+      const existingIdx = prev.findIndex(
+        (it) => it.model_id === newItemModelId && it.loaded_plant === targetPlant
+      );
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        next[existingIdx] = {
+          ...next[existingIdx],
+          quantity: next[existingIdx].quantity + qty,
+        };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          tempId: `new-${Date.now()}`,
+          model_id: newItemModelId,
+          model_name: selectedModel?.name || 'Cooler Model',
+          model_code: selectedModel?.code || '',
+          quantity: qty,
+          loaded_plant: targetPlant,
+        },
+      ];
+    });
+
+    setNewItemModelId('');
+    setNewItemQty(1);
   };
 
   // Save Dispatch Edit
@@ -419,17 +554,30 @@ export default function DispatchListPage() {
 
     try {
       setSavingDispatchEdit(true);
+
+      const payload = {
+        dispatch_type: editDispatchType,
+        vehicle_number: vNum,
+        destination: dest,
+        from_location: editFromLocation.trim(),
+        dispatch_date: editDispatchDate,
+        remarks: editRemarks.trim(),
+        is_coloading: editIsCoLoading,
+        coloading_status: editIsCoLoading ? editCoLoadingStatus : 'not_applicable',
+        next_loading_plant: (editIsCoLoading && editCoLoadingStatus === 'part_loaded') ? editNextLoadingPlant : null,
+        second_plant: editSecondPlant || null,
+        third_plant: editThirdPlant || null,
+        items: editItems.map((it) => ({
+          model_id: it.model_id,
+          quantity: Number(it.quantity),
+          loaded_plant: it.loaded_plant,
+        })),
+      };
+
       const res = await fetch(`/api/dispatch/${editDispatchModal.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dispatch_type: editDispatchType,
-          vehicle_number: vNum,
-          destination: dest,
-          from_location: editFromLocation.trim(),
-          dispatch_date: editDispatchDate,
-          remarks: editRemarks.trim(),
-        }),
+        body: JSON.stringify(payload),
       });
 
       const json = await res.json();
@@ -437,7 +585,7 @@ export default function DispatchListPage() {
         throw new Error(json.error || 'Failed to update dispatch');
       }
 
-      showToast(`Dispatch ${vNum} updated successfully`, 'success');
+      showToast(`Dispatch ${vNum} & warehouse inventory updated successfully!`, 'success');
       setEditDispatchModal(null);
       await fetchDispatches(true);
     } catch (err) {
@@ -1037,32 +1185,34 @@ export default function DispatchListPage() {
                                 </>
                               )}
 
-                              {/* Confirmed actions: Admin Edit & Delete */}
-                              {dispatch.status === 'confirmed' && isAdmin && (
+                              {/* Confirmed actions: Admin/Dispatch Edit & Admin Delete */}
+                              {dispatch.status === 'confirmed' && (isAdmin || employee?.role === 'dispatch') && (
                                 <>
                                   <button
                                     type="button"
                                     onClick={() => handleOpenEditDispatch(dispatch)}
                                     className="px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors border border-indigo-200 inline-flex items-center space-x-1"
-                                    title="Edit dispatch details"
+                                    title="Edit dispatch details or loaded items"
                                   >
                                     <span>✏️</span>
                                     <span>Edit</span>
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDeleteModalData(dispatch)}
-                                    className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
-                                    title="Delete Confirmed Dispatch"
-                                  >
-                                    <span>🗑️</span>
-                                    <span>Delete Dispatch</span>
-                                  </button>
+                                  {isAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteModalData(dispatch)}
+                                      className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
+                                      title="Delete Confirmed Dispatch"
+                                    >
+                                      <span>🗑️</span>
+                                      <span>Delete Dispatch</span>
+                                    </button>
+                                  )}
                                 </>
                               )}
 
-                              {/* Cancelled actions: Admin Edit & Delete */}
-                              {dispatch.status === 'cancelled' && isAdmin && (
+                              {/* Cancelled actions: Admin/Dispatch Edit & Admin Delete */}
+                              {dispatch.status === 'cancelled' && (isAdmin || employee?.role === 'dispatch') && (
                                 <>
                                   <button
                                     type="button"
@@ -1073,15 +1223,17 @@ export default function DispatchListPage() {
                                     <span>✏️</span>
                                     <span>Edit</span>
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDeleteModalData(dispatch)}
-                                    className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
-                                    title="Delete Cancelled Dispatch"
-                                  >
-                                    <span>🗑️</span>
-                                    <span>Delete Dispatch</span>
-                                  </button>
+                                  {isAdmin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteModalData(dispatch)}
+                                      className="px-2.5 py-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors border border-rose-200 inline-flex items-center space-x-1"
+                                      title="Delete Cancelled Dispatch"
+                                    >
+                                      <span>🗑️</span>
+                                      <span>Delete Dispatch</span>
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -1526,169 +1678,458 @@ export default function DispatchListPage() {
           </div>
         )}
 
-        {/* Modal: Edit Dispatch (Admin) */}
+        {/* Modal: Edit Dispatch (Admin & Dispatch Staff) */}
         {editDispatchModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
-            <div className="card max-w-lg w-full p-6 shadow-2xl animate-scaleUp">
-              <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
-                <div className="flex items-center space-x-2">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-base">
+            <div className="card max-w-3xl w-full p-6 shadow-2xl animate-scaleUp max-h-[92vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4 sticky top-0 bg-white z-10">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center text-lg font-bold">
                     ✏️
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-gray-900">
-                      Edit Dispatch {editDispatchModal.vehicle_number}
-                    </h3>
+                    <div className="flex items-center space-x-2">
+                      <h3 className="text-base font-bold text-gray-900">
+                        Edit Dispatch {editDispatchModal.vehicle_number}
+                      </h3>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        editDispatchModal.status === 'confirmed'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : editDispatchModal.status === 'cancelled'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {editDispatchModal.status}
+                      </span>
+                    </div>
                     <p className="text-xs text-gray-500">
-                      Status: <span className="font-semibold capitalize">{editDispatchModal.status}</span>
+                      Origin: <span className="font-semibold text-gray-700">{editFromLocation}</span> • Update vehicle details, adjust loaded coolers, or edit routing
                     </p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setEditDispatchModal(null)}
-                  className="text-gray-400 hover:text-gray-600 p-1 rounded-lg"
+                  className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
                 >
                   ✕
                 </button>
               </div>
 
-              <form onSubmit={handleSaveDispatchEdit} className="space-y-4 text-xs">
-                {/* Dispatch Category Selector */}
-                <div>
-                  <label className="label text-xs">Dispatch Category <span className="text-red-500">*</span></label>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => setEditDispatchType('party')}
-                      className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-center space-x-2.5 ${
-                        editDispatchType === 'party'
-                          ? 'border-blue-500 bg-blue-50 text-blue-900 font-bold ring-1 ring-blue-500'
-                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      <span className="text-lg">🏢</span>
-                      <div>
-                        <div className="font-semibold text-gray-900">Party Dispatch</div>
-                        <div className="text-[10px] font-normal text-gray-500">Commercial sale to party</div>
-                      </div>
-                    </button>
+              <form onSubmit={handleSaveDispatchEdit} className="space-y-5 text-xs">
+                {/* Section 1: Vehicle & Route Header */}
+                <div className="bg-gray-50/70 p-3.5 rounded-xl border border-gray-200/80 space-y-3">
+                  <h4 className="font-bold text-gray-800 text-xs flex items-center space-x-1.5">
+                    <span>🚛</span>
+                    <span>Vehicle &amp; Dispatch Information</span>
+                  </h4>
 
-                    <button
-                      type="button"
-                      onClick={() => setEditDispatchType('local')}
-                      className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-center space-x-2.5 ${
-                        editDispatchType === 'local'
-                          ? 'border-amber-500 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-500'
-                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      <span className="text-lg">🏭</span>
-                      <div>
-                        <div className="font-semibold text-gray-900">Local Dispatch</div>
-                        <div className="text-[10px] font-normal text-gray-500">Internal to other plant</div>
-                      </div>
-                    </button>
+                  {/* Dispatch Category Selector */}
+                  <div>
+                    <label className="label text-[11px] mb-1 font-semibold text-gray-700">Dispatch Category <span className="text-red-500">*</span></label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditDispatchType('party')}
+                        className={`p-2 rounded-xl border text-left text-xs transition-all flex items-center space-x-2 ${
+                          editDispatchType === 'party'
+                            ? 'border-blue-500 bg-blue-50 text-blue-900 font-bold ring-1 ring-blue-500'
+                            : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="text-base">🏢</span>
+                        <div>
+                          <div className="font-semibold text-gray-900">Party Dispatch</div>
+                          <div className="text-[10px] font-normal text-gray-500">Commercial sale to party / dealer</div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEditDispatchType('local')}
+                        className={`p-2 rounded-xl border text-left text-xs transition-all flex items-center space-x-2 ${
+                          editDispatchType === 'local'
+                            ? 'border-amber-500 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-500'
+                            : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="text-base">🏭</span>
+                        <div>
+                          <div className="font-semibold text-gray-900">Local Dispatch</div>
+                          <div className="text-[10px] font-normal text-gray-500">Internal transfer between plants</div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="label text-[11px]">Vehicle Number <span className="text-red-500">*</span></label>
+                      <input
+                        type="text"
+                        value={editVehicleNumber}
+                        onChange={(e) => setEditVehicleNumber(e.target.value.toUpperCase())}
+                        placeholder="e.g. MP-09-AB-1234"
+                        className="input-field text-xs uppercase font-mono font-bold"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label text-[11px]">
+                        {editDispatchType === 'local' ? 'Destination Plant' : 'Destination Party / City'}{' '}
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={editDestination}
+                        onChange={(e) => setEditDestination(e.target.value)}
+                        placeholder={editDispatchType === 'local' ? 'e.g. Jospo Plant 2, Unit 2' : 'e.g. Jaipur Depot, Client Warehouse'}
+                        className="input-field text-xs"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="label text-[11px]">Origin Location / Plant</label>
+                      <select
+                        value={editFromLocation}
+                        onChange={(e) => setEditFromLocation(e.target.value)}
+                        className="input-field text-xs font-medium"
+                      >
+                        {PLANTS.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="label text-[11px]">Dispatch Date <span className="text-red-500">*</span></label>
+                      <input
+                        type="date"
+                        value={editDispatchDate}
+                        onChange={(e) => setEditDispatchDate(e.target.value)}
+                        className="input-field text-xs"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="label text-[11px]">Remarks / Driver Notes</label>
+                    <input
+                      type="text"
+                      value={editRemarks}
+                      onChange={(e) => setEditRemarks(e.target.value)}
+                      placeholder="Driver name, contact number, e-way bill number, notes..."
+                      className="input-field text-xs"
+                    />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="label text-xs">Vehicle Number <span className="text-red-500">*</span></label>
-                    <input
-                      type="text"
-                      value={editVehicleNumber}
-                      onChange={(e) => setEditVehicleNumber(e.target.value.toUpperCase())}
-                      placeholder="e.g. MP-09-AB-1234"
-                      className="input-field text-xs uppercase font-mono font-bold"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="label text-xs">
-                      {editDispatchType === 'local' ? 'Destination Plant' : 'Destination Party / City'}{' '}
-                      <span className="text-red-500">*</span>
+                {/* Section 2: Multi-Plant Co-Loading & Routing (Accidental Confirmation Fix) */}
+                <div className="bg-amber-50/50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-gray-900 text-xs flex items-center space-x-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editIsCoLoading}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setEditIsCoLoading(checked);
+                          if (checked && editCoLoadingStatus === 'not_applicable') {
+                            setEditCoLoadingStatus('part_loaded');
+                          }
+                        }}
+                        className="w-4 h-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                      />
+                      <span>🔄 Multi-Plant Co-Loading (Shared Vehicle Route)</span>
                     </label>
-                    <input
-                      type="text"
-                      value={editDestination}
-                      onChange={(e) => setEditDestination(e.target.value)}
-                      placeholder={editDispatchType === 'local' ? 'e.g. Jospo Plant 2, Unit 2' : 'e.g. Jaipur Depot, Client Warehouse'}
-                      className="input-field text-xs"
-                      required
-                    />
+                    {editIsCoLoading && (
+                      <span className="text-[11px] font-mono font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                        E41 ➔ C116 ➔ D4 Route
+                      </span>
+                    )}
+                  </div>
+
+                  {editIsCoLoading && (
+                    <div className="space-y-3 pt-1 border-t border-amber-200/60 animate-fadeIn">
+                      <div>
+                        <label className="label text-[11px] font-semibold text-gray-700">Vehicle Loading &amp; Route Status</label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditCoLoadingStatus('part_loaded')}
+                            className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-start space-x-2.5 ${
+                              editCoLoadingStatus === 'part_loaded'
+                                ? 'border-amber-500 bg-amber-100/70 text-amber-950 font-bold ring-1 ring-amber-500'
+                                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            <span className="text-base mt-0.5">⏳</span>
+                            <div>
+                              <div className="font-bold">Part-Loaded (Send to Next Plant)</div>
+                              <div className="text-[10px] font-normal text-amber-800">Vehicle still has more coolers to load at another plant</div>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setEditCoLoadingStatus('fully_loaded')}
+                            className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-start space-x-2.5 ${
+                              editCoLoadingStatus === 'fully_loaded'
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-950 font-bold ring-1 ring-emerald-500'
+                                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            <span className="text-base mt-0.5">✅</span>
+                            <div>
+                              <div className="font-bold">Fully Loaded (Dispatched)</div>
+                              <div className="text-[10px] font-normal text-emerald-800">All coolers loaded. Vehicle heading to customer destination</div>
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {editCoLoadingStatus === 'part_loaded' && (
+                        <div className="bg-amber-100/60 p-3 rounded-lg border border-amber-300 space-y-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-base">📍</span>
+                            <span className="font-bold text-amber-950 text-xs">Next Loading Stop / Plant:</span>
+                            <select
+                              value={editNextLoadingPlant}
+                              onChange={(e) => setEditNextLoadingPlant(e.target.value)}
+                              className="input-field text-xs py-1 px-2.5 font-bold bg-white max-w-xs"
+                            >
+                              {PLANTS.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+                              ))}
+                            </select>
+                          </div>
+                          <p className="text-[11px] text-amber-900 leading-relaxed">
+                            💡 <strong>Accidentally confirmed vehicle or plan changed?</strong> Setting this status to <em>Part-Loaded</em> with Next Plant <strong>{editNextLoadingPlant}</strong> will immediately reopen the trip and send this vehicle into {editNextLoadingPlant}&apos;s incoming dispatch queue with the &ldquo;➕ Load Models&rdquo; button enabled!
+                          </p>
+                        </div>
+                      )}
+
+                      {editCoLoadingStatus === 'fully_loaded' && (
+                        <div className="bg-emerald-50 p-2.5 rounded-lg border border-emerald-200 text-emerald-900 text-[11px]">
+                          ✓ Vehicle is fully loaded across all plants and dispatched to final destination.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 3: Coolers Loaded on Vehicle (Item Editor & Live Inventory Sync) */}
+                <div className="bg-blue-50/50 p-3.5 rounded-xl border border-blue-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-gray-900 text-xs flex items-center space-x-1.5">
+                      <span>📦</span>
+                      <span>Coolers Loaded on Vehicle ({editItems.reduce((sum, it) => sum + Number(it.quantity || 0), 0)} Total)</span>
+                    </h4>
+                    <span className="text-[10px] font-medium text-blue-800 bg-blue-100 px-2 py-0.5 rounded">
+                      Live Warehouse Inventory Sync
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-blue-900 leading-relaxed bg-blue-100/60 p-2 rounded-lg border border-blue-200/80">
+                    🔄 <strong>Stock Synchronization:</strong> If you reduce quantity or remove an item, coolers are automatically returned to that plant&apos;s warehouse inventory. If you add or increase coolers, stock is verified and deducted from that plant.
+                  </p>
+
+                  {/* Plant Subtotal Bar */}
+                  {(() => {
+                    const plantCounts = editItems.reduce((acc, it) => {
+                      const p = it.loaded_plant || 'E41 G2';
+                      acc[p] = (acc[p] || 0) + Number(it.quantity || 0);
+                      return acc;
+                    }, {});
+                    const totalQty = editItems.reduce((sum, it) => sum + Number(it.quantity || 0), 0);
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 text-xs bg-white border border-gray-200 rounded-lg p-2.5">
+                        <span className="font-semibold text-gray-700">Vehicle Breakdown:</span>
+                        {Object.entries(plantCounts).map(([plantName, count]) => (
+                          <span
+                            key={plantName}
+                            className="inline-flex items-center px-2 py-0.5 rounded font-mono font-bold bg-gray-100 border border-gray-300 text-gray-800"
+                          >
+                            🏭 {plantName}: {count} pcs
+                          </span>
+                        ))}
+                        <span className="ml-auto font-bold text-primary-700">
+                          Total on Truck: {totalQty} coolers
+                        </span>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Items List Table */}
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+                    {editItems.length === 0 ? (
+                      <div className="p-4 text-center text-gray-500 text-xs">
+                        No coolers currently recorded on vehicle. Add coolers below.
+                      </div>
+                    ) : (
+                      <table className="min-w-full divide-y divide-gray-200 text-xs">
+                        <thead className="bg-gray-50 text-gray-600 font-semibold">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Cooler Model</th>
+                            <th className="px-3 py-2 text-left">Loaded At Plant</th>
+                            <th className="px-3 py-2 text-center w-36">Quantity</th>
+                            <th className="px-3 py-2 text-right w-16">Remove</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {editItems.map((item, idx) => (
+                            <tr key={item.tempId || idx} className="hover:bg-gray-50/60 transition-colors">
+                              <td className="px-3 py-2.5">
+                                <div className="font-bold text-gray-900">{item.model_name}</div>
+                                <div className="text-[10px] font-mono text-gray-500">{item.model_code || item.model_id}</div>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <select
+                                  value={item.loaded_plant}
+                                  onChange={(e) => handleUpdateItemPlant(idx, e.target.value)}
+                                  className="input-field text-xs py-1 px-2 font-semibold bg-gray-50"
+                                >
+                                  {PLANTS.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-2.5 text-center">
+                                <div className="inline-flex items-center space-x-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItemQty(idx, -1)}
+                                    className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold flex items-center justify-center transition-colors"
+                                  >
+                                    -
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={item.quantity}
+                                    onChange={(e) => handleUpdateItemQty(idx, e.target.value)}
+                                    className="w-16 input-field text-xs text-center font-bold py-1 px-1 font-mono"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItemQty(idx, 1)}
+                                    className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold flex items-center justify-center transition-colors"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveItem(idx)}
+                                  className="text-rose-600 hover:text-rose-800 p-1 rounded hover:bg-rose-50 transition-colors font-bold"
+                                  title="Remove cooler from vehicle"
+                                >
+                                  🗑️
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Add Cooler Row */}
+                  <div className="bg-gray-50 p-3 rounded-xl border border-gray-200/90 space-y-2">
+                    <div className="font-semibold text-gray-800 text-xs flex items-center space-x-1">
+                      <span>➕</span>
+                      <span>Add Cooler to Vehicle</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                      <div className="sm:col-span-5">
+                        <select
+                          value={newItemModelId}
+                          onChange={(e) => setNewItemModelId(e.target.value)}
+                          className="input-field text-xs font-medium"
+                        >
+                          <option value="">-- Select Cooler Model --</option>
+                          {availableModels.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.code ? `[${m.code}] ` : ''}{m.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="sm:col-span-3">
+                        <select
+                          value={newItemPlant}
+                          onChange={(e) => setNewItemPlant(e.target.value)}
+                          className="input-field text-xs font-medium"
+                        >
+                          {PLANTS.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <input
+                          type="number"
+                          min="1"
+                          value={newItemQty}
+                          onChange={(e) => setNewItemQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          placeholder="Qty"
+                          className="input-field text-xs font-bold text-center"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <button
+                          type="button"
+                          onClick={handleAddEditItem}
+                          className="w-full btn-primary text-xs py-2 px-2 font-bold shadow-xs whitespace-nowrap"
+                        >
+                          + Add Item
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="label text-xs">Origin Location</label>
-                    <input
-                      type="text"
-                      value={editFromLocation}
-                      onChange={(e) => setEditFromLocation(e.target.value)}
-                      placeholder="e.g. Jospo E41"
-                      className="input-field text-xs"
-                    />
+                <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+                  <div className="text-gray-500 text-[11px]">
+                    Vehicle: <span className="font-mono font-bold text-gray-800">{editVehicleNumber || '—'}</span>
                   </div>
-
-                  <div>
-                    <label className="label text-xs">Dispatch Date <span className="text-red-500">*</span></label>
-                    <input
-                      type="date"
-                      value={editDispatchDate}
-                      onChange={(e) => setEditDispatchDate(e.target.value)}
-                      className="input-field text-xs"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="label text-xs">Remarks / Notes</label>
-                  <textarea
-                    rows={2}
-                    value={editRemarks}
-                    onChange={(e) => setEditRemarks(e.target.value)}
-                    placeholder="Optional remarks, driver info, e-way bill number..."
-                    className="input-field text-xs"
-                  />
-                </div>
-
-                {/* Link to full workstation if user wants to change models/items */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-blue-900 flex items-start space-x-2">
-                  <span className="text-base">ℹ️</span>
-                  <div className="text-xs leading-relaxed">
-                    <p className="font-semibold">Need to modify cooler models or item quantities?</p>
-                    <p className="mt-0.5 text-blue-800">
-                      You can also use the full workstation to scan or adjust quantities:
-                    </p>
-                    <Link
-                      href={`/dispatch/new?id=${editDispatchModal.id}`}
-                      className="inline-block mt-1 font-bold text-primary-700 hover:underline"
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditDispatchModal(null)}
+                      disabled={savingDispatchEdit}
+                      className="btn-secondary text-xs py-2 px-4"
                     >
-                      Open in Dispatch Workstation →
-                    </Link>
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingDispatchEdit}
+                      className="btn-primary text-xs py-2 px-5 font-bold shadow-md inline-flex items-center space-x-1.5"
+                    >
+                      {savingDispatchEdit ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Saving &amp; Syncing Stock...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>💾</span>
+                          <span>Save &amp; Sync Changes</span>
+                        </>
+                      )}
+                    </button>
                   </div>
-                </div>
-
-                <div className="flex justify-end space-x-2 pt-2 border-t border-gray-100">
-                  <button
-                    type="button"
-                    onClick={() => setEditDispatchModal(null)}
-                    disabled={savingDispatchEdit}
-                    className="btn-secondary text-xs py-2 px-4"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingDispatchEdit}
-                    className="btn-primary text-xs py-2 px-5 font-bold shadow-sm"
-                  >
-                    {savingDispatchEdit ? 'Saving...' : '💾 Save Changes'}
-                  </button>
                 </div>
               </form>
             </div>
@@ -1889,31 +2330,32 @@ export default function DispatchListPage() {
                     Edit Draft
                   </Link>
                 )}
+                {(isAdmin || employee?.role === 'dispatch') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = viewDetailsModal;
+                      setViewDetailsModal(null);
+                      handleOpenEditDispatch(d);
+                    }}
+                    className="px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors inline-flex items-center space-x-1"
+                  >
+                    <span>✏️</span>
+                    <span>Edit Dispatch &amp; Items</span>
+                  </button>
+                )}
                 {isAdmin && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const d = viewDetailsModal;
-                        setViewDetailsModal(null);
-                        handleOpenEditDispatch(d);
-                      }}
-                      className="px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors"
-                    >
-                      ✏️ Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const d = viewDetailsModal;
-                        setViewDetailsModal(null);
-                        setDeleteModalData(d);
-                      }}
-                      className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors"
-                    >
-                      🗑️ Delete Dispatch
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = viewDetailsModal;
+                      setViewDetailsModal(null);
+                      setDeleteModalData(d);
+                    }}
+                    className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition-colors"
+                  >
+                    🗑️ Delete Dispatch
+                  </button>
                 )}
                 <button
                   type="button"
