@@ -1,24 +1,35 @@
 'use client';
 
-import { useState, useEffect, useCallback, useId } from 'react';
+import { useState, useEffect, useCallback, useId, useMemo } from 'react';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import DataTable from '@/components/DataTable';
 import QRGenerator from '@/components/QRGenerator';
 import { useToast } from '@/components/Toast';
+import { usePlant } from '@/contexts/PlantContext';
+import { ALL_PLANTS_ID } from '@/lib/plants';
 
 export default function ModelsPage() {
   const { showToast } = useToast();
+  const { activePlant, isOwner } = usePlant();
+  const isOwnerConsolidated = isOwner && activePlant === ALL_PLANTS_ID;
 
   // Model Form State
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
   const [qrData, setQrData] = useState('');
-  const [manufacturingPlant, setManufacturingPlant] = useState('E41 G2');
+  const [manufacturingPlant, setManufacturingPlant] = useState(activePlant || 'E41 G2');
   const [codeManuallyEdited, setCodeManuallyEdited] = useState(false);
   const [qrManuallyEdited, setQrManuallyEdited] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Sync manufacturingPlant if activePlant changes and not in consolidated mode
+  useEffect(() => {
+    if (activePlant && activePlant !== ALL_PLANTS_ID) {
+      setManufacturingPlant(activePlant);
+    }
+  }, [activePlant]);
 
   // Models List State
   const [models, setModels] = useState([]);
@@ -92,7 +103,8 @@ export default function ModelsPage() {
   const fetchModels = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const url = `/api/models?active_only=${filterActiveOnly}`;
+      const plantParam = isOwnerConsolidated ? '' : `&for_plant=${encodeURIComponent(activePlant)}`;
+      const url = `/api/models?active_only=${filterActiveOnly}${plantParam}`;
       const res = await fetch(url);
       const data = await res.json();
 
@@ -107,7 +119,7 @@ export default function ModelsPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [filterActiveOnly]);
+  }, [filterActiveOnly, isOwnerConsolidated, activePlant, showToast]);
 
   useEffect(() => {
     fetchModels();
@@ -132,6 +144,7 @@ export default function ModelsPage() {
 
     try {
       setSubmitting(true);
+      const targetPlant = isOwnerConsolidated ? manufacturingPlant : (activePlant || 'E41 G2');
       const res = await fetch('/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,7 +153,7 @@ export default function ModelsPage() {
           code: code.trim().toUpperCase(),
           description: description.trim() || null,
           qr_data: qrData.trim(),
-          manufacturing_plant: manufacturingPlant,
+          manufacturing_plant: targetPlant,
         }),
       });
 
@@ -149,7 +162,7 @@ export default function ModelsPage() {
         throw new Error(result.error || 'Failed to create model');
       }
 
-      showToast(`Model "${result.model.code}" created successfully for ${manufacturingPlant}!`, 'success');
+      showToast(`Model "${result.model.code}" created successfully!`, 'success');
 
       // Optimistically add the new model immediately to the list
       if (result.model) {
@@ -165,7 +178,7 @@ export default function ModelsPage() {
       setCode('');
       setDescription('');
       setQrData('');
-      setManufacturingPlant('E41 G2');
+      setManufacturingPlant(activePlant || 'E41 G2');
       setCodeManuallyEdited(false);
       setQrManuallyEdited(false);
 
@@ -232,7 +245,7 @@ export default function ModelsPage() {
     setEditCode(model.code || '');
     setEditDescription(model.description || '');
     setEditQrData(model.qr_data || '');
-    setEditManufacturingPlant(model.manufacturing_plant || 'E41 G2');
+    setEditManufacturingPlant(model.manufacturing_plant || activePlant || 'E41 G2');
   };
 
   // Submit Model Edit
@@ -254,6 +267,9 @@ export default function ModelsPage() {
 
     try {
       setSavingEdit(true);
+      const targetEditPlant = isOwnerConsolidated
+        ? editManufacturingPlant
+        : (editingModel.manufacturing_plant || activePlant || 'E41 G2');
       const res = await fetch('/api/models', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -263,7 +279,7 @@ export default function ModelsPage() {
           code: trimmedCode,
           description: editDescription.trim() || null,
           qr_data: editQrData.trim() || null,
-          manufacturing_plant: editManufacturingPlant,
+          manufacturing_plant: targetEditPlant,
         }),
       });
 
@@ -279,7 +295,7 @@ export default function ModelsPage() {
             ? {
                 ...m,
                 ...result.model,
-                manufacturing_plant: editManufacturingPlant,
+                manufacturing_plant: targetEditPlant,
                 current_stock: m.current_stock, // Preserve calculated stock
               }
             : m
@@ -295,169 +311,181 @@ export default function ModelsPage() {
   };
 
   // Filtered models for search & plant filter
-  const filteredModels = models.filter((m) => {
-    if (plantFilter !== 'ALL' && (m.manufacturing_plant || 'E41 G2') !== plantFilter) {
-      return false;
-    }
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      m.name?.toLowerCase().includes(q) ||
-      m.code?.toLowerCase().includes(q) ||
-      m.qr_data?.toLowerCase().includes(q)
-    );
-  });
+  const filteredModels = useMemo(() => {
+    return models.filter((m) => {
+      if (isOwnerConsolidated && plantFilter !== 'ALL' && (m.manufacturing_plant || 'E41 G2') !== plantFilter) {
+        return false;
+      }
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        m.name?.toLowerCase().includes(q) ||
+        m.code?.toLowerCase().includes(q) ||
+        m.qr_data?.toLowerCase().includes(q)
+      );
+    });
+  }, [models, isOwnerConsolidated, plantFilter, searchQuery]);
 
   // Table Columns
-  const tableColumns = [
-    {
-      key: 'code',
-      label: 'Model Code',
-      render: (val, row) => (
-        <div className="flex items-center space-x-2">
-          <span className="font-mono font-bold text-sm text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
+  const tableColumns = useMemo(() => {
+    const cols = [
+      {
+        key: 'code',
+        label: 'Model Code',
+        render: (val, row) => (
+          <div className="flex items-center space-x-2">
+            <span className="font-mono font-bold text-sm text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
+              {val}
+            </span>
+          </div>
+        ),
+      },
+      {
+        key: 'name',
+        label: 'Model Name & Description',
+        render: (val, row) => (
+          <div>
+            <div className="font-semibold text-gray-900">{val}</div>
+            {row.description ? (
+              <div className="text-xs text-gray-500 truncate max-w-xs">{row.description}</div>
+            ) : (
+              <div className="text-xs text-gray-400 italic">No description</div>
+            )}
+          </div>
+        ),
+      },
+    ];
+
+    if (isOwnerConsolidated) {
+      cols.push({
+        key: 'manufacturing_plant',
+        label: 'Manufacturing Facility',
+        render: (val, row) => {
+          const p = val || row.manufacturing_plant || 'E41 G2';
+          const isD4 = p === 'D4';
+          const isC116 = p === 'C116';
+          return (
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${
+                isD4
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : isC116
+                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+              }`}
+            >
+              <span>🏭</span>
+              <span>{p} Plant</span>
+            </span>
+          );
+        },
+      });
+    }
+
+    cols.push(
+      {
+        key: 'qr_data',
+        label: 'QR Code Data',
+        render: (val) => (
+          <span className="font-mono text-xs text-gray-600 bg-gray-100 px-2.5 py-1 rounded border border-gray-200">
             {val}
           </span>
-        </div>
-      ),
-    },
-    {
-      key: 'name',
-      label: 'Model Name & Description',
-      render: (val, row) => (
-        <div>
-          <div className="font-semibold text-gray-900">{val}</div>
-          {row.description ? (
-            <div className="text-xs text-gray-500 truncate max-w-xs">{row.description}</div>
-          ) : (
-            <div className="text-xs text-gray-400 italic">No description</div>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'manufacturing_plant',
-      label: 'Manufacturing Facility',
-      render: (val, row) => {
-        const p = val || row.manufacturing_plant || 'E41 G2';
-        const isD4 = p === 'D4';
-        const isC116 = p === 'C116';
-        return (
-          <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${
-              isD4
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                : isC116
-                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-            }`}
-          >
-            <span>🏭</span>
-            <span>{p} Plant</span>
-          </span>
-        );
-      },
-    },
-    {
-      key: 'qr_data',
-      label: 'QR Code Data',
-      render: (val) => (
-        <span className="font-mono text-xs text-gray-600 bg-gray-100 px-2.5 py-1 rounded border border-gray-200">
-          {val}
-        </span>
-      ),
-    },
-    {
-      key: 'current_stock',
-      label: 'Current Stock',
-      align: 'right',
-      render: (val) => {
-        const stock = Number(val ?? 0);
-        let badgeColor = 'text-emerald-700 bg-emerald-50 border-emerald-200';
-        if (stock === 0) {
-          badgeColor = 'text-rose-700 bg-rose-50 border-rose-200';
-        } else if (stock < 10) {
-          badgeColor = 'text-amber-700 bg-amber-50 border-amber-200';
-        }
-        return (
-          <span
-            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${badgeColor}`}
-          >
-            {stock.toLocaleString()} units
-          </span>
-        );
-      },
-    },
-    {
-      key: 'is_active',
-      label: 'Status',
-      align: 'center',
-      render: (val) =>
-        val ? (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
-            Active
-          </span>
-        ) : (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-            Inactive
-          </span>
         ),
-    },
-    {
-      key: 'actions',
-      label: 'Actions',
-      align: 'right',
-      render: (_, row) => (
-        <div className="flex items-center justify-end space-x-2">
-          {/* View QR Button */}
-          <button
-            type="button"
-            onClick={() => setQrModalModel(row)}
-            className="btn-secondary text-xs py-1.5 px-3 inline-flex items-center space-x-1 shadow-none"
-            title="View printable QR code label"
-          >
-            <svg className="w-3.5 h-3.5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"
-              />
-            </svg>
-            <span>View QR</span>
-          </button>
+      },
+      {
+        key: 'current_stock',
+        label: 'Current Stock',
+        align: 'right',
+        render: (val) => {
+          const stock = Number(val ?? 0);
+          let badgeColor = 'text-emerald-700 bg-emerald-50 border-emerald-200';
+          if (stock === 0) {
+            badgeColor = 'text-rose-700 bg-rose-50 border-rose-200';
+          } else if (stock < 10) {
+            badgeColor = 'text-amber-700 bg-amber-50 border-amber-200';
+          }
+          return (
+            <span
+              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${badgeColor}`}
+            >
+              {stock.toLocaleString()} units
+            </span>
+          );
+        },
+      },
+      {
+        key: 'is_active',
+        label: 'Status',
+        align: 'center',
+        render: (val) =>
+          val ? (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+              Active
+            </span>
+          ) : (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+              Inactive
+            </span>
+          ),
+      },
+      {
+        key: 'actions',
+        label: 'Actions',
+        align: 'right',
+        render: (_, row) => (
+          <div className="flex items-center justify-end space-x-2">
+            {/* View QR Button */}
+            <button
+              type="button"
+              onClick={() => setQrModalModel(row)}
+              className="btn-secondary text-xs py-1.5 px-3 inline-flex items-center space-x-1 shadow-none"
+              title="View printable QR code label"
+            >
+              <svg className="w-3.5 h-3.5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"
+                />
+              </svg>
+              <span>View QR</span>
+            </button>
 
-          {/* Edit Model Button */}
-          <button
-            type="button"
-            onClick={() => handleOpenEdit(row)}
-            className="btn-secondary text-xs py-1.5 px-2.5 inline-flex items-center space-x-1 shadow-none text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50 border-indigo-200"
-            title="Edit model details"
-          >
-            <span>✏️ Edit</span>
-          </button>
+            {/* Edit Model Button */}
+            <button
+              type="button"
+              onClick={() => handleOpenEdit(row)}
+              className="btn-secondary text-xs py-1.5 px-2.5 inline-flex items-center space-x-1 shadow-none text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50 border-indigo-200"
+              title="Edit model details"
+            >
+              <span>✏️ Edit</span>
+            </button>
 
-          {/* Toggle Active Button */}
-          <button
-            type="button"
-            onClick={() => handleToggleActive(row)}
-            disabled={actionLoadingId === row.id}
-            className={`text-xs py-1.5 px-3 rounded-lg font-medium transition-colors border ${
-              row.is_active
-                ? 'border-gray-300 text-gray-700 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200'
-                : 'border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
-            }`}
-          >
-            {actionLoadingId === row.id
-              ? 'Saving...'
-              : row.is_active
-              ? 'Deactivate'
-              : 'Activate'}
-          </button>
-        </div>
-      ),
-    },
-  ];
+            {/* Toggle Active Button */}
+            <button
+              type="button"
+              onClick={() => handleToggleActive(row)}
+              disabled={actionLoadingId === row.id}
+              className={`text-xs py-1.5 px-3 rounded-lg font-medium transition-colors border ${
+                row.is_active
+                  ? 'border-gray-300 text-gray-700 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200'
+                  : 'border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+              }`}
+            >
+              {actionLoadingId === row.id
+                ? 'Saving...'
+                : row.is_active
+                ? 'Deactivate'
+                : 'Activate'}
+            </button>
+          </div>
+        ),
+      }
+    );
+
+    return cols;
+  }, [isOwnerConsolidated, actionLoadingId]);
 
   return (
     <AppShell allowedRoles={['admin']}>
@@ -465,11 +493,22 @@ export default function ModelsPage() {
         {/* Page Title & Overview */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 pb-5">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-              Cooler Models Management
-            </h1>
+            <div className="flex items-center space-x-2">
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
+                {isOwnerConsolidated ? 'Cooler Models Directory (All Plants)' : `${activePlant} Cooler Models`}
+              </h1>
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                isOwnerConsolidated
+                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                  : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+              }`}>
+                {isOwnerConsolidated ? '👑 Owner Consolidated' : `🏭 ${activePlant}`}
+              </span>
+            </div>
             <p className="mt-1 text-sm text-gray-500">
-              Configure cooler models, generate barcode/QR labels, and review stock availability.
+              {isOwnerConsolidated
+                ? 'Central catalog of cooler models manufactured across all three facilities.'
+                : `Cooler models manufactured and assembled at ${activePlant} facility.`}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -511,13 +550,15 @@ export default function ModelsPage() {
             <div>
               <h2 className="text-lg font-bold text-gray-900">Add New Cooler Model</h2>
               <p className="text-xs text-gray-500">
-                Register a new cooler model to enable production tracking and dispatch scanning.
+                {isOwnerConsolidated
+                  ? 'Register a new cooler model to enable production tracking and dispatch scanning across plants.'
+                  : `Register a new cooler model manufactured at ${activePlant} facility.`}
               </p>
             </div>
           </div>
 
           <form onSubmit={handleCreateModel} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className={`grid grid-cols-1 md:grid-cols-2 ${isOwnerConsolidated ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
               {/* Model Name */}
               <div>
                 <label className="label">
@@ -554,25 +595,27 @@ export default function ModelsPage() {
                 </span>
               </div>
 
-              {/* Manufacturing Facility */}
-              <div>
-                <label className="label">
-                  Manufacturing Facility <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={manufacturingPlant}
-                  onChange={(e) => setManufacturingPlant(e.target.value)}
-                  className="input-field text-xs font-semibold bg-white"
-                  required
-                >
-                  <option value="E41 G2">🏭 E41 G2 (Unit 1)</option>
-                  <option value="C116">🏭 C116 (Unit 3)</option>
-                  <option value="D4">🏭 D4 (Unit 2 & Central Hub)</option>
-                </select>
-                <span className="text-[11px] text-gray-400 mt-1 block">
-                  Plant that manufactures this model
-                </span>
-              </div>
+              {/* Manufacturing Facility (ONLY in Owner Consolidated mode) */}
+              {isOwnerConsolidated && (
+                <div>
+                  <label className="label">
+                    Manufacturing Facility <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={manufacturingPlant}
+                    onChange={(e) => setManufacturingPlant(e.target.value)}
+                    className="input-field text-xs font-semibold bg-white"
+                    required
+                  >
+                    <option value="E41 G2">🏭 E41 G2 Plant</option>
+                    <option value="C116">🏭 C116 Plant</option>
+                    <option value="D4">🏭 D4 Plant</option>
+                  </select>
+                  <span className="text-[11px] text-gray-400 mt-1 block">
+                    Plant that manufactures this model
+                  </span>
+                </div>
+              )}
 
               {/* QR Data (Auto-generated) */}
               <div>
@@ -663,35 +706,39 @@ export default function ModelsPage() {
         <div className="space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Registered Cooler Models</h2>
+              <h2 className="text-xl font-bold text-gray-900">
+                {isOwnerConsolidated ? 'Registered Cooler Models (All Plants)' : `${activePlant} Models`}
+              </h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Total {models.length} model{models.length === 1 ? '' : 's'} defined in inventory
+                Total {filteredModels.length} model{filteredModels.length === 1 ? '' : 's'} {isOwnerConsolidated ? 'defined across all plants' : `for ${activePlant}`}
               </p>
             </div>
 
             {/* Plant Filter Pills & Search */}
             <div className="flex flex-wrap items-center gap-2.5">
-              <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
-                {[
-                  { id: 'ALL', label: 'All Plants' },
-                  { id: 'E41 G2', label: '🏭 E41 G2' },
-                  { id: 'C116', label: '🏭 C116' },
-                  { id: 'D4', label: '🏭 D4' },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setPlantFilter(tab.id)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                      plantFilter === tab.id
-                        ? 'bg-white text-gray-900 shadow-xs border border-gray-200'
-                        : 'text-gray-500 hover:text-gray-900'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
+              {isOwnerConsolidated && (
+                <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
+                  {[
+                    { id: 'ALL', label: 'All Plants' },
+                    { id: 'E41 G2', label: '🏭 E41 G2' },
+                    { id: 'C116', label: '🏭 C116' },
+                    { id: 'D4', label: '🏭 D4' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setPlantFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                        plantFilter === tab.id
+                          ? 'bg-white text-gray-900 shadow-xs border border-gray-200'
+                          : 'text-gray-500 hover:text-gray-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Search */}
               <div className="relative">
@@ -904,25 +951,27 @@ export default function ModelsPage() {
                   </div>
                 </div>
 
-                {/* Manufacturing Facility */}
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    Manufacturing Facility <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={editManufacturingPlant}
-                    onChange={(e) => setEditManufacturingPlant(e.target.value)}
-                    className="input-field text-xs font-semibold bg-white"
-                    required
-                  >
-                    <option value="E41 G2">🏭 E41 G2 (Unit 1)</option>
-                    <option value="C116">🏭 C116 (Unit 3)</option>
-                    <option value="D4">🏭 D4 (Unit 2 & Central Hub)</option>
-                  </select>
-                  <span className="text-[10px] text-gray-400 mt-0.5 block">
-                    Designated plant allowed to assemble and log production for this model
-                  </span>
-                </div>
+                {/* Manufacturing Facility (ONLY in Owner Consolidated mode) */}
+                {isOwnerConsolidated && (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Manufacturing Facility <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={editManufacturingPlant}
+                      onChange={(e) => setEditManufacturingPlant(e.target.value)}
+                      className="input-field text-xs font-semibold bg-white"
+                      required
+                    >
+                      <option value="E41 G2">🏭 E41 G2 Plant</option>
+                      <option value="C116">🏭 C116 Plant</option>
+                      <option value="D4">🏭 D4 Plant</option>
+                    </select>
+                    <span className="text-[10px] text-gray-400 mt-0.5 block">
+                      Designated plant allowed to assemble and log production for this model
+                    </span>
+                  </div>
+                )}
 
                 {/* Description */}
                 <div>

@@ -1747,26 +1747,21 @@ function NewDispatchContent() {
               {dispatchType === 'local' && (
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                   <span className="text-[10px] text-gray-500 font-semibold">Select Receiving Plant:</span>
-                  {getOtherPlants(fromLocation).map((otherPlant) => {
-                    const isD4Hub = otherPlant.id === 'D4';
-                    return (
-                      <button
-                        key={otherPlant.id}
-                        type="button"
-                        onClick={() => setDestination(otherPlant.id)}
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1.5 ${
-                          normalizePlant(destination) === otherPlant.id
-                            ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
-                            : isD4Hub
-                            ? 'bg-purple-100 text-purple-900 border-purple-300 hover:bg-purple-200 ring-1 ring-purple-400/40'
-                            : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                        }`}
-                      >
-                        <span>{isD4Hub ? '🏢' : '🏭'}</span>
-                        <span>{otherPlant.name} {isD4Hub && '⭐ (Central Hub)'}</span>
-                      </button>
-                    );
-                  })}
+                  {getOtherPlants(fromLocation).map((otherPlant) => (
+                    <button
+                      key={otherPlant.id}
+                      type="button"
+                      onClick={() => setDestination(otherPlant.id)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1.5 ${
+                        normalizePlant(destination) === otherPlant.id
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                          : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                      }`}
+                    >
+                      <span>🏭</span>
+                      <span>{otherPlant.name}</span>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>

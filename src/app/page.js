@@ -352,7 +352,7 @@ export default function DashboardPage() {
                   </span>
                 </p>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  Shipments have been dispatched to your plant from other units and are awaiting physical verification & stock acceptance.
+                  Shipments have been dispatched to your plant and are awaiting physical verification & stock acceptance.
                 </p>
               </div>
             </div>

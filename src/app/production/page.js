@@ -492,18 +492,20 @@ export default function ProductionPage() {
             <div className="flex items-center space-x-2.5">
               <span className="text-2xl">🏭</span>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-                Production Entry
+                {activePlant === ALL_PLANTS_ID ? 'Production Entry (All Plants)' : `${activePlant} Production Entry`}
               </h1>
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
                 activePlant === ALL_PLANTS_ID
                   ? 'bg-purple-100 text-purple-800 border border-purple-200'
                   : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
               }`}>
-                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant} Plant`}
+                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant}`}
               </span>
             </div>
             <p className="mt-1 text-sm text-gray-500">
-              Record manufactured cooler units under Thekedars to automatically increment real-time stock balances.
+              {activePlant === ALL_PLANTS_ID
+                ? 'Record manufactured cooler units under Thekedars across manufacturing facilities.'
+                : `Record manufactured cooler units under Thekedars for ${activePlant} facility.`}
             </p>
           </div>
 
@@ -690,18 +692,6 @@ export default function ProductionPage() {
                     </span>
                   </div>
 
-                  {/* D4 Central Hub Notice */}
-                  {entryPlant === 'D4' && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex items-start space-x-2">
-                      <span className="text-base flex-shrink-0">ℹ️</span>
-                      <div className="space-y-0.5">
-                        <p className="font-bold">Plant D4 Central Warehouse Rule:</p>
-                        <p className="text-[11px] text-blue-800 leading-relaxed">
-                          Plant D4 only assembles D4-designated models. Cooler models manufactured at E41 G2 and C116 are received via <strong>Inbound Transfers</strong> under Dispatches and cannot be added as direct production here.
-                        </p>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Empty Models Notice */}
                   {!loadingModels && manufacturableModels.length === 0 && (

@@ -466,20 +466,20 @@ export default function DispatchListPage() {
           <div>
             <div className="flex items-center space-x-2.5">
               <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-                Dispatch Management
+                {activePlant === ALL_PLANTS_ID ? 'Dispatches & Transfers (All Plants)' : `${activePlant} Dispatches & Transfers`}
               </h1>
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
                 activePlant === ALL_PLANTS_ID
                   ? 'bg-purple-100 text-purple-800 border border-purple-200'
                   : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
               }`}>
-                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant} Plant`}
+                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant}`}
               </span>
             </div>
             <p className="mt-1 text-sm text-gray-600">
               {activePlant === ALL_PLANTS_ID
-                ? 'Overview of outward shipments and inter-plant transfers across E41 G2, D4, and C116.'
-                : `Outward shipments and inbound stock transfers for ${activePlant} Plant.`}
+                ? 'Overview of outward shipments and inter-plant transfers across all facilities.'
+                : `Outward shipments and inbound stock transfers for ${activePlant} facility.`}
             </p>
           </div>
           <div className="flex items-center space-x-3">

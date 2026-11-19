@@ -154,12 +154,20 @@ export default function Navbar() {
               <div className="flex flex-col">
                 <span className="text-lg font-bold tracking-tight text-white flex items-center gap-1.5">
                   Jospo
-                  <span className="text-[10px] uppercase tracking-wider bg-primary-700/80 px-1.5 py-0.5 rounded text-primary-200 font-semibold border border-primary-600/60">
-                    {isOwner ? 'ENTERPRISE' : 'MFG'}
-                  </span>
+                  {activePlant === ALL_PLANTS_ID ? (
+                    <span className="text-[10px] uppercase tracking-wider bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded font-extrabold shadow-xs">
+                      OWNER MODE
+                    </span>
+                  ) : (
+                    <span className="text-[10px] uppercase tracking-wider bg-primary-700/80 px-1.5 py-0.5 rounded text-primary-200 font-semibold border border-primary-600/60 font-mono">
+                      {activePlant}
+                    </span>
+                  )}
                 </span>
                 <span className="text-[11px] text-primary-200/90 hidden sm:inline">
-                  Multi-Plant Manufacturing ERP
+                  {activePlant === ALL_PLANTS_ID
+                    ? '3-Plant Enterprise ERP'
+                    : `${activePlant} Manufacturing System`}
                 </span>
               </div>
             </Link>
@@ -175,7 +183,7 @@ export default function Navbar() {
                 >
                   <span>{activePlant === ALL_PLANTS_ID ? '🌐' : '🏭'}</span>
                   <span className="font-semibold text-xs truncate max-w-[90px] sm:max-w-none">
-                    {activePlant === ALL_PLANTS_ID ? 'All Plants' : `${activePlant} Plant`}
+                    {activePlant === ALL_PLANTS_ID ? 'All Plants (Owner)' : `${activePlant} Plant`}
                   </span>
                   <span className="text-[10px] text-primary-300">▼</span>
                 </button>
