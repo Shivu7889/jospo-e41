@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import { formatDispatchRemarks } from '@/lib/dispatch';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,12 +61,22 @@ export async function PUT(request, { params }) {
     const { id } = params;
     const body = await request.json();
 
-    // Verify existing dispatch status
-    const { data: existing, error: checkError } = await supabase
+    // Verify existing dispatch status and metadata
+    let { data: existing, error: checkError } = await supabase
       .from('dispatches')
-      .select('status')
+      .select('status, remarks, dispatch_type')
       .eq('id', id)
       .single();
+
+    if (checkError && (checkError.message?.includes('dispatch_type') || checkError.code === 'PGRST204')) {
+      const fallbackCheck = await supabase
+        .from('dispatches')
+        .select('status, remarks')
+        .eq('id', id)
+        .single();
+      existing = fallbackCheck.data;
+      checkError = fallbackCheck.error;
+    }
 
     if (checkError || !existing) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
@@ -86,6 +97,7 @@ export async function PUT(request, { params }) {
       destination,
       dispatch_date,
       remarks,
+      dispatch_type,
       items,
     } = body;
 
@@ -94,16 +106,34 @@ export async function PUT(request, { params }) {
     if (from_location !== undefined) updateFields.from_location = from_location.trim();
     if (destination !== undefined) updateFields.destination = destination.trim();
     if (dispatch_date !== undefined) updateFields.dispatch_date = dispatch_date;
-    if (remarks !== undefined) updateFields.remarks = remarks?.trim() || null;
+    if (dispatch_type !== undefined) updateFields.dispatch_type = dispatch_type === 'local' ? 'local' : 'party';
+
+    if (remarks !== undefined || dispatch_type !== undefined) {
+      const effectiveType = dispatch_type || existing.dispatch_type || (existing.remarks?.includes('[Type: Local]') ? 'local' : 'party');
+      updateFields.remarks = formatDispatchRemarks(remarks !== undefined ? remarks : existing.remarks, effectiveType);
+    }
     updateFields.updated_at = new Date().toISOString();
 
     // Update dispatch header
-    const { data: updatedDispatch, error: updateError } = await supabase
+    let { data: updatedDispatch, error: updateError } = await supabase
       .from('dispatches')
       .update(updateFields)
       .eq('id', id)
       .select()
       .single();
+
+    // Fallback if dispatch_type column does not exist yet in database
+    if (updateError && (updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
+      delete updateFields.dispatch_type;
+      const retryResult = await supabase
+        .from('dispatches')
+        .update(updateFields)
+        .eq('id', id)
+        .select()
+        .single();
+      updatedDispatch = retryResult.data;
+      updateError = retryResult.error;
+    }
 
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 400 });

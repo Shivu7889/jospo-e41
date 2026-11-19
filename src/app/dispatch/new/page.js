@@ -12,6 +12,7 @@ import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import SearchableSelect from '@/components/SearchableSelect';
 import DeliveryChallanModal from '@/components/DeliveryChallanModal';
+import { resolveDispatchType, formatDispatchRemarks, cleanDispatchRemarks } from '@/lib/dispatch';
 
 // Static 20 models registry to ensure zero-latency & offline scanning fallback
 export const JOSPO_20_ACTIVE_MODELS = [
@@ -67,6 +68,7 @@ function NewDispatchContent() {
   const [showChallanModal, setShowChallanModal] = useState(false);
   const [countdown, setCountdown] = useState(3);
   const [existingDispatchStatus, setExistingDispatchStatus] = useState(null);
+  const [dispatchType, setDispatchType] = useState('party'); // 'party' | 'local'
 
   // Form State - Step 1: Vehicle Details
   const todayStr = useMemo(() => getTodayIST(), []);
@@ -194,12 +196,13 @@ function NewDispatchContent() {
       }
 
       setExistingDispatchStatus(dispatch.status);
+      setDispatchType(resolveDispatchType(dispatch));
 
       setVehicleNumber(dispatch.vehicle_number || '');
       setFromLocation(dispatch.from_location || 'Jospo E41');
       setDestination(dispatch.destination || '');
       setDispatchDate(dispatch.dispatch_date || todayStr);
-      setRemarks(dispatch.remarks || '');
+      setRemarks(cleanDispatchRemarks(dispatch.remarks) || '');
 
       // Load items
       const loadedItems = (dispatch.dispatch_items || []).map((di) => ({
@@ -954,7 +957,7 @@ function NewDispatchContent() {
   const isStep1Valid = vehicleNumber.trim() && destination.trim() && dispatchDate;
   const isStep2Valid = items.length > 0 && totalQuantity > 0 && items.every((i) => (Number(i.quantity) || 0) > 0);
 
-  // Format remarks to include verified unique box serial numbers
+  // Format remarks to include verified unique box serial numbers and dispatch type tag
   const getCompiledRemarks = () => {
     const serialEntries = items
       .filter((i) => i.scanned_serials?.length > 0)
@@ -965,7 +968,7 @@ function NewDispatchContent() {
       const serialsTag = `Verified Box Serials:\n${serialEntries.join('\n')}`;
       finalRemarks = finalRemarks ? `${finalRemarks}\n\n${serialsTag}` : serialsTag;
     }
-    return finalRemarks || null;
+    return formatDispatchRemarks(finalRemarks, dispatchType);
   };
 
   // Save as Draft
@@ -994,6 +997,7 @@ function NewDispatchContent() {
             from_location: fromLocation.trim(),
             destination: destination.trim(),
             dispatch_date: dispatchDate,
+            dispatch_type: dispatchType,
             remarks: getCompiledRemarks(),
             items: items.map((item) => ({
               model_id: item.model_id,
@@ -1009,19 +1013,33 @@ function NewDispatchContent() {
         targetDispatchId = editId;
       } else {
         // Insert new draft dispatch
-        const { data: newDispatch, error: insertError } = await supabase
+        const insertPayload = {
+          vehicle_number: vehicleNumber.trim().toUpperCase(),
+          from_location: fromLocation.trim(),
+          destination: destination.trim(),
+          dispatch_date: dispatchDate,
+          dispatch_type: dispatchType,
+          remarks: getCompiledRemarks(),
+          status: 'draft',
+          employee_id: employee.id,
+        };
+
+        let { data: newDispatch, error: insertError } = await supabase
           .from('dispatches')
-          .insert({
-            vehicle_number: vehicleNumber.trim().toUpperCase(),
-            from_location: fromLocation.trim(),
-            destination: destination.trim(),
-            dispatch_date: dispatchDate,
-            remarks: getCompiledRemarks(),
-            status: 'draft',
-            employee_id: employee.id,
-          })
+          .insert(insertPayload)
           .select('id')
           .single();
+
+        if (insertError && (insertError.message?.includes('dispatch_type') || insertError.code === 'PGRST204')) {
+          delete insertPayload.dispatch_type;
+          const retryRes = await supabase
+            .from('dispatches')
+            .insert(insertPayload)
+            .select('id')
+            .single();
+          newDispatch = retryRes.data;
+          insertError = retryRes.error;
+        }
 
         if (insertError) throw insertError;
         targetDispatchId = newDispatch.id;
@@ -1122,17 +1140,29 @@ function NewDispatchContent() {
 
       if (editId) {
         // Update existing header
-        const { error: updateError } = await supabase
+        const updatePayload = {
+          vehicle_number: vehicleNumber.trim().toUpperCase(),
+          from_location: fromLocation.trim(),
+          destination: destination.trim(),
+          dispatch_date: dispatchDate,
+          dispatch_type: dispatchType,
+          remarks: getCompiledRemarks(),
+          updated_at: new Date().toISOString(),
+        };
+
+        let { error: updateError } = await supabase
           .from('dispatches')
-          .update({
-            vehicle_number: vehicleNumber.trim().toUpperCase(),
-            from_location: fromLocation.trim(),
-            destination: destination.trim(),
-            dispatch_date: dispatchDate,
-            remarks: getCompiledRemarks(),
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', editId);
+
+        if (updateError && (updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
+          delete updatePayload.dispatch_type;
+          const retryUpdate = await supabase
+            .from('dispatches')
+            .update(updatePayload)
+            .eq('id', editId);
+          updateError = retryUpdate.error;
+        }
 
         if (updateError) throw updateError;
 
@@ -1140,19 +1170,33 @@ function NewDispatchContent() {
         await supabase.from('dispatch_items').delete().eq('dispatch_id', editId);
       } else {
         // Insert new draft dispatch record
-        const { data: newDispatch, error: insertError } = await supabase
+        const insertPayload = {
+          vehicle_number: vehicleNumber.trim().toUpperCase(),
+          from_location: fromLocation.trim(),
+          destination: destination.trim(),
+          dispatch_date: dispatchDate,
+          dispatch_type: dispatchType,
+          remarks: getCompiledRemarks(),
+          status: 'draft',
+          employee_id: employee.id,
+        };
+
+        let { data: newDispatch, error: insertError } = await supabase
           .from('dispatches')
-          .insert({
-            vehicle_number: vehicleNumber.trim().toUpperCase(),
-            from_location: fromLocation.trim(),
-            destination: destination.trim(),
-            dispatch_date: dispatchDate,
-            remarks: getCompiledRemarks(),
-            status: 'draft',
-            employee_id: employee.id,
-          })
+          .insert(insertPayload)
           .select('id')
           .single();
+
+        if (insertError && (insertError.message?.includes('dispatch_type') || insertError.code === 'PGRST204')) {
+          delete insertPayload.dispatch_type;
+          const retryRes = await supabase
+            .from('dispatches')
+            .insert(insertPayload)
+            .select('id')
+            .single();
+          newDispatch = retryRes.data;
+          insertError = retryRes.error;
+        }
 
         if (insertError) throw insertError;
         targetDispatchId = newDispatch.id;
@@ -1197,6 +1241,7 @@ function NewDispatchContent() {
         destination: destination.trim(),
         totalQty: totalQuantity,
         itemsCount: items.length,
+        dispatchType,
       });
 
       showToast('Dispatch confirmed and stock deducted successfully!', 'success');
@@ -1222,12 +1267,20 @@ function NewDispatchContent() {
           </p>
 
           <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 text-left text-sm space-y-2.5 mb-6">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-500">Dispatch Category:</span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                submissionSuccess.dispatchType === 'local' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
+              }`}>
+                {submissionSuccess.dispatchType === 'local' ? '🏭 Local Dispatch (Other Plant)' : '🏢 Party Dispatch'}
+              </span>
+            </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Vehicle Number:</span>
               <span className="font-mono font-bold text-gray-900">{submissionSuccess.vehicleNumber}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Destination:</span>
+              <span className="text-gray-500">{submissionSuccess.dispatchType === 'local' ? 'Destination Plant:' : 'Destination:'}</span>
               <span className="font-semibold text-gray-900">{submissionSuccess.destination}</span>
             </div>
             <div className="flex justify-between">
@@ -1263,6 +1316,7 @@ function NewDispatchContent() {
                 setVehicleNumber('');
                 setDestination('');
                 setRemarks('');
+                setDispatchType('party');
                 setCurrentStep(1);
               }}
               className="btn-secondary text-sm py-2 px-5"
@@ -1275,6 +1329,7 @@ function NewDispatchContent() {
             <DeliveryChallanModal
               dispatch={{
                 id: submissionSuccess.dispatchId,
+                dispatch_type: submissionSuccess.dispatchType,
                 vehicle_number: submissionSuccess.vehicleNumber,
                 destination: submissionSuccess.destination,
                 dispatch_date: dispatchDate,
@@ -1432,6 +1487,72 @@ function NewDispatchContent() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Dispatch Category (Local Plant vs Party) */}
+            <div className="sm:col-span-2">
+              <label className="label text-xs font-bold text-gray-700">
+                Dispatch Category <span className="text-red-500">*</span>
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setDispatchType('party')}
+                  className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 ${
+                    dispatchType === 'party'
+                      ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${
+                    dispatchType === 'party' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    🏢
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="font-bold text-sm text-gray-900">Party Dispatch</span>
+                      {dispatchType === 'party' && (
+                        <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">
+                          SELECTED
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">
+                      Shipment to customer, dealer, or commercial buyer
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDispatchType('local')}
+                  className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 ${
+                    dispatchType === 'local'
+                      ? 'bg-purple-50/80 border-purple-500 ring-2 ring-purple-500/20 shadow-xs'
+                      : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${
+                    dispatchType === 'local' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    🏭
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="font-bold text-sm text-gray-900">Local Dispatch</span>
+                      {dispatchType === 'local' && (
+                        <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
+                          SELECTED
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">
+                      Internal transfer to our other manufacturing plant / unit
+                    </p>
+                  </div>
+                </button>
+              </div>
+            </div>
+
             {/* Vehicle Number */}
             <div className="sm:col-span-2">
               <label htmlFor="vehicleNumber" className="label">
@@ -1471,17 +1592,32 @@ function NewDispatchContent() {
             {/* Destination */}
             <div>
               <label htmlFor="destination" className="label">
-                Destination <span className="text-red-500">*</span>
+                {dispatchType === 'local' ? 'Destination Plant / Receiving Unit' : 'Party / Customer Name & City'} <span className="text-red-500">*</span>
               </label>
               <input
                 id="destination"
                 type="text"
                 required
-                placeholder="e.g. Bhopal Central Hub, Indore Depot"
+                placeholder={dispatchType === 'local' ? 'e.g. Jospo Plant 2, Sanwer Road Unit' : 'e.g. Shree Ram Electronics, Jaipur'}
                 value={destination}
                 onChange={(e) => setDestination(e.target.value)}
                 className="input-field"
               />
+              {dispatchType === 'local' && (
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                  <span className="text-[10px] text-gray-400 font-medium">Quick pick:</span>
+                  {['Jospo Plant 2', 'Unit 2', 'Sanwer Road Plant', 'Other Plant'].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => setDestination(chip)}
+                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 transition-colors"
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Dispatch Date */}
@@ -1518,7 +1654,11 @@ function NewDispatchContent() {
               <textarea
                 id="remarks"
                 rows={2}
-                placeholder="e.g. Driver Ramesh (Ph: 9876543210), fragile delivery, seal #4829"
+                placeholder={
+                  dispatchType === 'local'
+                    ? 'e.g. Inter-plant transfer memo #, receiving plant supervisor name, seal #4829'
+                    : 'e.g. Driver Ramesh (Ph: 9876543210), party contact, e-way bill #, seal #4829'
+                }
                 value={remarks}
                 onChange={(e) => setRemarks(e.target.value)}
                 className="input-field text-sm"
@@ -1544,13 +1684,22 @@ function NewDispatchContent() {
       {currentStep === 2 && (
         <div className="space-y-6 animate-fadeIn">
           {/* Vehicle mini-summary banner */}
-          <div className="bg-primary-50 border border-primary-200 rounded-xl p-3 flex items-center justify-between text-xs">
+          <div className="bg-primary-50 border border-primary-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="flex items-center space-x-2">
+              {dispatchType === 'local' ? (
+                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-800 border border-purple-200">
+                  🏭 Local Plant
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-800 border border-blue-200">
+                  🏢 Party
+                </span>
+              )}
               <span className="font-mono font-bold text-gray-900 bg-white px-2 py-0.5 rounded border border-primary-200">
                 {vehicleNumber}
               </span>
               <span className="text-gray-500">→</span>
-              <span className="font-medium text-gray-800">{destination}</span>
+              <span className="font-bold text-gray-800">{destination}</span>
             </div>
             <div className="flex items-center space-x-3">
               <button
@@ -1921,6 +2070,16 @@ function NewDispatchContent() {
           {/* Vehicle summary card */}
           <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
             <div>
+              <span className="text-gray-500 block">Dispatch Category:</span>
+              <span className={`inline-flex items-center mt-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                dispatchType === 'local'
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : 'bg-blue-100 text-blue-800 border border-blue-300'
+              }`}>
+                {dispatchType === 'local' ? '🏭 Local (Other Plant)' : '🏢 Party Dispatch'}
+              </span>
+            </div>
+            <div>
               <span className="text-gray-500 block">Vehicle Number:</span>
               <span className="font-mono font-bold text-base text-gray-900">{vehicleNumber}</span>
             </div>
@@ -1936,8 +2095,10 @@ function NewDispatchContent() {
               <span className="text-gray-500 block">Origin:</span>
               <span className="font-medium text-gray-900">{fromLocation}</span>
             </div>
-            <div className="sm:col-span-2">
-              <span className="text-gray-500 block">Destination:</span>
+            <div className="sm:col-span-1">
+              <span className="text-gray-500 block">
+                {dispatchType === 'local' ? 'Destination Plant:' : 'Destination Party / City:'}
+              </span>
               <span className="font-semibold text-primary-800">{destination}</span>
             </div>
             {remarks && (

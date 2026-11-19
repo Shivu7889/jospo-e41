@@ -12,6 +12,7 @@ import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import DeliveryChallanModal from '@/components/DeliveryChallanModal';
 import { exportToExcel } from '@/lib/exportExcel';
+import { resolveDispatchType, getDispatchTypeMeta, cleanDispatchRemarks } from '@/lib/dispatch';
 
 export default function DispatchListPage() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export default function DispatchListPage() {
 
   // Filters
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'draft' | 'confirmed' | 'cancelled'
+  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'party' | 'local'
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -53,6 +55,7 @@ export default function DispatchListPage() {
 
   // Edit Dispatch Modal state (Admin can edit any dispatch)
   const [editDispatchModal, setEditDispatchModal] = useState(null);
+  const [editDispatchType, setEditDispatchType] = useState('party');
   const [editVehicleNumber, setEditVehicleNumber] = useState('');
   const [editDestination, setEditDestination] = useState('');
   const [editFromLocation, setEditFromLocation] = useState('Jospo E41');
@@ -130,6 +133,11 @@ export default function DispatchListPage() {
       if (statusFilter !== 'all' && d.status !== statusFilter) {
         return false;
       }
+      // Type filter (local vs party)
+      const dType = resolveDispatchType(d);
+      if (typeFilter !== 'all' && dType !== typeFilter) {
+        return false;
+      }
       // Date from filter
       if (dateFrom && d.dispatch_date < dateFrom) {
         return false;
@@ -138,7 +146,7 @@ export default function DispatchListPage() {
       if (dateTo && d.dispatch_date > dateTo) {
         return false;
       }
-      // Search term (vehicle number, destination, remarks, employee name)
+      // Search term (vehicle number, destination, remarks, employee name, dispatch type)
       if (searchTerm.trim()) {
         const query = searchTerm.toLowerCase();
         const matchVehicle = d.vehicle_number?.toLowerCase().includes(query);
@@ -146,17 +154,20 @@ export default function DispatchListPage() {
         const matchFrom = d.from_location?.toLowerCase().includes(query);
         const matchRemarks = d.remarks?.toLowerCase().includes(query);
         const matchEmployee = d.employees?.name?.toLowerCase().includes(query);
+        const matchType = dType === 'local'
+          ? ('local plant inter-plant'.includes(query))
+          : ('party customer client'.includes(query));
         const matchModel = d.dispatch_items?.some(
           (di) =>
             di.cooler_models?.code?.toLowerCase().includes(query) ||
             di.cooler_models?.name?.toLowerCase().includes(query)
         );
 
-        return matchVehicle || matchDest || matchFrom || matchRemarks || matchEmployee || matchModel;
+        return matchVehicle || matchDest || matchFrom || matchRemarks || matchEmployee || matchModel || matchType;
       }
       return true;
     });
-  }, [dispatches, statusFilter, dateFrom, dateTo, searchTerm]);
+  }, [dispatches, statusFilter, typeFilter, dateFrom, dateTo, searchTerm]);
 
   // Aggregate stats
   const stats = useMemo(() => {
@@ -260,11 +271,12 @@ export default function DispatchListPage() {
   // Open Edit Dispatch Modal (for Admin)
   const handleOpenEditDispatch = (dispatch) => {
     setEditDispatchModal(dispatch);
+    setEditDispatchType(resolveDispatchType(dispatch));
     setEditVehicleNumber(dispatch.vehicle_number || '');
     setEditDestination(dispatch.destination || '');
     setEditFromLocation(dispatch.from_location || 'Jospo E41');
     setEditDispatchDate(dispatch.dispatch_date || getTodayIST());
-    setEditRemarks(dispatch.remarks || '');
+    setEditRemarks(cleanDispatchRemarks(dispatch.remarks || ''));
   };
 
   // Save Dispatch Edit
@@ -289,6 +301,7 @@ export default function DispatchListPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          dispatch_type: editDispatchType,
           vehicle_number: vNum,
           destination: dest,
           from_location: editFromLocation.trim(),
@@ -321,12 +334,14 @@ export default function DispatchListPage() {
     }
 
     const rows = filteredDispatches.map((d, idx) => {
+      const dType = resolveDispatchType(d);
       const itemsSummary = (d.dispatch_items || [])
         .map((it) => `${it.cooler_models?.code || 'Cooler'}: ${it.quantity} pcs`)
         .join(', ');
       return {
         'S.No': idx + 1,
         'Dispatch Date': d.dispatch_date || '',
+        'Dispatch Category': dType === 'local' ? 'Local Dispatch (Other Plant)' : 'Party Dispatch',
         'Vehicle Number': d.vehicle_number || '',
         'Status': (d.status || '').toUpperCase(),
         'Destination': d.destination || '',
@@ -334,7 +349,7 @@ export default function DispatchListPage() {
         'Total Quantity (pcs)': calculateTotalQty(d.dispatch_items),
         'Models Breakdown': itemsSummary,
         'Created By': d.employees?.name || 'Staff',
-        'Remarks': d.remarks || '',
+        'Remarks': cleanDispatchRemarks(d.remarks || ''),
       };
     });
 
@@ -439,29 +454,53 @@ export default function DispatchListPage() {
 
         {/* Filters and Controls Card */}
         <div className="card space-y-4">
-          {/* Status Tabs & Search */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            {/* Status Filter Tabs */}
-            <div className="inline-flex p-1 bg-gray-100 rounded-xl space-x-1 overflow-x-auto max-w-full">
-              {[
-                { id: 'all', label: 'All Dispatches' },
-                { id: 'draft', label: 'Drafts' },
-                { id: 'confirmed', label: 'Confirmed' },
-                { id: 'cancelled', label: 'Cancelled' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setStatusFilter(tab.id)}
-                  className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                    statusFilter === tab.id
-                      ? 'bg-white text-primary-700 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+          {/* Status & Category Tabs & Search */}
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Status Filter Tabs */}
+              <div className="inline-flex p-1 bg-gray-100 rounded-xl space-x-1 overflow-x-auto max-w-full">
+                {[
+                  { id: 'all', label: 'All Dispatches' },
+                  { id: 'draft', label: 'Drafts' },
+                  { id: 'confirmed', label: 'Confirmed' },
+                  { id: 'cancelled', label: 'Cancelled' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setStatusFilter(tab.id)}
+                    className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                      statusFilter === tab.id
+                        ? 'bg-white text-primary-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Category Filter Tabs */}
+              <div className="inline-flex p-1 bg-gray-100 rounded-xl space-x-1 overflow-x-auto">
+                {[
+                  { id: 'all', label: 'All Categories' },
+                  { id: 'party', label: '🏢 Party' },
+                  { id: 'local', label: '🏭 Local Plant' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setTypeFilter(tab.id)}
+                    className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                      typeFilter === tab.id
+                        ? 'bg-white text-primary-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Search Input */}
@@ -473,7 +512,7 @@ export default function DispatchListPage() {
               </div>
               <input
                 type="text"
-                placeholder="Search vehicle, destination..."
+                placeholder="Search vehicle, destination, party, plant..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input-field pl-9 text-xs sm:text-sm py-1.5"
@@ -505,7 +544,7 @@ export default function DispatchListPage() {
               />
             </div>
             <div className="ml-auto flex items-center space-x-3">
-              {(dateFrom || dateTo || searchTerm || statusFilter !== 'all') && (
+              {(dateFrom || dateTo || searchTerm || statusFilter !== 'all' || typeFilter !== 'all') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -513,6 +552,7 @@ export default function DispatchListPage() {
                     setDateTo('');
                     setSearchTerm('');
                     setStatusFilter('all');
+                    setTypeFilter('all');
                   }}
                   className="text-xs text-primary-600 hover:text-primary-800 font-semibold underline"
                 >
@@ -624,14 +664,25 @@ export default function DispatchListPage() {
 
                           {/* Route: From -> Destination */}
                           <td className="px-4 py-3.5 text-gray-700">
-                            <div className="flex items-center space-x-1.5 font-medium">
-                              <span className="text-gray-500 text-xs">{dispatch.from_location}</span>
-                              <span className="text-primary-600">→</span>
-                              <span className="text-gray-900">{dispatch.destination}</span>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 font-medium">
+                              {resolveDispatchType(dispatch) === 'local' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 w-fit">
+                                  🏭 Local Plant
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 w-fit">
+                                  🏢 Party
+                                </span>
+                              )}
+                              <div className="flex items-center space-x-1.5 text-xs">
+                                <span className="text-gray-500">{dispatch.from_location}</span>
+                                <span className="text-primary-600">→</span>
+                                <span className="text-gray-900 font-semibold">{dispatch.destination}</span>
+                              </div>
                             </div>
-                            {dispatch.remarks && (
-                              <p className="text-xs text-gray-500 truncate max-w-xs mt-0.5">
-                                Note: {dispatch.remarks}
+                            {cleanDispatchRemarks(dispatch.remarks) && (
+                              <p className="text-xs text-gray-500 truncate max-w-xs mt-1">
+                                Note: {cleanDispatchRemarks(dispatch.remarks)}
                               </p>
                             )}
                           </td>
@@ -1027,6 +1078,44 @@ export default function DispatchListPage() {
               </div>
 
               <form onSubmit={handleSaveDispatchEdit} className="space-y-4 text-xs">
+                {/* Dispatch Category Selector */}
+                <div>
+                  <label className="label text-xs">Dispatch Category <span className="text-red-500">*</span></label>
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditDispatchType('party')}
+                      className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-center space-x-2.5 ${
+                        editDispatchType === 'party'
+                          ? 'border-blue-500 bg-blue-50 text-blue-900 font-bold ring-1 ring-blue-500'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-lg">🏢</span>
+                      <div>
+                        <div className="font-semibold text-gray-900">Party Dispatch</div>
+                        <div className="text-[10px] font-normal text-gray-500">Commercial sale to party</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEditDispatchType('local')}
+                      className={`p-2.5 rounded-xl border text-left text-xs transition-all flex items-center space-x-2.5 ${
+                        editDispatchType === 'local'
+                          ? 'border-amber-500 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-500'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-lg">🏭</span>
+                      <div>
+                        <div className="font-semibold text-gray-900">Local Dispatch</div>
+                        <div className="text-[10px] font-normal text-gray-500">Internal to other plant</div>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="label text-xs">Vehicle Number <span className="text-red-500">*</span></label>
@@ -1041,12 +1130,15 @@ export default function DispatchListPage() {
                   </div>
 
                   <div>
-                    <label className="label text-xs">Destination <span className="text-red-500">*</span></label>
+                    <label className="label text-xs">
+                      {editDispatchType === 'local' ? 'Destination Plant' : 'Destination Party / City'}{' '}
+                      <span className="text-red-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={editDestination}
                       onChange={(e) => setEditDestination(e.target.value)}
-                      placeholder="e.g. Jaipur Depot, Client Warehouse"
+                      placeholder={editDispatchType === 'local' ? 'e.g. Jospo Plant 2, Unit 2' : 'e.g. Jaipur Depot, Client Warehouse'}
                       className="input-field text-xs"
                       required
                     />
@@ -1149,6 +1241,16 @@ export default function DispatchListPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3.5 rounded-xl text-xs mb-4">
+                <div className="col-span-2 flex items-center justify-between pb-2 border-b border-gray-200">
+                  <span className="text-gray-500 font-medium">Dispatch Category:</span>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                    resolveDispatchType(viewDetailsModal) === 'local'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : 'bg-blue-100 text-blue-800 border border-blue-300'
+                  }`}>
+                    {resolveDispatchType(viewDetailsModal) === 'local' ? '🏭 Local Dispatch (Other Plant)' : '🏢 Party Dispatch'}
+                  </span>
+                </div>
                 <div>
                   <span className="text-gray-500 block">Vehicle Number:</span>
                   <span className="font-mono font-bold text-gray-900">{viewDetailsModal.vehicle_number}</span>
@@ -1162,7 +1264,9 @@ export default function DispatchListPage() {
                   <span className="font-medium text-gray-900">{viewDetailsModal.from_location}</span>
                 </div>
                 <div>
-                  <span className="text-gray-500 block">Destination:</span>
+                  <span className="text-gray-500 block">
+                    {resolveDispatchType(viewDetailsModal) === 'local' ? 'Destination Plant:' : 'Destination:'}
+                  </span>
                   <span className="font-medium text-gray-900">{viewDetailsModal.destination}</span>
                 </div>
                 <div>
@@ -1177,9 +1281,9 @@ export default function DispatchListPage() {
                 </div>
               </div>
 
-              {viewDetailsModal.remarks && (
+              {cleanDispatchRemarks(viewDetailsModal.remarks) && (
                 <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-xs text-blue-900">
-                  <span className="font-bold">Remarks:</span> {viewDetailsModal.remarks}
+                  <span className="font-bold">Remarks:</span> {cleanDispatchRemarks(viewDetailsModal.remarks)}
                 </div>
               )}
 

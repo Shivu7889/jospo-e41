@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import { formatDispatchRemarks } from '@/lib/dispatch';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,9 +82,12 @@ export async function POST(request) {
       destination,
       dispatch_date = getTodayIST(),
       remarks,
+      dispatch_type = 'party',
       items = [],
       auto_confirm = false,
     } = body;
+
+    const normalizedType = dispatch_type === 'local' ? 'local' : 'party';
 
     // 1. Validation
     if (!vehicle_number || !vehicle_number.trim()) {
@@ -136,20 +140,35 @@ export async function POST(request) {
       }
     }
 
-    // 3. Insert dispatch record
-    const { data: dispatchRecord, error: dispatchError } = await supabase
+    // 3. Insert dispatch record with dispatch_type and remarks fallback
+    const insertPayload = {
+      vehicle_number: vehicle_number.trim().toUpperCase(),
+      from_location: from_location.trim(),
+      destination: destination.trim(),
+      dispatch_date,
+      remarks: formatDispatchRemarks(remarks, normalizedType),
+      status: 'draft',
+      employee_id: employeeId,
+      dispatch_type: normalizedType,
+    };
+
+    let { data: dispatchRecord, error: dispatchError } = await supabase
       .from('dispatches')
-      .insert({
-        vehicle_number: vehicle_number.trim().toUpperCase(),
-        from_location: from_location.trim(),
-        destination: destination.trim(),
-        dispatch_date,
-        remarks: remarks?.trim() || null,
-        status: 'draft',
-        employee_id: employeeId,
-      })
+      .insert(insertPayload)
       .select()
       .single();
+
+    // Fallback if dispatch_type column does not exist yet in Supabase schema cache
+    if (dispatchError && (dispatchError.message?.includes('dispatch_type') || dispatchError.code === 'PGRST204')) {
+      delete insertPayload.dispatch_type;
+      const retryResult = await supabase
+        .from('dispatches')
+        .insert(insertPayload)
+        .select()
+        .single();
+      dispatchRecord = retryResult.data;
+      dispatchError = retryResult.error;
+    }
 
     if (dispatchError) {
       return NextResponse.json({ error: dispatchError.message }, { status: 400 });

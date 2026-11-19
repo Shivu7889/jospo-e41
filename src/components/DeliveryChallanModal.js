@@ -1,5 +1,7 @@
 'use client';
 
+import { getDispatchTypeMeta, cleanDispatchRemarks } from '@/lib/dispatch';
+
 /**
  * DeliveryChallanModal
  * Official printable Delivery Challan & Gate Pass for dispatched coolers.
@@ -7,6 +9,8 @@
  */
 export default function DeliveryChallanModal({ dispatch, onClose }) {
   if (!dispatch) return null;
+
+  const typeMeta = getDispatchTypeMeta(dispatch);
 
   const totalQuantity = (dispatch.dispatch_items || []).reduce(
     (acc, it) => acc + (Number(it.quantity) || 0),
@@ -31,8 +35,14 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
           <div className="flex items-center space-x-2">
             <span className="text-xl">🖨️</span>
             <div>
-              <h3 className="text-base font-bold text-gray-900">Delivery Challan & Gate Pass</h3>
-              <p className="text-xs text-gray-500">Official dispatch documentation for driver & gate security</p>
+              <h3 className="text-base font-bold text-gray-900">
+                {typeMeta.type === 'local' ? 'Inter-Plant Transfer Gate Pass' : 'Delivery Challan & Gate Pass'}
+              </h3>
+              <p className="text-xs text-gray-500">
+                {typeMeta.type === 'local'
+                  ? 'Official stock transfer documentation to our other plant division'
+                  : 'Official dispatch documentation for driver & gate security'}
+              </p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -67,7 +77,9 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               E41 Industrial Area, Manufacturing Division • Customer Care: support@jospo.com
             </p>
             <div className="mt-2 inline-block px-4 py-1 bg-gray-900 text-white font-bold text-xs uppercase tracking-wider rounded print:bg-black print:text-white">
-              DELIVERY CHALLAN / VEHICLE GATE PASS
+              {typeMeta.type === 'local'
+                ? 'INTER-PLANT STOCK TRANSFER CHALLAN / VEHICLE GATE PASS'
+                : 'DELIVERY CHALLAN / VEHICLE GATE PASS'}
             </div>
           </div>
 
@@ -76,9 +88,14 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
             <div>
               <p className="text-[11px] text-gray-600">Challan / Pass No:</p>
               <p className="font-mono font-bold text-sm text-gray-900">{challanNo}</p>
+              <p className="text-[11px] text-gray-600 mt-1.5">Dispatch Category:</p>
+              <p className="font-bold text-gray-900 inline-flex items-center space-x-1">
+                <span>{typeMeta.icon}</span>
+                <span>{typeMeta.label}</span>
+              </p>
               <p className="text-[11px] text-gray-600 mt-1.5">Dispatch Date:</p>
               <p className="font-bold text-gray-900">{dispatch.dispatch_date || 'N/A'}</p>
-              <p className="text-[11px] text-gray-600 mt-1.5">Origin Location:</p>
+              <p className="text-[11px] text-gray-600 mt-1.5">Origin Factory:</p>
               <p className="font-semibold text-gray-900">{dispatch.from_location || 'Jospo E41 Factory'}</p>
             </div>
             <div>
@@ -86,7 +103,9 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               <p className="font-mono font-bold text-sm text-primary-800 print:text-black">
                 {dispatch.vehicle_number || 'N/A'}
               </p>
-              <p className="text-[11px] text-gray-600 mt-1.5">Destination / Consignee:</p>
+              <p className="text-[11px] text-gray-600 mt-1.5">
+                {typeMeta.type === 'local' ? 'Destination Plant / Receiving Unit:' : 'Destination / Consignee:'}
+              </p>
               <p className="font-bold text-gray-900">{dispatch.destination || 'N/A'}</p>
               <p className="text-[11px] text-gray-600 mt-1.5">Authorized Dispatcher:</p>
               <p className="font-semibold text-gray-900">{dispatch.employees?.name || 'Authorized Staff'}</p>
@@ -143,9 +162,9 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
           </div>
 
           {/* Remarks */}
-          {dispatch.remarks && (
+          {cleanDispatchRemarks(dispatch.remarks) && (
             <div className="mb-4 p-2 bg-gray-50 border border-gray-200 rounded text-[11px] print:bg-white print:border-gray-300">
-              <span className="font-bold">Dispatch Notes / Remarks:</span> {dispatch.remarks}
+              <span className="font-bold">Dispatch Notes / Remarks:</span> {cleanDispatchRemarks(dispatch.remarks)}
             </div>
           )}
 
