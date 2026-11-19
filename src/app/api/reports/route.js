@@ -468,6 +468,10 @@ export async function GET(request) {
         ? allRows
         : allRows.filter((r) => r.plant === plant);
 
+      const plantThekedarsSet = new Set(
+        plantFilteredRows.map((r) => r.thekedar_name).filter(Boolean)
+      );
+
       // Filter by thekedar if requested
       const filteredRows = selectedThekedar === 'all'
         ? plantFilteredRows
@@ -525,7 +529,7 @@ export async function GET(request) {
         total_quantity: totalQuantity,
         total_entries: filteredRows.length,
         thekedar_count: Object.keys(byThekedar).length,
-        thekedar_list: Array.from(allThekedarsSet).sort(),
+        thekedar_list: Array.from(plantThekedarsSet).sort(),
         by_thekedar: Object.values(byThekedar).sort((a, b) => b.total_quantity - a.total_quantity),
         by_model: Object.values(byModel).sort((a, b) => b.total_quantity - a.total_quantity),
         data: filteredRows,

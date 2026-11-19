@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import { normalizePlant, ALL_PLANTS_ID } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
-const DEFAULT_CONTRACTORS = [
+const DEFAULT_E41_CONTRACTORS = [
   'Chotu',
   'Ramesh Thekedar',
   'Suresh Thekedar',
@@ -12,46 +13,94 @@ const DEFAULT_CONTRACTORS = [
 ];
 
 /**
- * GET /api/contractors
- * List all active Thekedars (Contractors)
- * Accessible by all authenticated users (operators need to see who they can select)
+ * GET /api/contractors?plant=E41 G2
+ * List active Thekedars (Contractors) for a specific plant or all plants.
  */
-export async function GET() {
+export async function GET(request) {
   try {
     const auth = await authenticateRequest({ requireActive: false });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
-    // 1. Try querying the dedicated contractors table if it exists
-    let { data: dbContractors, error: dbError } = await supabase
-      .from('contractors')
-      .select('id, name, is_active, created_at')
-      .eq('is_active', true)
-      .order('name', { ascending: true });
+    const { searchParams } = new URL(request.url);
+    const rawPlant = searchParams.get('plant');
+    const isAllPlants = !rawPlant || rawPlant.toUpperCase() === ALL_PLANTS_ID;
+    const targetPlant = isAllPlants ? null : normalizePlant(rawPlant);
 
-    if (!dbError && dbContractors && dbContractors.length > 0) {
-      return NextResponse.json({
-        success: true,
-        source: 'contractors_table',
-        contractors: dbContractors.map((c) => c.name),
-        data: dbContractors,
-      });
+    // 1. Try querying the dedicated contractors table (with plant column)
+    try {
+      let query = supabase
+        .from('contractors')
+        .select('id, name, plant, is_active, created_at')
+        .eq('is_active', true)
+        .order('name', { ascending: true });
+
+      if (targetPlant) {
+        query = query.eq('plant', targetPlant);
+      }
+
+      let { data: dbContractors, error: dbError } = await query;
+
+      // If query failed because 'plant' column does not exist yet
+      if (dbError && (dbError.message?.includes('plant') || dbError.code === 'PGRST204')) {
+        const fbRes = await supabase
+          .from('contractors')
+          .select('id, name, is_active, created_at')
+          .eq('is_active', true)
+          .order('name', { ascending: true });
+
+        if (!fbRes.error && fbRes.data) {
+          // If viewing E41, return existing contractors; if other plant, return empty
+          if (!targetPlant || targetPlant === 'E41 G2') {
+            return NextResponse.json({
+              success: true,
+              source: 'contractors_table_legacy',
+              contractors: fbRes.data.map((c) => c.name),
+              data: fbRes.data.map((c) => ({ ...c, plant: 'E41 G2' })),
+            });
+          } else {
+            return NextResponse.json({
+              success: true,
+              source: 'contractors_table_legacy_empty',
+              contractors: [],
+              data: [],
+            });
+          }
+        }
+      } else if (!dbError && dbContractors && dbContractors.length > 0) {
+        return NextResponse.json({
+          success: true,
+          source: 'contractors_table',
+          contractors: dbContractors.map((c) => c.name),
+          data: dbContractors,
+        });
+      }
+    } catch (tblErr) {
+      console.warn('Contractors table query note:', tblErr?.message);
     }
 
-    // 2. Fallback: Query distinct contractor_name from production_entries
-    const distinctSet = new Set(DEFAULT_CONTRACTORS);
+    // 2. Fallback: Query distinct contractor_name from production_entries scoped to targetPlant
+    const distinctSet = new Set();
+    if (!targetPlant || targetPlant === 'E41 G2') {
+      DEFAULT_E41_CONTRACTORS.forEach((c) => distinctSet.add(c));
+    }
 
     try {
-      const { data: prodData } = await supabase
+      let prodQuery = supabase
         .from('production_entries')
-        .select('contractor_name')
+        .select('contractor_name, plant, remarks')
         .not('contractor_name', 'is', null)
-        .limit(200);
+        .limit(300);
+
+      const { data: prodData } = await prodQuery;
 
       if (prodData && prodData.length > 0) {
         prodData.forEach((row) => {
-          if (row.contractor_name && typeof row.contractor_name === 'string' && row.contractor_name.trim()) {
-            distinctSet.add(row.contractor_name.trim());
+          const rowPlant = normalizePlant(row.plant || (row.remarks?.match(/\[Plant:\s*([^\]]+)\]/i)?.[1]) || 'E41 G2');
+          if (!targetPlant || rowPlant === targetPlant) {
+            if (row.contractor_name && typeof row.contractor_name === 'string' && row.contractor_name.trim()) {
+              distinctSet.add(row.contractor_name.trim());
+            }
           }
         });
       }
@@ -65,7 +114,12 @@ export async function GET() {
       success: true,
       source: 'fallback_list',
       contractors: list,
-      data: list.map((name) => ({ id: name, name, is_active: true })),
+      data: list.map((name) => ({
+        id: name,
+        name,
+        plant: targetPlant || 'E41 G2',
+        is_active: true,
+      })),
     });
   } catch (err) {
     console.error('API /contractors GET error:', err);
@@ -78,35 +132,50 @@ export async function GET() {
 
 /**
  * POST /api/contractors
- * Add a new Thekedar name
- * RESTRICTED: Only admin role can add Thekedars
+ * Add a new Thekedar name for a specific plant
+ * RESTRICTED: Allowed roles: 'owner', 'admin'
  */
 export async function POST(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
     if (auth.error) return auth.error;
-    const { supabase } = auth;
+    const { supabase, employee } = auth;
 
     const body = await request.json();
     const name = (body.name || '').trim();
+    const plant = normalizePlant(body.plant || employee.plant || 'E41 G2');
 
     if (!name) {
       return NextResponse.json({ error: 'Thekedar name cannot be empty.' }, { status: 400 });
     }
 
-    // Try inserting into contractors table
-    const { data: inserted, error: insertError } = await supabase
+    // Try inserting into contractors table with plant
+    let { data: inserted, error: insertError } = await supabase
       .from('contractors')
-      .upsert({ name, is_active: true }, { onConflict: 'name' })
+      .upsert(
+        { name, plant, is_active: true },
+        { onConflict: 'name,plant' }
+      )
       .select()
       .single();
+
+    if (insertError && (insertError.message?.includes('plant') || insertError.code === 'PGRST204')) {
+      // Fallback if plant column not added yet
+      const fallback = await supabase
+        .from('contractors')
+        .upsert({ name, is_active: true }, { onConflict: 'name' })
+        .select()
+        .single();
+      inserted = fallback.data;
+      insertError = fallback.error;
+    }
 
     if (insertError) throw insertError;
 
     return NextResponse.json({
       success: true,
-      message: `Thekedar "${name}" added successfully by Admin.`,
-      contractor: inserted || { name, is_active: true },
+      message: `Thekedar "${name}" registered for ${plant} Plant.`,
+      contractor: inserted || { name, plant, is_active: true },
     });
   } catch (err) {
     console.error('API /contractors POST error:', err);
@@ -119,36 +188,42 @@ export async function POST(request) {
 
 /**
  * DELETE /api/contractors
- * Remove / Deactivate a Thekedar name
- * RESTRICTED: Only admin role can remove Thekedars
+ * Remove / Deactivate a Thekedar name for a plant
+ * RESTRICTED: Allowed roles: 'owner', 'admin'
  */
 export async function DELETE(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
     const { searchParams } = new URL(request.url);
-    const name = searchParams.get('name') || (await request.json().catch(() => ({}))).name;
+    const body = await request.json().catch(() => ({}));
+    const name = searchParams.get('name') || body.name;
+    const plant = searchParams.get('plant') || body.plant;
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: 'Thekedar name is required for removal.' }, { status: 400 });
     }
 
     const cleanName = name.trim();
-
-    // Try updating is_active = false or deleting in contractors table
-    const { error: updateError } = await supabase
+    let query = supabase
       .from('contractors')
       .update({ is_active: false })
       .eq('name', cleanName);
 
+    if (plant && plant !== ALL_PLANTS_ID) {
+      query = query.eq('plant', normalizePlant(plant));
+    }
+
+    const { error: updateError } = await query;
     if (updateError) throw updateError;
 
     return NextResponse.json({
       success: true,
       message: `Thekedar "${cleanName}" removed successfully.`,
       name: cleanName,
+      plant: plant || null,
     });
   } catch (err) {
     console.error('API /contractors DELETE error:', err);

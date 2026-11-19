@@ -165,15 +165,10 @@ export async function GET(request) {
       throw error;
     }
 
-    // Collect all unique Thekedars across all records for the dropdown filter
-    const uniqueThekedarsSet = new Set();
-
     // Flatten / normalize helper fields for ease of frontend consumption
     let normalizedEntries = (entries || []).map((entry) => {
       const thekedar = extractThekedar(entry);
       const manpower = extractManpower(entry);
-      if (thekedar) uniqueThekedarsSet.add(thekedar);
-
       const rawPlant = entry.plant || (entry.remarks?.match(/\[Plant:\s*([^\]]+)\]/i)?.[1]) || 'E41 G2';
       const plant = normalizePlant(rawPlant);
 
@@ -182,6 +177,8 @@ export async function GET(request) {
         .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
         .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
         .replace(/\[Plant:\s*[^\]]+\]/gi, '')
+        .trim();
+
       return {
         ...entry,
         plant,
@@ -200,6 +197,14 @@ export async function GET(request) {
       const targetP = normalizePlant(plantParam);
       normalizedEntries = normalizedEntries.filter((e) => e.plant === targetP);
     }
+
+    // Collect all unique Thekedars ONLY for the scoped plant entries
+    const uniqueThekedarsSet = new Set();
+    normalizedEntries.forEach((e) => {
+      if (e.contractor_name && e.contractor_name !== 'Unknown') {
+        uniqueThekedarsSet.add(e.contractor_name);
+      }
+    });
 
     // Apply contractor filter in memory if specified and not 'all'
     if (contractorParam && contractorParam !== 'all') {

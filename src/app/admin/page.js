@@ -41,7 +41,20 @@ export default function AdminPage() {
   const [thekedarsList, setThekedarsList] = useState([]);
   const [loadingThekedars, setLoadingThekedars] = useState(true);
   const [newThekedarName, setNewThekedarName] = useState('');
+  const [thekedarPlantFilter, setThekedarPlantFilter] = useState(
+    activePlant && activePlant !== ALL_PLANTS_ID ? activePlant : 'ALL'
+  );
+  const [newThekedarPlant, setNewThekedarPlant] = useState(
+    activePlant && activePlant !== ALL_PLANTS_ID ? activePlant : DEFAULT_PLANT_ID
+  );
   const [submittingThekedar, setSubmittingThekedar] = useState(false);
+
+  useEffect(() => {
+    if (activePlant && activePlant !== ALL_PLANTS_ID) {
+      setThekedarPlantFilter(activePlant);
+      setNewThekedarPlant(activePlant);
+    }
+  }, [activePlant]);
 
   // Read URL query parameters on initial mount (e.g. /admin?section=thekedars)
   useEffect(() => {
@@ -58,17 +71,21 @@ export default function AdminPage() {
   const fetchThekedars = useCallback(async () => {
     try {
       setLoadingThekedars(true);
-      const res = await fetch('/api/contractors');
+      const queryPlant = thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : '';
+      const plantParam = queryPlant ? `?plant=${encodeURIComponent(queryPlant)}` : '';
+      const res = await fetch(`/api/contractors${plantParam}`);
       const data = await res.json();
-      if (res.ok && data.contractors) {
-        setThekedarsList(data.contractors);
+      if (res.ok && data.data && Array.isArray(data.data)) {
+        setThekedarsList(data.data);
+      } else if (res.ok && data.contractors) {
+        setThekedarsList(data.contractors.map((name) => ({ name, plant: queryPlant || 'E41 G2' })));
       }
     } catch (err) {
       console.error('Error fetching contractors:', err);
     } finally {
       setLoadingThekedars(false);
     }
-  }, []);
+  }, [thekedarPlantFilter]);
 
   useEffect(() => {
     fetchThekedars();
@@ -82,19 +99,20 @@ export default function AdminPage() {
       showToast('Please enter a contractor / Thekedar name', 'warning');
       return;
     }
+    const targetPlant = newThekedarPlant || DEFAULT_PLANT_ID;
     try {
       setSubmittingThekedar(true);
       const res = await fetch('/api/contractors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: clean }),
+        body: JSON.stringify({ name: clean, plant: targetPlant }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to add Thekedar');
 
-      setThekedarsList((prev) => Array.from(new Set([...prev, clean])));
+      showToast(`Added Thekedar for ${targetPlant}: ${clean}`, 'success');
       setNewThekedarName('');
-      showToast(`Added Thekedar: ${clean}`, 'success');
+      fetchThekedars();
     } catch (err) {
       console.error('Error adding contractor:', err);
       showToast(err.message || 'Error adding contractor', 'error');
@@ -104,20 +122,25 @@ export default function AdminPage() {
   };
 
   // Admin remove Thekedar
-  const handleRemoveThekedar = async (nameToRemove) => {
-    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" from active Thekedars? Operators will no longer be able to select this contractor for new production.`)) {
+  const handleRemoveThekedar = async (thekedar) => {
+    const nameToRemove = typeof thekedar === 'string' ? thekedar : thekedar.name;
+    const plantTarget = typeof thekedar === 'string'
+      ? (thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : DEFAULT_PLANT_ID)
+      : (thekedar.plant || DEFAULT_PLANT_ID);
+
+    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" (${plantTarget}) from active Thekedars? Operators will no longer be able to select this contractor for new production.`)) {
       return;
     }
     try {
       setSubmittingThekedar(true);
-      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}`, {
+      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}&plant=${encodeURIComponent(plantTarget)}`, {
         method: 'DELETE',
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to remove Thekedar');
 
-      setThekedarsList((prev) => prev.filter((t) => t !== nameToRemove));
-      showToast(`Removed Thekedar: ${nameToRemove}`, 'success');
+      showToast(`Removed Thekedar: ${nameToRemove} (${plantTarget})`, 'success');
+      fetchThekedars();
     } catch (err) {
       console.error('Error removing contractor:', err);
       showToast(err.message || 'Error removing contractor', 'error');
@@ -627,6 +650,20 @@ export default function AdminPage() {
                     disabled={submittingThekedar}
                   />
                 </div>
+                <div className="w-full sm:w-48">
+                  <select
+                    value={newThekedarPlant}
+                    onChange={(e) => setNewThekedarPlant(e.target.value)}
+                    className="input-field text-xs sm:text-sm bg-gray-50/70 font-semibold"
+                    disabled={submittingThekedar || (activePlant && activePlant !== ALL_PLANTS_ID)}
+                  >
+                    {PLANTS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.icon} {p.shortName} Plant
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   type="submit"
                   disabled={submittingThekedar || !newThekedarName.trim()}
@@ -665,16 +702,47 @@ export default function AdminPage() {
 
             {/* Thekedars Table */}
             <div className="card p-0 overflow-hidden border border-gray-200 shadow-sm">
-              <div className="p-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between">
+              <div className="p-4 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h4 className="text-sm font-bold text-gray-900">Approved Contractor Roster</h4>
                   <p className="text-xs text-gray-500">
-                    These Thekedars appear in the production entry dropdown.
+                    These Thekedars appear in the production entry dropdown for their assigned plant.
                   </p>
                 </div>
-                <span className="text-xs font-bold text-gray-700 bg-white px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm">
-                  {thekedarsList.length} registered
-                </span>
+                <div className="flex items-center space-x-2">
+                  {isOwner && (
+                    <div className="flex items-center bg-white p-1 rounded-lg border border-gray-200 shadow-xs space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => setThekedarPlantFilter('ALL')}
+                        className={`px-2 py-0.5 text-xs font-bold rounded-md transition-colors ${
+                          thekedarPlantFilter === 'ALL'
+                            ? 'bg-purple-600 text-white'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        All Plants
+                      </button>
+                      {PLANTS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setThekedarPlantFilter(p.id)}
+                          className={`px-2 py-0.5 text-xs font-bold rounded-md transition-colors ${
+                            thekedarPlantFilter === p.id
+                              ? 'bg-primary-600 text-white'
+                              : 'text-gray-600 hover:text-gray-900'
+                          }`}
+                        >
+                          {p.shortName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <span className="text-xs font-bold text-gray-700 bg-white px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm whitespace-nowrap">
+                    {thekedarsList.length} registered
+                  </span>
+                </div>
               </div>
 
               {loadingThekedars ? (
@@ -699,6 +767,9 @@ export default function AdminPage() {
                           Thekedar Name
                         </th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
+                          Assigned Plant
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
                           Status
                         </th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
@@ -707,40 +778,51 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      {thekedarsList.map((name, idx) => (
-                        <tr key={name} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 text-gray-400 font-mono text-xs">{idx + 1}</td>
-                          <td className="px-4 py-3 font-semibold text-gray-900 flex items-center space-x-2">
-                            <span className="w-7 h-7 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
-                              👷
-                            </span>
-                            <span>{name}</span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="badge-success text-xs font-semibold">Active in Production</span>
-                          </td>
-                          <td className="px-4 py-3 text-right space-x-2">
-                            <Link
-                              href={`/reports?tab=thekedar_production&thekedar=${encodeURIComponent(name)}`}
-                              className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline inline-flex items-center space-x-1"
-                            >
-                              <span>View Reports</span>
-                              <span>→</span>
-                            </Link>
+                      {thekedarsList.map((item, idx) => {
+                        const name = typeof item === 'string' ? item : item.name;
+                        const plant = typeof item === 'string' ? (thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : 'E41 G2') : (item.plant || 'E41 G2');
+                        const meta = getPlantMeta(plant);
+                        return (
+                          <tr key={`${name}-${plant}-${idx}`} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-3 text-gray-400 font-mono text-xs">{idx + 1}</td>
+                            <td className="px-4 py-3 font-semibold text-gray-900 flex items-center space-x-2">
+                              <span className="w-7 h-7 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
+                                👷
+                              </span>
+                              <span>{name}</span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex items-center space-x-1 text-xs font-bold px-2 py-0.5 rounded-full border ${meta.tagColor || 'bg-gray-100 text-gray-800 border-gray-200'}`}>
+                                <span>{meta.icon || '🏭'}</span>
+                                <span>{meta.name || plant}</span>
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="badge-success text-xs font-semibold">Active in Production</span>
+                            </td>
+                            <td className="px-4 py-3 text-right space-x-2">
+                              <Link
+                                href={`/reports?tab=thekedar_production&thekedar=${encodeURIComponent(name)}&plant=${encodeURIComponent(plant)}`}
+                                className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline inline-flex items-center space-x-1"
+                              >
+                                <span>View Reports</span>
+                                <span>→</span>
+                              </Link>
 
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveThekedar(name)}
-                              disabled={submittingThekedar}
-                              className="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors font-medium border border-red-200 inline-flex items-center space-x-1"
-                              title={`Remove ${name}`}
-                            >
-                              <span>🗑️</span>
-                              <span>Remove</span>
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveThekedar(item)}
+                                disabled={submittingThekedar}
+                                className="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors font-medium border border-red-200 inline-flex items-center space-x-1"
+                                title={`Remove ${name} (${plant})`}
+                              >
+                                <span>🗑️</span>
+                                <span>Remove</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

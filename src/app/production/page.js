@@ -50,14 +50,8 @@ export default function ProductionPage() {
   ]);
   const [submitting, setSubmitting] = useState(false);
 
-  // Thekedar (Assembly Contractor) State
-  const [thekedars, setThekedars] = useState([
-    'Chotu',
-    'Ramesh Thekedar',
-    'Suresh Thekedar',
-    'Mukesh Thekedar',
-    'Kailash Assembly',
-  ]);
+  // Thekedar (Assembly Contractor) State (loaded dynamically per plant)
+  const [thekedars, setThekedars] = useState([]);
   const [selectedThekedar, setSelectedThekedar] = useState('');
   const [showManageThekedarsModal, setShowManageThekedarsModal] = useState(false);
   const [newThekedarName, setNewThekedarName] = useState('');
@@ -127,19 +121,29 @@ export default function ProductionPage() {
     return models.filter((m) => isModelManufacturableAtPlant(m, targetPlantForModels));
   }, [models, targetPlantForModels]);
 
-  // Fetch contractor list from /api/contractors
+  // Target plant for contractors
+  const targetThekedarPlant = activePlant !== ALL_PLANTS_ID ? activePlant : entryPlant;
+
+  // Clear thekedars on plant switch to avoid cross-plant contamination
+  useEffect(() => {
+    setSelectedThekedar('');
+    setThekedars([]);
+  }, [targetThekedarPlant]);
+
+  // Fetch contractor list from /api/contractors for the current plant
   const fetchThekedars = useCallback(async () => {
     try {
-      const res = await fetch('/api/contractors');
+      const plantParam = targetThekedarPlant ? `?plant=${encodeURIComponent(targetThekedarPlant)}` : '';
+      const res = await fetch(`/api/contractors${plantParam}`);
       const data = await res.json();
-      if (res.ok && data.contractors && Array.isArray(data.contractors) && data.contractors.length > 0) {
+      if (res.ok && data.contractors && Array.isArray(data.contractors)) {
         setThekedars(data.contractors);
-        setSelectedThekedar((curr) => (curr && data.contractors.includes(curr) ? curr : data.contractors[0]));
+        setSelectedThekedar((curr) => (curr && data.contractors.includes(curr) ? curr : (data.contractors[0] || '')));
       }
     } catch (e) {
       console.warn('Could not fetch contractors:', e);
     }
-  }, []);
+  }, [targetThekedarPlant]);
 
   // Fetch production log for the selected/today date and plant
   const fetchTodayLog = useCallback(async (targetDate = productionDate) => {
@@ -171,7 +175,7 @@ export default function ProductionPage() {
     fetchModels();
     fetchThekedars();
     fetchTodayLog(productionDate);
-  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate, activePlant]);
+  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate, activePlant, targetThekedarPlant]);
 
   // Admin-only helper: Add new Thekedar
   const handleAddNewThekedar = async (e) => {
@@ -185,12 +189,13 @@ export default function ProductionPage() {
       showToast('Please enter a contractor / Thekedar name', 'warning');
       return;
     }
+    const plantToSave = targetThekedarPlant || DEFAULT_PLANT_ID;
     try {
       setSavingThekedar(true);
       const res = await fetch('/api/contractors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: clean }),
+        body: JSON.stringify({ name: clean, plant: plantToSave }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to add Thekedar');
@@ -199,7 +204,7 @@ export default function ProductionPage() {
       setThekedars(updated);
       setSelectedThekedar(clean);
       setNewThekedarName('');
-      showToast(`Added Thekedar: ${clean}`, 'success');
+      showToast(`Added Thekedar for ${plantToSave}: ${clean}`, 'success');
     } catch (err) {
       console.error('Error adding Thekedar:', err);
       showToast(err.message || 'Error adding Thekedar', 'error');
@@ -214,12 +219,13 @@ export default function ProductionPage() {
       showToast('Permission denied. Only Admins can remove Thekedars.', 'error');
       return;
     }
-    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" from active Thekedars?`)) {
+    const plantTarget = targetThekedarPlant || DEFAULT_PLANT_ID;
+    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" from ${plantTarget} Thekedars?`)) {
       return;
     }
     try {
       setSavingThekedar(true);
-      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}`, {
+      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}&plant=${encodeURIComponent(plantTarget)}`, {
         method: 'DELETE',
       });
       const data = await res.json();
@@ -230,7 +236,7 @@ export default function ProductionPage() {
       if (selectedThekedar === nameToRemove) {
         setSelectedThekedar(updated[0] || '');
       }
-      showToast(`Removed Thekedar: ${nameToRemove}`, 'success');
+      showToast(`Removed Thekedar from ${plantTarget}: ${nameToRemove}`, 'success');
     } catch (err) {
       console.error('Error removing Thekedar:', err);
       showToast(err.message || 'Error removing Thekedar', 'error');
@@ -414,7 +420,7 @@ export default function ProductionPage() {
         setThekedars(updated);
         try {
           if (typeof window !== 'undefined') {
-            localStorage.setItem('jospo_thekedars_list', JSON.stringify(updated));
+            localStorage.setItem(`jospo_thekedars_${targetThekedarPlant}`, JSON.stringify(updated));
           }
         } catch (e) {}
       }
@@ -1184,13 +1190,13 @@ export default function ProductionPage() {
                   <span className="text-2xl">👷</span>
                   <div>
                     <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
-                      <span>Manage Assembly Thekedars</span>
+                      <span>Manage {targetThekedarPlant} Thekedars</span>
                       <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full uppercase">
                         Admin Only
                       </span>
                     </h3>
                     <p className="text-xs text-gray-500">
-                      Add new contractors or remove existing ones from factory production.
+                      Add new contractors or remove existing ones for the {targetThekedarPlant} plant.
                     </p>
                   </div>
                 </div>
@@ -1206,7 +1212,7 @@ export default function ProductionPage() {
               {/* Form: Add New Contractor */}
               <form onSubmit={handleAddNewThekedar} className="space-y-2 p-3.5 bg-gray-50 rounded-xl border border-gray-200">
                 <label className="text-xs font-bold text-gray-700 block">
-                  Add New Thekedar Name:
+                  Add New Thekedar Name ({targetThekedarPlant}):
                 </label>
                 <div className="flex items-center space-x-2">
                   <input
@@ -1231,7 +1237,7 @@ export default function ProductionPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">
-                    Current Thekedars ({thekedars.length})
+                    {targetThekedarPlant} Thekedars ({thekedars.length})
                   </span>
                   <span className="text-[11px] text-gray-400">Click remove to delete</span>
                 </div>
