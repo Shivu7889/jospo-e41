@@ -7,7 +7,7 @@ import DataTable from '@/components/DataTable';
 import QRGenerator from '@/components/QRGenerator';
 import { useToast } from '@/components/Toast';
 import { usePlant } from '@/contexts/PlantContext';
-import { ALL_PLANTS_ID } from '@/lib/plants';
+import { ALL_PLANTS_ID, getPlantMeta } from '@/lib/plants';
 
 export default function ModelsPage() {
   const { showToast } = useToast();
@@ -558,7 +558,7 @@ export default function ModelsPage() {
           </div>
 
           <form onSubmit={handleCreateModel} className="space-y-4">
-            <div className={`grid grid-cols-1 md:grid-cols-2 ${isOwnerConsolidated ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               {/* Model Name */}
               <div>
                 <label className="label">
@@ -595,8 +595,8 @@ export default function ModelsPage() {
                 </span>
               </div>
 
-              {/* Manufacturing Facility (ONLY in Owner Consolidated mode) */}
-              {isOwnerConsolidated && (
+              {/* Manufacturing Facility */}
+              {isOwnerConsolidated ? (
                 <div>
                   <label className="label">
                     Manufacturing Facility <span className="text-red-500">*</span>
@@ -613,6 +613,24 @@ export default function ModelsPage() {
                   </select>
                   <span className="text-[11px] text-gray-400 mt-1 block">
                     Plant that manufactures this model
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <label className="label">
+                    Manufacturing Plant <span className="text-red-500">*</span>
+                  </label>
+                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 min-h-[38px]">
+                    <div className="flex items-center space-x-2">
+                      <span>{getPlantMeta(activePlant)?.icon || '🏭'}</span>
+                      <span>{activePlant}</span>
+                    </div>
+                    <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-2 py-0.5 rounded-full border border-primary-200">
+                      Selected Plant
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-gray-400 mt-1 block">
+                    Assigned to {activePlant}
                   </span>
                 </div>
               )}
@@ -951,8 +969,8 @@ export default function ModelsPage() {
                   </div>
                 </div>
 
-                {/* Manufacturing Facility (ONLY in Owner Consolidated mode) */}
-                {isOwnerConsolidated && (
+                {/* Manufacturing Facility */}
+                {isOwnerConsolidated ? (
                   <div>
                     <label className="text-xs font-bold text-gray-700 block mb-1">
                       Manufacturing Facility <span className="text-red-500">*</span>
@@ -970,6 +988,21 @@ export default function ModelsPage() {
                     <span className="text-[10px] text-gray-400 mt-0.5 block">
                       Designated plant allowed to assemble and log production for this model
                     </span>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Manufacturing Plant <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 min-h-[38px]">
+                      <div className="flex items-center space-x-2">
+                        <span>{getPlantMeta(editingModel?.manufacturing_plant || activePlant)?.icon || '🏭'}</span>
+                        <span>{editingModel?.manufacturing_plant || activePlant}</span>
+                      </div>
+                      <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-2 py-0.5 rounded-full border border-primary-200">
+                        Selected Plant
+                      </span>
+                    </div>
                   </div>
                 )}
 

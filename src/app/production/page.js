@@ -391,7 +391,7 @@ export default function ProductionPage() {
     e.preventDefault();
     const cleanName = newModelName.trim();
     const cleanCode = newModelCode.trim().toUpperCase();
-    const targetPlant = normalizePlant(newModelPlant || entryPlant);
+    const targetPlant = normalizePlant(entryPlant || DEFAULT_PLANT_ID);
 
     if (!cleanName) {
       showToast('Model Name is required', 'error');
@@ -1715,20 +1715,18 @@ export default function ProductionPage() {
                     <label className="text-xs font-bold text-gray-700 block mb-1">
                       Manufacturing Plant <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={newModelPlant}
-                      onChange={(e) => setNewModelPlant(e.target.value)}
-                      className="input-field text-xs font-bold bg-white text-gray-900"
-                      required
-                    >
-                      {Object.keys(PLANTS).map((pKey) => (
-                        <option key={pKey} value={pKey}>
-                          🏭 {pKey} ({PLANTS[pKey].name})
-                        </option>
-                      ))}
-                    </select>
-                    <span className="text-[10px] text-gray-400 mt-0.5 block">
-                      Plant where this cooler is made
+                    <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 min-h-[38px]">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-base">{getPlantMeta(entryPlant)?.icon || '🏭'}</span>
+                        <span className="text-gray-900 font-extrabold">{entryPlant}</span>
+                        <span className="text-gray-500 font-normal">({getPlantMeta(entryPlant)?.name || `${entryPlant} Plant`})</span>
+                      </div>
+                      <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-2 py-0.5 rounded-full border border-primary-200">
+                        Selected Plant
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-gray-500 mt-0.5 block">
+                      New model will be registered exclusively for <strong>{entryPlant}</strong>
                     </span>
                   </div>
                 </div>
