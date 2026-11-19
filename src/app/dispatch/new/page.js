@@ -273,13 +273,19 @@ function NewDispatchContent() {
     }
   }, [supabase, showToast, router, todayStr, employee]);
 
-  // Initial data loading
+  // Initial data loading and active plant sync
   useEffect(() => {
-    loadModelsAndStock();
+    if (activePlant && activePlant !== ALL_PLANTS_ID) {
+      const plantId = normalizePlant(activePlant);
+      setFromLocation(plantId);
+      loadModelsAndStock(plantId);
+    } else {
+      loadModelsAndStock();
+    }
     if (editId) {
       loadExistingDraft(editId);
     }
-  }, [editId, loadModelsAndStock, loadExistingDraft]);
+  }, [editId, activePlant, loadModelsAndStock, loadExistingDraft]);
 
   // Keep items' available_stock synced with stockMap
   useEffect(() => {
@@ -325,10 +331,13 @@ function NewDispatchContent() {
           const parsed = JSON.parse(savedDraft);
           const hasItems = Array.isArray(parsed?.items) && parsed.items.length > 0;
           const hasVehicle = Boolean(parsed?.vehicleNumber?.trim());
-
           if (hasItems || hasVehicle) {
             if (parsed.vehicleNumber) setVehicleNumber(parsed.vehicleNumber);
-            if (parsed.fromLocation) setFromLocation(parsed.fromLocation);
+            if (activePlant && activePlant !== ALL_PLANTS_ID) {
+              setFromLocation(normalizePlant(activePlant));
+            } else if (parsed.fromLocation) {
+              setFromLocation(parsed.fromLocation);
+            }
             if (parsed.destination) setDestination(parsed.destination);
             if (parsed.dispatchDate) setDispatchDate(parsed.dispatchDate);
             if (parsed.remarks) setRemarks(parsed.remarks);
@@ -1166,7 +1175,7 @@ function NewDispatchContent() {
 
       setVehicleNumber('');
       setDestination('');
-      setFromLocation('Jospo E41');
+      setFromLocation(defaultPlant);
       setDispatchDate(todayStr);
       setRemarks('');
       setItems([]);
@@ -1684,7 +1693,7 @@ function NewDispatchContent() {
               <label htmlFor="fromLocation" className="label text-xs font-bold text-gray-700">
                 Origin Plant (Dispatch Source) <span className="text-red-500">*</span>
               </label>
-              {isOwner ? (
+              {activePlant === ALL_PLANTS_ID && isOwner ? (
                 <div>
                   <div className="flex rounded-lg shadow-xs overflow-hidden border border-gray-300">
                     {PLANTS.map((p) => {
@@ -1713,14 +1722,16 @@ function NewDispatchContent() {
                     })}
                   </div>
                   <p className="text-[11px] text-gray-500 mt-1">
-                    Select origin plant. Stock availability will adjust accordingly.
+                    Consolidated View: Select physical plant where truck is loading.
                   </p>
                 </div>
               ) : (
                 <div className="flex items-center space-x-2 px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-800 text-xs font-bold">
                   <span>🏭</span>
                   <span>{normalizePlant(fromLocation)} Plant</span>
-                  <span className="text-[10px] text-gray-400 font-normal ml-auto">(Your Plant)</span>
+                  <span className="text-[10px] text-primary-600 font-semibold ml-auto bg-primary-50 px-2 py-0.5 rounded border border-primary-200">
+                    Selected Plant
+                  </span>
                 </div>
               )}
             </div>
