@@ -237,13 +237,15 @@ export async function GET(request) {
  */
 export async function POST(request) {
   try {
-    const supabase = await createServerSupabase();
+    const userSupabase = await createServerSupabase();
+    const adminSupabase = createAdminSupabase();
+    const supabase = adminSupabase || userSupabase;
 
     // 1. Authenticate user
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser();
+    } = await userSupabase.auth.getUser();
 
     if (authError || !user) {
       return NextResponse.json(

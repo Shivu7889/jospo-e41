@@ -1,4 +1,4 @@
-import { createServerSupabase } from './supabase-server';
+import { createServerSupabase, createAdminSupabase } from './supabase-server';
 import { NextResponse } from 'next/server';
 
 /**
@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
  * @param {Object} options
  * @param {string[]} [options.allowedRoles] - If provided, restricts to these roles
  * @param {boolean} [options.requireActive] - If true (default), requires is_active = true
- * @returns {{ employee, supabase, error }} - employee record, supabase client, or error response
+ * @returns {{ employee, supabase, userSupabase, error }} - employee record, supabase client, or error response
  */
 export async function authenticateRequest({ allowedRoles = null, requireActive = true } = {}) {
   const supabase = await createServerSupabase();
@@ -20,6 +20,7 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
       ),
       employee: null,
       supabase,
+      userSupabase: supabase,
     };
   }
 
@@ -37,6 +38,7 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
       ),
       employee: null,
       supabase,
+      userSupabase: supabase,
     };
   }
 
@@ -48,6 +50,7 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
       ),
       employee: null,
       supabase,
+      userSupabase: supabase,
     };
   }
 
@@ -59,8 +62,12 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
       ),
       employee: null,
       supabase,
+      userSupabase: supabase,
     };
   }
 
-  return { employee, supabase, error: null };
+  const adminSupabase = createAdminSupabase();
+  const db = adminSupabase || supabase;
+
+  return { employee, supabase: db, userSupabase: supabase, error: null };
 }
