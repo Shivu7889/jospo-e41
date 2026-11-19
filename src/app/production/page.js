@@ -102,7 +102,8 @@ export default function ProductionPage() {
   const fetchModels = useCallback(async () => {
     try {
       setLoadingModels(true);
-      const res = await fetch('/api/models?active_only=true');
+      const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&for_plant=${encodeURIComponent(activePlant)}&view=production` : '';
+      const res = await fetch(`/api/models?active_only=true${plantParam}`);
       const data = await res.json();
       if (res.ok && data.success) {
         setModels(data.models || []);
@@ -115,15 +116,16 @@ export default function ProductionPage() {
     } finally {
       setLoadingModels(false);
     }
-  }, [showToast]);
+  }, [activePlant, showToast]);
 
   // Models permitted to be manufactured at the active entry plant
   // E41 G2: only E41 G2 models
   // C116: only C116 models
   // D4: only D4 models (cannot add E41 G2 or C116 production; those arrive via transfer)
+  const targetPlantForModels = activePlant !== ALL_PLANTS_ID ? activePlant : entryPlant;
   const manufacturableModels = useMemo(() => {
-    return models.filter((m) => isModelManufacturableAtPlant(m, entryPlant));
-  }, [models, entryPlant]);
+    return models.filter((m) => isModelManufacturableAtPlant(m, targetPlantForModels));
+  }, [models, targetPlantForModels]);
 
   // Fetch contractor list from /api/contractors
   const fetchThekedars = useCallback(async () => {
@@ -395,7 +397,7 @@ export default function ProductionPage() {
           production_date: productionDate,
           contractor_name: finalThekedar,
           thekedar_name: finalThekedar,
-          plant: normalizePlant(entryPlant || activePlant || userPlant),
+          plant: normalizePlant(activePlant !== ALL_PLANTS_ID ? activePlant : entryPlant),
           manpower: manpower !== '' && !isNaN(Number(manpower)) ? parseInt(manpower, 10) : null,
           remarks: remarks.trim() || null,
         }),
@@ -541,6 +543,11 @@ export default function ProductionPage() {
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-gray-100">
                 <h2 className="text-base font-bold text-gray-900 flex items-center space-x-2">
                   <span>Batch Production Form</span>
+                  {activePlant !== ALL_PLANTS_ID && (
+                    <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded border border-indigo-200">
+                      🏭 {activePlant}
+                    </span>
+                  )}
                 </h2>
                 <span className="text-xs bg-primary-50 text-primary-700 font-medium px-2 py-0.5 rounded-full border border-primary-200">
                   {rows.length} {rows.length === 1 ? 'Model' : 'Models'}
@@ -548,44 +555,36 @@ export default function ProductionPage() {
               </div>
 
               <form onSubmit={handleSubmitProduction} className="space-y-5">
-                {/* Plant Selector */}
-                <div>
-                  <label className="label text-xs font-bold text-gray-700">
-                    Manufacturing Plant <span className="text-red-500">*</span>
-                  </label>
-                  {isOwner ? (
-                    <div>
-                      <div className="flex rounded-lg shadow-xs overflow-hidden border border-gray-300">
-                        {PLANTS.map((p) => {
-                          const isSelected = normalizePlant(entryPlant) === p.id;
-                          return (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => setEntryPlant(p.id)}
-                              className={`flex-1 py-1.5 px-2 text-xs font-bold text-center transition-colors ${
-                                isSelected
-                                  ? 'bg-primary-600 text-white shadow-xs'
-                                  : 'bg-white text-gray-700 hover:bg-gray-50'
-                              }`}
-                            >
-                              {p.icon} {p.shortName}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <span className="text-[11px] text-gray-400 mt-1 block">
-                        Owner oversight: Choose plant to add inventory stock to.
-                      </span>
+                {/* Plant Selector - ONLY shown in Owner Consolidated Mode (All Plants) */}
+                {activePlant === ALL_PLANTS_ID && isOwner && (
+                  <div>
+                    <label className="label text-xs font-bold text-gray-700">
+                      Manufacturing Plant <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex rounded-lg shadow-xs overflow-hidden border border-gray-300">
+                      {PLANTS.map((p) => {
+                        const isSelected = normalizePlant(entryPlant) === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setEntryPlant(p.id)}
+                            className={`flex-1 py-1.5 px-2 text-xs font-bold text-center transition-colors ${
+                              isSelected
+                                ? 'bg-primary-600 text-white shadow-xs'
+                                : 'bg-white text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            {p.icon} {p.shortName}
+                          </button>
+                        );
+                      })}
                     </div>
-                  ) : (
-                    <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-800">
-                      <span>🏭</span>
-                      <span>{normalizePlant(userPlant)} Plant</span>
-                      <span className="text-[10px] text-gray-400 font-normal ml-auto">(Your Plant)</span>
-                    </div>
-                  )}
-                </div>
+                    <span className="text-[11px] text-gray-400 mt-1 block">
+                      Owner consolidated view: Choose plant to add inventory stock to.
+                    </span>
+                  </div>
+                )}
                 {/* Date Picker */}
                 <div>
                   <label className="label">
