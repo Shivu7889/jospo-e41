@@ -31,9 +31,10 @@ export async function GET(request) {
     const plantParam = searchParams.get('plant');
 
     const isOwner = isOwnerUser(employee);
-    // If user is not owner, lock to employee's assigned plant
-    const targetPlant = isOwner
-      ? (plantParam ? (plantParam === ALL_PLANTS_ID ? ALL_PLANTS_ID : normalizePlant(plantParam)) : ALL_PLANTS_ID)
+    const isOwnerOrAdmin = isOwner || employee.role === 'admin' || employee.role === 'dispatch';
+    // If user is owner, admin, or dispatch, allow plantParam; otherwise default to employee's assigned plant
+    const targetPlant = isOwnerOrAdmin
+      ? (plantParam ? (plantParam === ALL_PLANTS_ID ? ALL_PLANTS_ID : normalizePlant(plantParam)) : (normalizePlant(employee?.plant) || ALL_PLANTS_ID))
       : normalizePlant(employee?.plant);
 
     const todayStr = getTodayIST();

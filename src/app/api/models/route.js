@@ -132,19 +132,28 @@ export async function GET(request) {
         modelsWithStock = modelsWithStock.filter((m) => isModelManufacturableAtPlant(m, normalizedForPlant));
       } else if (view === 'dispatch') {
         // When dispatching or co-loading from this plant:
-        // Strictly show models belonging to this plant, or models that have physical stock at this plant
-        modelsWithStock = modelsWithStock.filter(
-          (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
-        );
+        // D4 is co-loading & secondary dispatch hub: all models are selectable, with D4 warehouse stock
+        // For C116 / E41 G2: only models belonging to that plant, or models with physical stock
+        if (normalizedForPlant === 'D4') {
+          // Keep all models for D4, each with D4's own warehouse stock (stockMap[m.id] ?? 0)
+        } else {
+          modelsWithStock = modelsWithStock.filter(
+            (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
+          );
+        }
       } else if (view === 'stock') {
         modelsWithStock = modelsWithStock.filter((m) =>
           isModelVisibleInPlantStock(m, normalizedForPlant, stockMap[m.id])
         );
       } else {
-        // General query with for_plant
-        modelsWithStock = modelsWithStock.filter(
-          (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
-        );
+        // General query with for_plant (e.g. Models catalog)
+        if (normalizedForPlant === 'D4') {
+          // D4 hub shows all models with D4 stock
+        } else {
+          modelsWithStock = modelsWithStock.filter(
+            (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
+          );
+        }
       }
     }
 

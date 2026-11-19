@@ -174,10 +174,10 @@ function NewDispatchContent() {
         console.warn('API stock fetch fallback to models:', apiErr);
       }
 
-      // 2. Try fetching via /api/models route if stock API failed
+      // 2. Try fetching via /api/models route with dispatch view if stock API returned no items
       if (loadedModels.length === 0) {
         try {
-          const res = await fetch(`/api/models?active_only=true&for_plant=${encodeURIComponent(plantToLoad)}&view=stock`);
+          const res = await fetch(`/api/models?active_only=true&for_plant=${encodeURIComponent(plantToLoad)}&view=dispatch`);
           if (res.ok) {
             const data = await res.json();
             if (data.success && data.models?.length > 0) {
@@ -192,28 +192,68 @@ function NewDispatchContent() {
         }
       }
 
-      // 3. Fallback to direct supabase query
+      // 3. Fallback to direct supabase query strictly scoped by plant
       if (loadedModels.length === 0 && supabase) {
-        const { data: models, error: modelsError } = await supabase
-          .from('cooler_models')
-          .select('*')
-          .eq('is_active', true)
-          .order('code', { ascending: true });
+        if (plantToLoad === 'C116') {
+          // C116: Only load models belonging to C116. Do NOT dump E41 G2 models into C116!
+          const { data: c116Models } = await supabase
+            .from('cooler_models')
+            .select('*')
+            .eq('is_active', true)
+            .eq('manufacturing_plant', 'C116')
+            .order('code', { ascending: true });
 
-        if (!modelsError && models) {
-          loadedModels = models;
-        }
+          if (c116Models && c116Models.length > 0) {
+            loadedModels = c116Models;
+            const { data: txs } = await supabase
+              .from('stock_transactions')
+              .select('model_id, quantity')
+              .eq('plant', 'C116');
+            (txs || []).forEach((t) => {
+              loadedStocks[t.model_id] = (loadedStocks[t.model_id] || 0) + Number(t.quantity || 0);
+            });
+          }
+        } else if (plantToLoad === 'D4') {
+          // D4 is co-loading hub: models are visible, but stock is strictly D4 warehouse stock (0 if none)
+          const { data: allModels } = await supabase
+            .from('cooler_models')
+            .select('*')
+            .eq('is_active', true)
+            .order('code', { ascending: true });
 
-        const { data: stocks } = await supabase.from('current_stock').select('*');
-        if (stocks) {
-          stocks.forEach((s) => {
-            loadedStocks[s.model_id] = s.current_stock;
-          });
+          if (allModels && allModels.length > 0) {
+            loadedModels = allModels;
+            const { data: txs } = await supabase
+              .from('stock_transactions')
+              .select('model_id, quantity')
+              .eq('plant', 'D4');
+            (txs || []).forEach((t) => {
+              loadedStocks[t.model_id] = (loadedStocks[t.model_id] || 0) + Number(t.quantity || 0);
+            });
+          }
+        } else {
+          // E41 G2 plant
+          const { data: e41Models } = await supabase
+            .from('cooler_models')
+            .select('*')
+            .eq('is_active', true)
+            .order('code', { ascending: true });
+
+          if (e41Models && e41Models.length > 0) {
+            loadedModels = e41Models;
+            const { data: txs } = await supabase
+              .from('stock_transactions')
+              .select('model_id, quantity')
+              .eq('plant', 'E41 G2');
+            (txs || []).forEach((t) => {
+              loadedStocks[t.model_id] = (loadedStocks[t.model_id] || 0) + Number(t.quantity || 0);
+            });
+          }
         }
       }
 
-      // 4. Fallback to JOSPO_20_ACTIVE_MODELS registry if offline or empty
-      if (loadedModels.length === 0) {
+      // 4. Fallback to JOSPO_20_ACTIVE_MODELS registry only for E41 G2 or D4 (never C116)
+      if (loadedModels.length === 0 && (plantToLoad === 'E41 G2' || plantToLoad === 'D4')) {
         loadedModels = JOSPO_20_ACTIVE_MODELS.map((m, idx) => ({
           id: `local-model-${idx + 1}`,
           ...m,
@@ -2264,12 +2304,22 @@ function NewDispatchContent() {
                   options={modelsCatalog.map((m) => ({
                     id: m.id,
                     code: m.code,
-                    name: `${m.name} (Stock: ${stockMap[m.id] ?? 0})`,
+                    name: `${m.name} (${normalizePlant(fromLocation)} Stock: ${stockMap[m.id] ?? 0})`,
                   }))}
                   value={manualModelId}
                   onChange={(val) => setManualModelId(val)}
-                  placeholder="-- Select or Search Cooler Model --"
+                  placeholder={
+                    modelsCatalog.length > 0
+                      ? `-- Select Cooler Model (${normalizePlant(fromLocation)}) --`
+                      : `-- No Models Configured for ${normalizePlant(fromLocation)} Plant --`
+                  }
+                  disabled={modelsCatalog.length === 0}
                 />
+                {modelsCatalog.length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1 font-medium">
+                    ℹ️ No cooler models are currently configured for {normalizePlant(fromLocation)} Plant.
+                  </p>
+                )}
               </div>
 
               <div className="sm:col-span-3">

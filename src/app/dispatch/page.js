@@ -116,7 +116,7 @@ export default function DispatchListPage() {
         const res = await fetch('/api/models?view=all');
         if (res.ok) {
           const json = await res.json();
-          const list = json.data || json || [];
+          const list = json.models || json.data || (Array.isArray(json) ? json : []);
           if (Array.isArray(list) && list.length > 0) {
             setAvailableModels(list);
             return;

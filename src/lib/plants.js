@@ -251,6 +251,9 @@ export function isModelManufacturableAtPlant(model, plant) {
 export function isModelVisibleInPlantStock(model, plant, plantStock = 0) {
   const norm = normalizePlant(plant);
   if (norm === ALL_PLANTS_ID) return true;
+  // D4 is the co-loading & secondary dispatch hub: all models are visible,
+  // but showing D4's own warehouse stock (0 if no units physically at D4)
+  if (norm === 'D4') return true;
   const mfgPlant = resolveModelManufacturingPlant(model);
   if (norm === mfgPlant) return true;
   if (Number(plantStock) > 0) return true;
