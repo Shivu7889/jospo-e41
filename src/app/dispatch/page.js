@@ -87,6 +87,7 @@ export default function DispatchListPage() {
 
   // Multi-Plant Co-Loading Modal State
   const [coLoadingModalData, setCoLoadingModalData] = useState(null);
+  const [coLoadingTargetPlant, setCoLoadingTargetPlant] = useState(null);
 
   // Edit Dispatch Modal state (Admin & Dispatch can edit dispatch items & co-loading status)
   const [editDispatchModal, setEditDispatchModal] = useState(null);
@@ -463,7 +464,8 @@ export default function DispatchListPage() {
     // Reset new item inputs
     setNewItemModelId('');
     setNewItemQty(1);
-    setNewItemPlant(origin);
+    const targetItemPlant = activePlant !== ALL_PLANTS_ID ? activePlant : (resolveNextLoadingPlant(dispatch) || origin);
+    setNewItemPlant(targetItemPlant);
   };
 
   // Update item quantity
@@ -1125,18 +1127,35 @@ export default function DispatchListPage() {
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center justify-end space-x-2">
-                              {/* Co-Loading action for second plant */}
+                              {/* Co-Loading action for secondary/tertiary plant */}
                               {dispatch.status === 'confirmed' &&
-                                isCoLoadingDispatch(dispatch) &&
-                                resolveCoLoadingStatus(dispatch) === 'part_loaded' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setCoLoadingModalData(dispatch)}
-                                    className="px-2.5 py-1 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
-                                    title={`Complete secondary loading at ${resolveNextLoadingPlant(dispatch) || 'second plant'}`}
-                                  >
-                                    <span>➕ Load Models</span>
-                                  </button>
+                                isCoLoadingDispatch(dispatch) && (
+                                  resolveCoLoadingStatus(dispatch) === 'part_loaded' ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCoLoadingTargetPlant(resolveNextLoadingPlant(dispatch));
+                                        setCoLoadingModalData(dispatch);
+                                      }}
+                                      className="px-2.5 py-1 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
+                                      title={`Complete secondary loading at ${resolveNextLoadingPlant(dispatch) || 'second plant'}`}
+                                    >
+                                      <span>➕ Load Models</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const target = activePlant !== ALL_PLANTS_ID ? activePlant : (dispatch.second_plant || 'D4');
+                                        setCoLoadingTargetPlant(target);
+                                        setCoLoadingModalData(dispatch);
+                                      }}
+                                      className="px-2 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors inline-flex items-center space-x-1"
+                                      title="Edit models loaded at this plant or offload coolers"
+                                    >
+                                      <span>✏️ Edit {activePlant !== ALL_PLANTS_ID ? activePlant : 'Stop'} Load</span>
+                                    </button>
+                                  )
                                 )}
 
                               {/* Details button always available */}
@@ -2261,7 +2280,7 @@ export default function DispatchListPage() {
                     </div>
                   </div>
 
-                  {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' && (
+                  {resolveCoLoadingStatus(viewDetailsModal) === 'part_loaded' ? (
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-amber-800 text-[11px]">
                         Arriving at {resolveNextLoadingPlant(viewDetailsModal) || 'Next Plant'} to continue loading.
@@ -2270,12 +2289,33 @@ export default function DispatchListPage() {
                         type="button"
                         onClick={() => {
                           const d = viewDetailsModal;
+                          const nextP = resolveNextLoadingPlant(d);
                           setViewDetailsModal(null);
+                          setCoLoadingTargetPlant(nextP);
                           setCoLoadingModalData(d);
                         }}
                         className="btn-primary text-xs py-1 px-3 bg-amber-600 hover:bg-amber-700 text-white font-bold"
                       >
                         ➕ Load Models Now
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-emerald-800 text-[11px]">
+                        Vehicle fully loaded. Need to edit items loaded at secondary plant?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = viewDetailsModal;
+                          const target = activePlant !== ALL_PLANTS_ID ? activePlant : (d.second_plant || 'D4');
+                          setViewDetailsModal(null);
+                          setCoLoadingTargetPlant(target);
+                          setCoLoadingModalData(d);
+                        }}
+                        className="btn-secondary text-xs py-1 px-3 text-indigo-700 font-bold border border-indigo-200 hover:bg-indigo-50"
+                      >
+                        ✏️ Edit {activePlant !== ALL_PLANTS_ID ? activePlant : 'Stop'} Load
                       </button>
                     </div>
                   )}
@@ -2490,12 +2530,17 @@ export default function DispatchListPage() {
           <CoLoadingModal
             dispatch={coLoadingModalData}
             currentPlant={
+              coLoadingTargetPlant ||
               resolveNextLoadingPlant(coLoadingModalData) ||
-              (activePlant !== ALL_PLANTS_ID ? activePlant : 'D4')
+              (activePlant !== ALL_PLANTS_ID ? activePlant : (resolveSecondPlant(coLoadingModalData) || 'D4'))
             }
-            onClose={() => setCoLoadingModalData(null)}
+            onClose={() => {
+              setCoLoadingModalData(null);
+              setCoLoadingTargetPlant(null);
+            }}
             onSuccess={async () => {
               setCoLoadingModalData(null);
+              setCoLoadingTargetPlant(null);
               await fetchDispatches(true);
             }}
           />

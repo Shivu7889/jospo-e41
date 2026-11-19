@@ -74,24 +74,35 @@ export async function POST(request, { params }) {
     }
 
     const currentStatus = resolveCoLoadingStatus(dispatch);
-    if (currentStatus === 'fully_loaded') {
+
+    const originPlant = normalizePlant(dispatch.from_location);
+    const scheduledNextPlant = resolveNextLoadingPlant(dispatch);
+    const userPlant = normalizePlant(employee.plant);
+    const isOwner = isOwnerUser(employee);
+    const isOwnerOrAdmin = isOwner || employee.role === 'admin' || employee.role === 'dispatch';
+
+    // Determine the loading plant (must match user plant unless owner or admin)
+    const loadingPlant = normalizePlant(
+      (isOwnerOrAdmin && body.loading_plant)
+        ? body.loading_plant
+        : (body.loading_plant || userPlant || scheduledNextPlant || 'D4')
+    );
+
+    // Check if vehicle has already visited or is scheduled to visit loadingPlant
+    const hasVisitedPlant =
+      loadingPlant === scheduledNextPlant ||
+      loadingPlant === normalizePlant(dispatch.second_plant) ||
+      loadingPlant === normalizePlant(dispatch.third_plant) ||
+      (dispatch.dispatch_items || []).some((it) => (it.loaded_plant ? normalizePlant(it.loaded_plant) : null) === loadingPlant);
+
+    if (currentStatus === 'fully_loaded' && !hasVisitedPlant && !isOwnerOrAdmin) {
       return NextResponse.json(
         { error: 'This vehicle has already completed all loading stops and is fully dispatched.' },
         { status: 400 }
       );
     }
 
-    const originPlant = normalizePlant(dispatch.from_location);
-    const scheduledNextPlant = resolveNextLoadingPlant(dispatch);
-    const userPlant = normalizePlant(employee.plant);
-    const isOwner = isOwnerUser(employee);
-
-    // Determine the loading plant (must match user plant unless owner)
-    const loadingPlant = isOwner
-      ? normalizePlant(body.loading_plant || scheduledNextPlant || userPlant)
-      : userPlant;
-
-    if (!isOwner && scheduledNextPlant && loadingPlant !== scheduledNextPlant) {
+    if (!isOwnerOrAdmin && !hasVisitedPlant && scheduledNextPlant && loadingPlant !== scheduledNextPlant) {
       return NextResponse.json(
         {
           error: `Unauthorized: This vehicle is scheduled for loading at ${scheduledNextPlant} Plant. Your active plant is ${loadingPlant} Plant.`,
@@ -100,72 +111,109 @@ export async function POST(request, { params }) {
       );
     }
 
-    if (loadingPlant === originPlant && !isOwner) {
+    if (loadingPlant === originPlant && !isOwnerOrAdmin) {
       return NextResponse.json(
         { error: `Secondary loading must occur at a different plant than origin plant (${originPlant}).` },
         { status: 400 }
       );
     }
 
-    // 2. Validate quantities and check stock at loadingPlant for each requested item (if any)
-    for (const item of safeItems) {
-      const qty = Number(item.quantity);
-      if (!qty || qty <= 0) {
-        return NextResponse.json(
-          { error: `Invalid quantity for model: ${item.model_name || item.model_id}. Must be greater than 0.` },
-          { status: 400 }
-        );
-      }
+    // 2. Fetch previous items loaded at loadingPlant for this dispatch (to calculate stock deltas)
+    const previousPlantItems = (dispatch.dispatch_items || []).filter(
+      (it) => (it.loaded_plant ? normalizePlant(it.loaded_plant) : null) === loadingPlant
+    );
 
-      // Check stock at loadingPlant
-      const { data: stockEntries, error: stockCheckErr } = await supabase
-        .from('stock_transactions')
-        .select('quantity')
-        .eq('model_id', item.model_id)
-        .eq('plant', loadingPlant);
+    const oldTotals = {};
+    previousPlantItems.forEach((it) => {
+      oldTotals[it.model_id] = (oldTotals[it.model_id] || 0) + Number(it.quantity);
+    });
 
-      if (stockCheckErr) {
-        console.warn('Stock check query error:', stockCheckErr.message);
-      }
+    const newTotals = {};
+    safeItems.forEach((it) => {
+      newTotals[it.model_id] = (newTotals[it.model_id] || 0) + Number(it.quantity);
+    });
 
-      const availableStock = (stockEntries || []).reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-      if (availableStock < qty) {
-        return NextResponse.json(
-          {
-            error: `Insufficient stock at ${loadingPlant} Plant for model. Available: ${availableStock}, Requested to load: ${qty}`,
-          },
-          { status: 400 }
-        );
+    // Check stock availability at loadingPlant for any INCREASES in quantity
+    for (const [modelId, newQty] of Object.entries(newTotals)) {
+      const oldQty = oldTotals[modelId] || 0;
+      const delta = newQty - oldQty;
+      if (delta > 0) {
+        const { data: stockEntries, error: stockCheckErr } = await supabase
+          .from('stock_transactions')
+          .select('quantity')
+          .eq('model_id', modelId)
+          .eq('plant', loadingPlant);
+
+        if (stockCheckErr) {
+          console.warn('Stock check query error:', stockCheckErr.message);
+        }
+
+        const availableStock = (stockEntries || []).reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+        if (availableStock < delta) {
+          const { data: mData } = await supabase
+            .from('cooler_models')
+            .select('name, code')
+            .eq('id', modelId)
+            .single();
+          const modelDesc = mData ? `${mData.name} (${mData.code})` : modelId;
+          return NextResponse.json(
+            {
+              error: `Insufficient stock at ${loadingPlant} Plant for ${modelDesc}. Available: ${availableStock}, additional required to load: ${delta}.`,
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
     const nowIso = new Date().toISOString();
 
-    // 3. Insert line items into dispatch_items with loaded_plant (only if items were loaded)
-    for (const item of safeItems) {
-      const itemPayload = {
-        dispatch_id: id,
-        model_id: item.model_id,
-        quantity: Math.abs(Number(item.quantity)),
-        loaded_plant: loadingPlant,
-        loaded_by: employee.id,
-      };
-
-      const { error: itemInsertErr } = await supabase
-        .from('dispatch_items')
-        .insert(itemPayload);
-
-      if (itemInsertErr) {
-        console.warn('Direct insert into dispatch_items failed, retrying fallback:', itemInsertErr.message);
-        await supabase.from('dispatch_items').insert({
-          dispatch_id: id,
-          model_id: item.model_id,
-          quantity: Math.abs(Number(item.quantity)),
-        });
+    // 3. Remove previous items loaded at loadingPlant from dispatch_items
+    if (previousPlantItems.length > 0) {
+      const prevIds = previousPlantItems.map((p) => p.id).filter(Boolean);
+      if (prevIds.length > 0) {
+        await supabase.from('dispatch_items').delete().in('id', prevIds);
+      } else {
+        await supabase.from('dispatch_items').delete().eq('dispatch_id', id).eq('loaded_plant', loadingPlant);
       }
     }
 
-    // 4. Deduct stock from stock_transactions for loadingPlant (only if items were loaded)
+    // 4. Insert updated line items for loadingPlant into dispatch_items
+    if (safeItems.length > 0) {
+      for (const item of safeItems) {
+        const itemPayload = {
+          dispatch_id: id,
+          model_id: item.model_id,
+          quantity: Math.abs(Number(item.quantity)),
+          loaded_plant: loadingPlant,
+          loaded_by: employee.id,
+        };
+
+        const { error: itemInsertErr } = await supabase
+          .from('dispatch_items')
+          .insert(itemPayload);
+
+        if (itemInsertErr) {
+          console.warn('Direct insert into dispatch_items failed, retrying fallback:', itemInsertErr.message);
+          await supabase.from('dispatch_items').insert({
+            dispatch_id: id,
+            model_id: item.model_id,
+            quantity: Math.abs(Number(item.quantity)),
+          });
+        }
+      }
+    }
+
+    // 5. Synchronize stock transactions for loadingPlant (Live Plant Inventory Reconciliation)
+    // Deleting previous deductions automatically restores stock for any removed or reduced items to loadingPlant
+    await supabase
+      .from('stock_transactions')
+      .delete()
+      .eq('reference_id', id)
+      .eq('plant', loadingPlant)
+      .eq('transaction_type', 'dispatch');
+
+    // Inserting new deductions debits newly filled items from loadingPlant
     if (safeItems.length > 0) {
       const stockDeductions = safeItems.map((item) => ({
         model_id: item.model_id,
@@ -194,7 +242,42 @@ export async function POST(request, { params }) {
       }
     }
 
-    // 5. Determine whether vehicle is fully loaded or heading to 3rd plant
+    // 6. Handle unloaded items from prior stops (coolers unloaded into loadingPlant warehouse)
+    const safeUnloaded = Array.isArray(body.unloaded_items)
+      ? body.unloaded_items.filter((u) => u && u.model_id && Number(u.quantity) > 0)
+      : [];
+
+    if (safeUnloaded.length > 0) {
+      for (const u of safeUnloaded) {
+        const qtyToUnload = Math.abs(Number(u.quantity));
+        const priorItem = (dispatch.dispatch_items || []).find(
+          (it) => it.model_id === u.model_id && (it.loaded_plant ? normalizePlant(it.loaded_plant) : null) !== loadingPlant
+        );
+        if (priorItem) {
+          if (priorItem.quantity <= qtyToUnload) {
+            await supabase.from('dispatch_items').delete().eq('id', priorItem.id);
+          } else {
+            await supabase
+              .from('dispatch_items')
+              .update({ quantity: priorItem.quantity - qtyToUnload })
+              .eq('id', priorItem.id);
+          }
+
+          // Credit stock to loadingPlant warehouse
+          await supabase.from('stock_transactions').insert({
+            model_id: u.model_id,
+            transaction_type: 'transfer_in',
+            quantity: qtyToUnload,
+            reference_id: id,
+            employee_id: employee.id,
+            plant: loadingPlant,
+            notes: `[Co-Load Unloaded] Coolers offloaded into ${loadingPlant} Plant warehouse (Vehicle: ${dispatch.vehicle_number})`,
+          });
+        }
+      }
+    }
+
+    // 7. Determine whether vehicle is fully loaded or heading to 3rd plant
     const newStatus = isFinal ? 'fully_loaded' : 'part_loaded';
 
     // Track Stop 2 vs Stop 3 plant
@@ -230,16 +313,16 @@ export async function POST(request, { params }) {
       updated_at: nowIso,
     };
 
-    if (!hasSecondPlant) {
+    if (!hasSecondPlant || dispatch.second_plant === loadingPlant) {
       updatePayload.second_plant = loadingPlant;
       updatePayload.second_plant_employee_id = employee.id;
       updatePayload.second_plant_confirmed_at = nowIso;
-      updatePayload.second_plant_notes = effectiveNotes;
-    } else if (isThirdPlant) {
+      if (effectiveNotes) updatePayload.second_plant_notes = effectiveNotes;
+    } else if (isThirdPlant || dispatch.third_plant === loadingPlant) {
       updatePayload.third_plant = loadingPlant;
       updatePayload.third_plant_employee_id = employee.id;
       updatePayload.third_plant_confirmed_at = nowIso;
-      updatePayload.third_plant_notes = effectiveNotes;
+      if (effectiveNotes) updatePayload.third_plant_notes = effectiveNotes;
     }
 
     let { error: updateErr } = await supabase

@@ -22,11 +22,42 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   const [submitting, setSubmitting] = useState(false);
   const [skipLoading, setSkipLoading] = useState(false);
 
-  // New items to load from current plant
-  const [newItems, setNewItems] = useState([
-    { id: `coload-${Date.now()}-1`, model_id: '', quantity: 1 },
-  ]);
+  // Items already loaded at current plant on this dispatch
+  const plantExistingItems = useMemo(() => {
+    return (dispatch?.dispatch_items || []).filter((item) => {
+      const p = resolveItemLoadedPlant(item, dispatch);
+      return p === currentPlant;
+    });
+  }, [dispatch, currentPlant]);
+
+  // New items to load from current plant (pre-populated with items already loaded at currentPlant if any!)
+  const [newItems, setNewItems] = useState(() => {
+    if (plantExistingItems.length > 0) {
+      return plantExistingItems.map((it, idx) => ({
+        id: it.id || `coload-existing-${idx}`,
+        model_id: it.model_id,
+        quantity: it.quantity,
+      }));
+    }
+    return [{ id: `coload-${Date.now()}-1`, model_id: '', quantity: 1 }];
+  });
+
+  // Track items from prior stops to unload into currentPlant warehouse
+  const [unloadedItems, setUnloadedItems] = useState({}); // model_id -> quantity
   const [notes, setNotes] = useState('');
+
+  // Sync newItems when dispatch changes
+  useEffect(() => {
+    if (plantExistingItems.length > 0) {
+      setNewItems(
+        plantExistingItems.map((it, idx) => ({
+          id: it.id || `coload-existing-${idx}`,
+          model_id: it.model_id,
+          quantity: it.quantity,
+        }))
+      );
+    }
+  }, [plantExistingItems]);
 
   // Fetch models manufacturable or stocked at current plant
   const fetchPlantModels = useCallback(async () => {
@@ -67,9 +98,13 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   const existingTotalQty = useMemo(() => {
     return (dispatch?.dispatch_items || []).reduce((acc, it) => {
       const p = resolveItemLoadedPlant(it, dispatch);
-      return p !== currentPlant ? acc + (Number(it.quantity) || 0) : acc;
+      if (p !== currentPlant) {
+        const unloaded = Number(unloadedItems[it.model_id]) || 0;
+        return acc + Math.max(0, (Number(it.quantity) || 0) - unloaded);
+      }
+      return acc;
     }, 0);
-  }, [dispatch, currentPlant]);
+  }, [dispatch, currentPlant, unloadedItems]);
 
   const newTotalQty = useMemo(() => {
     if (skipLoading) return 0;
@@ -117,10 +152,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   };
 
   const handleRemoveRow = (rowId) => {
-    setNewItems((prev) => {
-      const filtered = prev.filter((it) => it.id !== rowId);
-      return filtered;
-    });
+    setNewItems((prev) => prev.filter((it) => it.id !== rowId));
   };
 
   const handleUpdateItem = (rowId, field, value) => {
@@ -132,27 +164,40 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
     );
   };
 
-  // Stock deficit verification
+  // Stock deficit verification (net delta against previous items loaded at this plant)
   const stockDeficits = useMemo(() => {
     if (skipLoading) return [];
     const deficits = [];
+    const oldTotals = {};
+    plantExistingItems.forEach((it) => {
+      oldTotals[it.model_id] = (oldTotals[it.model_id] || 0) + Number(it.quantity || 0);
+    });
+
+    const newTotals = {};
     newItems.forEach((item) => {
-      if (!item.model_id) return;
-      const modelObj = availableModels.find((m) => m.id === item.model_id);
-      if (!modelObj) return;
-      const currentStock = modelObj.current_stock ?? 0;
-      const requested = Number(item.quantity) || 0;
-      if (requested > currentStock) {
-        deficits.push({
-          model_name: modelObj.name,
-          model_code: modelObj.code,
-          available: currentStock,
-          requested,
-        });
+      if (item.model_id && Number(item.quantity) > 0) {
+        newTotals[item.model_id] = (newTotals[item.model_id] || 0) + Number(item.quantity);
       }
     });
+
+    for (const [modelId, newQty] of Object.entries(newTotals)) {
+      const oldQty = oldTotals[modelId] || 0;
+      const delta = newQty - oldQty;
+      if (delta > 0) {
+        const modelObj = availableModels.find((m) => m.id === modelId);
+        const available = modelObj?.current_stock ?? 0;
+        if (delta > available) {
+          deficits.push({
+            model_name: modelObj?.name || 'Model',
+            model_code: modelObj?.code || '',
+            available,
+            requested: delta,
+          });
+        }
+      }
+    }
     return deficits;
-  }, [newItems, availableModels, skipLoading]);
+  }, [newItems, plantExistingItems, availableModels, skipLoading]);
 
   // Submit co-loading
   const handleSubmitCoLoad = async (e) => {
@@ -164,12 +209,6 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
     const isFinal = unvisitedPlants.length === 0 ? true : isFinalStop;
     const designatedNextPlant = (!isFinal && nextPlant) ? nextPlant : null;
-
-    // If no coolers selected and not marked pass-through, ensure user either forwards or marks final stop
-    if (validItems.length === 0 && !isFinal && !designatedNextPlant) {
-      showToast(`Please select the next plant to forward this vehicle to.`, 'warning');
-      return;
-    }
 
     if (validItems.length > 0 && stockDeficits.length > 0) {
       showToast(
@@ -193,6 +232,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          loading_plant: currentPlant,
           items: validItems.map((it) => {
             const m = availableModels.find((model) => model.id === it.model_id);
             return {
@@ -202,6 +242,11 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
               quantity: parseInt(it.quantity, 10),
             };
           }),
+          unloaded_items: Object.entries(unloadedItems).map(([model_id, qty]) => ({
+            model_id,
+            quantity: qty,
+            plant: currentPlant,
+          })),
           notes: effectiveNotes,
           is_final_stop: isFinal,
           next_plant: designatedNextPlant,
@@ -298,15 +343,55 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                       </span>
                       <span className="text-gray-700 font-extrabold">{subtotal} pcs</span>
                     </div>
-                    <div className="space-y-1">
-                      {plantItems.map((it, idx) => (
-                        <div key={it.id || idx} className="flex items-center justify-between text-[11px] text-gray-600">
-                          <span className="font-medium">
-                            <strong className="text-gray-900 font-mono">{it.cooler_models?.code}</strong> - {it.cooler_models?.name}
-                          </span>
-                          <span className="font-bold text-gray-900">{it.quantity} pcs</span>
-                        </div>
-                      ))}
+                    <div className="space-y-1.5">
+                      {plantItems.map((it, idx) => {
+                        const unloadedQty = Number(unloadedItems[it.model_id]) || 0;
+                        const netOnTruck = Math.max(0, Number(it.quantity) - unloadedQty);
+                        return (
+                          <div
+                            key={it.id || idx}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-gray-700 py-1 border-b border-gray-100 last:border-0 gap-1"
+                          >
+                            <span className="font-medium flex items-center space-x-1.5">
+                              <strong className="text-gray-900 font-mono">{it.cooler_models?.code}</strong>
+                              <span>- {it.cooler_models?.name}</span>
+                              <span className="text-[10px] bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded font-bold">
+                                {it.quantity} on truck
+                              </span>
+                            </span>
+
+                            <div className="flex items-center space-x-1.5 self-end sm:self-auto bg-amber-50/80 px-2 py-0.5 rounded-lg border border-amber-200">
+                              <span className="text-[10px] text-amber-900 font-semibold">
+                                Unload to {currentPlant}:
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                max={it.quantity}
+                                placeholder="0"
+                                value={unloadedQty || ''}
+                                onChange={(e) => {
+                                  const val = Math.min(
+                                    Number(it.quantity),
+                                    Math.max(0, parseInt(e.target.value, 10) || 0)
+                                  );
+                                  setUnloadedItems((prev) => ({
+                                    ...prev,
+                                    [it.model_id]: val,
+                                  }));
+                                }}
+                                className="w-12 text-center text-xs font-bold bg-white border border-amber-300 rounded px-1 py-0.5"
+                              />
+                              <span className="text-[10px] text-gray-500 font-medium">pcs</span>
+                              {unloadedQty > 0 && (
+                                <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                  +{unloadedQty} to {currentPlant} Warehouse Stock
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -352,10 +437,10 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
           <div className="flex items-center justify-between pt-1">
             <div>
               <h4 className="text-xs font-black text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
-                <span>➕ Add Models to Load from {currentPlant} Plant</span>
+                <span>➕ Coolers Loaded from {currentPlant} Plant</span>
               </h4>
               <p className="text-[11px] text-gray-500">
-                Only {currentPlant} models and stock are listed below. Stock will be debited from {currentPlant} inventory.
+                Only {currentPlant} models and stock are listed below. Stock is debited from {currentPlant} inventory.
               </p>
             </div>
             {!skipLoading && (
@@ -368,6 +453,16 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                 <span>+ Add Model</span>
               </button>
             )}
+          </div>
+
+          <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl text-[11px] text-blue-900 flex items-start space-x-2">
+            <span className="text-base mt-0.5">🔄</span>
+            <div>
+              <span className="font-bold">Live Inventory Attribution ({currentPlant}):</span>
+              <span className="block text-blue-800">
+                Plan change hone par yahan se model remove karke doosra model load kar sakte hain. Item remove karne par stock turant {currentPlant} warehouse me wapas credit ho jayega.
+              </span>
+            </div>
           </div>
 
           {skipLoading ? (
@@ -411,21 +506,28 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
           ) : (
             <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
               {newItems.length === 0 ? (
-                <div className="p-3 bg-gray-50 border border-dashed border-gray-300 rounded-xl text-center space-y-1">
-                  <p className="text-xs text-gray-500">No models added for {currentPlant}.</p>
+                <div className="p-4 bg-gray-50 border border-dashed border-gray-300 rounded-xl text-center space-y-1.5">
+                  <p className="text-xs font-medium text-gray-600">No models currently loaded from {currentPlant}.</p>
+                  <p className="text-[11px] text-gray-500">
+                    If items were removed, their stock has been queued to return to {currentPlant} warehouse.
+                  </p>
                   <button
                     type="button"
                     onClick={handleAddRow}
-                    className="text-xs font-bold text-primary-700 hover:underline"
+                    className="btn-primary text-xs py-1.5 px-3 mt-1 inline-flex items-center space-x-1"
                   >
-                    + Add Cooler Model to Load
+                    <span>+ Load Different Model from {currentPlant}</span>
                   </button>
                 </div>
               ) : (
                 newItems.map((item, index) => {
                 const selectedModel = availableModels.find((m) => m.id === item.model_id);
+                const previouslyLoadedQty = plantExistingItems
+                  .filter((ex) => ex.model_id === item.model_id)
+                  .reduce((sum, ex) => sum + Number(ex.quantity || 0), 0);
                 const currentStock = selectedModel?.current_stock ?? 0;
-                const isOverStock = selectedModel && Number(item.quantity) > currentStock;
+                const effectiveMaxAvailable = currentStock + previouslyLoadedQty;
+                const isOverStock = selectedModel && Number(item.quantity) > effectiveMaxAvailable;
 
                 return (
                   <div
@@ -433,18 +535,24 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                     className="p-3 bg-white rounded-xl border border-gray-200 shadow-2xs space-y-2 transition-all hover:border-gray-300"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-gray-600">
-                        {currentPlant} Item #{index + 1}
-                      </span>
-                      {newItems.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRow(item.id)}
-                          className="text-red-500 hover:text-red-700 text-xs font-semibold"
-                        >
-                          ✕ Remove
-                        </button>
-                      )}
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[11px] font-bold text-gray-700">
+                          {currentPlant} Item #{index + 1}
+                        </span>
+                        {previouslyLoadedQty > 0 && (
+                          <span className="text-[10px] bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.5 rounded border border-indigo-200">
+                            Loaded Earlier: {previouslyLoadedQty} pcs
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveRow(item.id)}
+                        className="text-red-500 hover:text-red-700 text-xs font-semibold px-1.5 py-0.5 rounded hover:bg-red-50 transition-colors"
+                        title={previouslyLoadedQty > 0 ? `Remove and return ${previouslyLoadedQty} pcs to ${currentPlant} warehouse` : 'Remove row'}
+                      >
+                        ✕ Remove {previouslyLoadedQty > 0 ? '(Return to Stock)' : ''}
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
@@ -487,13 +595,18 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                       <div className="flex items-center justify-between text-[11px] pt-1">
                         <span className="text-gray-500">
                           {currentPlant} Warehouse Stock:{' '}
-                          <strong className={currentStock > 0 ? 'text-emerald-700' : 'text-red-600'}>
+                          <strong className={currentStock > 0 ? 'text-emerald-700' : 'text-amber-700'}>
                             {currentStock} pcs
                           </strong>
+                          {previouslyLoadedQty > 0 && (
+                            <span className="text-indigo-700 ml-1">
+                              (+{previouslyLoadedQty} on vehicle = <strong>{effectiveMaxAvailable} available</strong>)
+                            </span>
+                          )}
                         </span>
                         {isOverStock && (
                           <span className="text-red-600 font-bold animate-pulse">
-                            ⚠️ Exceeds {currentPlant} stock by {Number(item.quantity) - currentStock} pcs
+                            ⚠️ Exceeds {currentPlant} stock by {Number(item.quantity) - effectiveMaxAvailable} pcs
                           </span>
                         )}
                       </div>
@@ -649,7 +762,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
               type="submit"
               disabled={
                 submitting ||
-                (!skipLoading && newTotalQty <= 0 && isFinalStop && unvisitedPlants.length > 0) ||
+                (!skipLoading && newTotalQty <= 0 && isFinalStop && unvisitedPlants.length > 0 && plantExistingItems.length === 0) ||
                 (newTotalQty > 0 && stockDeficits.length > 0)
               }
               className={`btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md font-bold ${
