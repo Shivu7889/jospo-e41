@@ -10,8 +10,18 @@ import StatsCard from '@/components/StatsCard';
 import DataTable from '@/components/DataTable';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
+import { usePlant } from '@/contexts/PlantContext';
+import {
+  PLANTS,
+  ALL_PLANTS_ID,
+  DEFAULT_PLANT_ID,
+  normalizePlant,
+  getPlantMeta,
+} from '@/lib/plants';
+
 export default function DashboardPage() {
   const { employee, user } = useAuth();
+  const { activePlant, isOwner, userPlant, inboundTransfersCount } = usePlant();
   const [stats, setStats] = useState({
     total_production_today: 0,
     total_dispatch_today: 0,
@@ -19,6 +29,7 @@ export default function DashboardPage() {
     pending_dispatches: 0,
     total_models: 0,
   });
+  const [plantBreakdown, setPlantBreakdown] = useState(null);
   const [todayProduction, setTodayProduction] = useState([]);
   const [recentDispatches, setRecentDispatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -37,7 +48,6 @@ export default function DashboardPage() {
       const supabase = getSupabase();
       const todayStr = getTodayIST();
 
-      // 1. Fetch Stats via RPC or fallback
       let fetchedStats = {
         total_production_today: 0,
         total_dispatch_today: 0,
@@ -46,109 +56,88 @@ export default function DashboardPage() {
         total_models: 0,
       };
 
-      const { data: rpcStats, error: rpcError } = await supabase.rpc('get_dashboard_stats');
-
-      if (!rpcError && rpcStats) {
-        fetchedStats = {
-          total_production_today: Number(rpcStats.total_production_today ?? 0),
-          total_dispatch_today: Number(rpcStats.total_dispatch_today ?? 0),
-          total_stock: Number(rpcStats.total_stock ?? 0),
-          pending_dispatches: Number(rpcStats.pending_dispatches ?? 0),
-          total_models: Number(rpcStats.total_models ?? 0),
-        };
-      } else {
-        // Fallback direct table queries
-        try {
-          const [prodRes, dispRes, stockRes, pendingRes, modelsRes] = await Promise.all([
-            supabase
-              .from('production_entries')
-              .select('quantity')
-              .eq('production_date', todayStr),
-            supabase
-              .from('dispatches')
-              .select('id, dispatch_items(quantity)')
-              .eq('dispatch_date', todayStr)
-              .eq('status', 'confirmed'),
-            supabase
-              .from('stock_transactions')
-              .select('quantity'),
-            supabase
-              .from('dispatches')
-              .select('id', { count: 'exact', head: true })
-              .eq('status', 'draft'),
-            supabase
-              .from('cooler_models')
-              .select('id', { count: 'exact', head: true })
-              .eq('is_active', true),
-          ]);
-
-          const prodTotal = (prodRes.data || []).reduce((acc, row) => acc + (row.quantity || 0), 0);
-          let dispTotal = 0;
-          (dispRes.data || []).forEach((d) => {
-            (d.dispatch_items || []).forEach((item) => {
-              dispTotal += item.quantity || 0;
-            });
-          });
-          const stockTotal = (stockRes.data || []).reduce((acc, row) => acc + (row.quantity || 0), 0);
-
-          fetchedStats = {
-            total_production_today: prodTotal,
-            total_dispatch_today: dispTotal,
-            total_stock: stockTotal,
-            pending_dispatches: pendingRes.count || 0,
-            total_models: modelsRes.count || 0,
-          };
-        } catch (fbErr) {
-          console.warn('Fallback stats calculation warning:', fbErr);
+      // 1. Fetch live stock and production stats scoped to activePlant via /api/stock
+      try {
+        const stockRes = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`);
+        if (stockRes.ok) {
+          const stockJson = await stockRes.json();
+          if (stockJson.success && stockJson.stats) {
+            fetchedStats = {
+              total_production_today: stockJson.stats.todayProduction ?? 0,
+              total_dispatch_today: stockJson.stats.todayDispatch ?? 0,
+              total_stock: stockJson.stats.totalStock ?? 0,
+              pending_dispatches: 0,
+              total_models: stockJson.stats.activeModelsCount ?? 0,
+            };
+            if (activePlant === ALL_PLANTS_ID && stockJson.currentStock) {
+              const totals = { 'E41 G2': 0, 'D4': 0, 'C116': 0 };
+              stockJson.currentStock.forEach((m) => {
+                if (m.plant_breakdown) {
+                  totals['E41 G2'] += m.plant_breakdown['E41 G2'] || 0;
+                  totals['D4'] += m.plant_breakdown['D4'] || 0;
+                  totals['C116'] += m.plant_breakdown['C116'] || 0;
+                }
+              });
+              setPlantBreakdown(totals);
+            } else {
+              setPlantBreakdown(null);
+            }
+          }
         }
+      } catch (err) {
+        console.warn('Dashboard stock API fetch warning:', err);
       }
+
+      // Pending draft dispatches
+      let pendingQuery = supabase
+        .from('dispatches')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'draft');
+
+      if (activePlant !== ALL_PLANTS_ID) {
+        pendingQuery = pendingQuery.eq('from_location', activePlant);
+      }
+      const { count: pendingCount } = await pendingQuery;
+      fetchedStats.pending_dispatches = pendingCount || 0;
       setStats(fetchedStats);
 
-      // 2. Fetch Today's Production from daily_production_summary view
-      const { data: prodData, error: prodErr } = await supabase
-        .from('daily_production_summary')
-        .select('*')
-        .eq('production_date', todayStr)
-        .order('model_code', { ascending: true });
-
-      if (!prodErr && prodData) {
-        setTodayProduction(prodData);
-      } else {
-        // Fallback from production_entries
-        const { data: rawEntries } = await supabase
-          .from('production_entries')
-          .select('quantity, cooler_models(name, code)')
-          .eq('production_date', todayStr);
-
-        if (rawEntries) {
-          const grouped = {};
-          rawEntries.forEach((entry) => {
-            const code = entry.cooler_models?.code || 'Unknown';
-            if (!grouped[code]) {
-              grouped[code] = {
-                model_name: entry.cooler_models?.name || code,
-                model_code: code,
-                total_quantity: 0,
-                entry_count: 0,
-              };
-            }
-            grouped[code].total_quantity += entry.quantity || 0;
-            grouped[code].entry_count += 1;
-          });
-          setTodayProduction(Object.values(grouped));
-        } else {
-          setTodayProduction([]);
+      // 2. Fetch Today's Production from /api/production
+      try {
+        const prodRes = await fetch(`/api/production?date=${todayStr}&plant=${encodeURIComponent(activePlant)}`);
+        if (prodRes.ok) {
+          const prodJson = await prodRes.json();
+          if (prodJson.success && prodJson.entries) {
+            const grouped = {};
+            prodJson.entries.forEach((entry) => {
+              const code = entry.model_code || 'Unknown';
+              if (!grouped[code]) {
+                grouped[code] = {
+                  model_name: entry.model_name || code,
+                  model_code: code,
+                  total_quantity: 0,
+                  entry_count: 0,
+                };
+              }
+              grouped[code].total_quantity += entry.quantity || 0;
+              grouped[code].entry_count += 1;
+            });
+            setTodayProduction(Object.values(grouped));
+          }
         }
+      } catch (err) {
+        console.warn('Dashboard production API warning:', err);
       }
 
       // 3. Fetch Recent Dispatches (last 5)
-      const { data: dispData, error: dispErr } = await supabase
+      let dispQuery = supabase
         .from('dispatches')
         .select(`
           id,
           vehicle_number,
           from_location,
           destination,
+          destination_plant,
+          transfer_status,
           dispatch_date,
           status,
           created_at,
@@ -160,20 +149,18 @@ export default function DashboardPage() {
         .order('created_at', { ascending: false })
         .limit(5);
 
-      if (!dispErr && dispData) {
-        const formatted = dispData.map((d) => {
-          const totalQty = (d.dispatch_items || []).reduce(
-            (sum, item) => sum + (item.quantity || 0),
-            0
-          );
-          return {
+      if (activePlant !== ALL_PLANTS_ID) {
+        dispQuery = dispQuery.or(`from_location.eq.${activePlant},destination_plant.eq.${activePlant}`);
+      }
+
+      const { data: dispData } = await dispQuery;
+      if (dispData) {
+        setRecentDispatches(
+          dispData.map((d) => ({
             ...d,
-            total_quantity: totalQty,
-          };
-        });
-        setRecentDispatches(formatted);
-      } else {
-        setRecentDispatches([]);
+            total_quantity: (d.dispatch_items || []).reduce((sum, item) => sum + (item.quantity || 0), 0),
+          }))
+        );
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
@@ -182,7 +169,7 @@ export default function DashboardPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [activePlant]);
 
   useEffect(() => {
     fetchDashboardData();
@@ -282,10 +269,19 @@ export default function DashboardPage() {
         {/* Welcome & Action Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">
                 Welcome, {employee?.name || user?.email?.split('@')[0] || 'User'} 👋
               </h1>
+              {activePlant === ALL_PLANTS_ID ? (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 inline-flex items-center gap-1">
+                  <span>🌐</span> Consolidated View (All 3 Plants)
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-lg bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1">
+                  <span>🏭</span> Plant: {activePlant}
+                </span>
+              )}
             </div>
             <p className="text-sm text-gray-500 mt-0.5 flex items-center gap-1.5">
               <span>📅 {todayFormatted}</span>
@@ -298,7 +294,7 @@ export default function DashboardPage() {
 
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Quick action buttons based on role */}
-            {['admin', 'production'].includes(role) && (
+            {['admin', 'production', 'owner'].includes(role) && (
               <Link
                 href="/production"
                 className="btn-primary text-xs sm:text-sm inline-flex items-center space-x-1.5 shadow-sm"
@@ -308,7 +304,7 @@ export default function DashboardPage() {
               </Link>
             )}
 
-            {['admin', 'dispatch'].includes(role) && (
+            {['admin', 'dispatch', 'owner'].includes(role) && (
               <Link
                 href="/dispatch/new"
                 className="btn-success text-xs sm:text-sm inline-flex items-center space-x-1.5 shadow-sm"
@@ -343,6 +339,32 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Inbound Inter-Plant Transfers Alert Banner */}
+        {inboundTransfersCount > 0 && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 text-amber-950 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-pulse">
+            <div className="flex items-center space-x-3">
+              <span className="text-3xl">🚚</span>
+              <div>
+                <p className="font-extrabold text-sm sm:text-base text-amber-900 flex items-center gap-2">
+                  <span>Inbound Stock Alert:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-xs">
+                    {inboundTransfersCount} Transfer{inboundTransfersCount > 1 ? 's' : ''} Pending Receipt
+                  </span>
+                </p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Shipments have been dispatched to your plant from other units and are awaiting physical verification & stock acceptance.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/dispatch?tab=inbound"
+              className="btn-primary bg-amber-600 hover:bg-amber-700 border-amber-700 text-white text-xs sm:text-sm font-bold shadow whitespace-nowrap self-start sm:self-center"
+            >
+              📥 Verify & Accept Stock →
+            </Link>
+          </div>
+        )}
+
         {/* Error Alert if any */}
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center justify-between text-sm">
@@ -367,6 +389,50 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
+            {/* 3-Plant Comparative Physical Inventory Overview (for Owner / Consolidated view) */}
+            {activePlant === ALL_PLANTS_ID && plantBreakdown && (
+              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-2xl border border-indigo-900 shadow-md">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl">🏭</span>
+                    <div>
+                      <h3 className="font-bold text-sm sm:text-base text-white">
+                        3-Plant Physical Inventory Overview (Real-Time)
+                      </h3>
+                      <p className="text-xs text-slate-300">
+                        Consolidated live stock across all manufacturing & dispatch units
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+                    👑 Owner Multi-Plant View
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {PLANTS.map((p) => {
+                    const qty = plantBreakdown[p.id] || 0;
+                    return (
+                      <div
+                        key={p.id}
+                        className="bg-white/10 hover:bg-white/15 transition-colors backdrop-blur-sm p-4 rounded-xl border border-white/10 flex flex-col justify-between"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-200">{p.name}</span>
+                          <span className="text-xs px-2 py-0.5 rounded bg-white/20 text-white font-mono font-bold">
+                            {p.id}
+                          </span>
+                        </div>
+                        <div className="mt-3">
+                          <p className="text-2xl font-black text-white">{qty.toLocaleString()}</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">Physical Units in Stock</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* 5 Stats Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <StatsCard

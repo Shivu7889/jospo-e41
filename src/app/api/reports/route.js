@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import {
+  resolvePlantFromRecord,
+  resolveDestinationPlant,
+  ALL_PLANTS_ID,
+  cleanPlantRemarks,
+} from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +35,7 @@ export async function GET(request) {
     const date = searchParams.get('date') || getTodayIST();
     const month = parseInt(searchParams.get('month') || String(new Date().getMonth() + 1), 10);
     const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()), 10);
+    const plant = searchParams.get('plant') || '';
 
     // 1. Daily Production Report
     if (type === 'daily_production') {
@@ -58,22 +65,28 @@ export async function GET(request) {
         return NextResponse.json({ error: error.message }, { status: 400 });
       }
 
-      const rows = (data || []).map((row) => ({
+      const rawRows = (data || []).map((row) => ({
         id: row.id,
         production_date: row.production_date,
+        plant: resolvePlantFromRecord(row),
         model_code: row.cooler_models?.code || '—',
         model_name: row.cooler_models?.name || 'Cooler Model',
         quantity: row.quantity,
         employee_name: row.employees?.name || 'Staff',
-        remarks: row.remarks || '',
+        remarks: cleanPlantRemarks(row.remarks || ''),
         created_at: row.created_at,
       }));
+
+      const rows = (!plant || plant === ALL_PLANTS_ID)
+        ? rawRows
+        : rawRows.filter((r) => r.plant === plant);
 
       const totalQuantity = rows.reduce((sum, r) => sum + r.quantity, 0);
 
       return NextResponse.json({
         report_type: 'daily_production',
         date,
+        plant,
         total_quantity: totalQuantity,
         data: rows,
       });
@@ -144,34 +157,47 @@ export async function GET(request) {
       let totalQuantity = 0;
 
       (data || []).forEach((d) => {
+        const originPlant = resolvePlantFromRecord(d);
+        const destPlant = resolveDestinationPlant(d);
+
+        if (plant && plant !== ALL_PLANTS_ID) {
+          if (originPlant !== plant && destPlant !== plant) {
+            return;
+          }
+        }
+
+        const cleanRem = cleanPlantRemarks(d.remarks || '');
+
         if (!d.dispatch_items || d.dispatch_items.length === 0) {
           rows.push({
             dispatch_id: d.id,
             vehicle_number: d.vehicle_number,
-            from_location: d.from_location,
+            from_location: originPlant,
             destination: d.destination,
+            destination_plant: destPlant,
             dispatch_date: d.dispatch_date,
             model_code: '—',
             model_name: 'No items',
             quantity: 0,
             status: d.status,
             employee_name: d.employees?.name || 'Staff',
-            remarks: d.remarks || '',
+            remarks: cleanRem,
           });
         } else {
           d.dispatch_items.forEach((item) => {
             rows.push({
               dispatch_id: d.id,
               vehicle_number: d.vehicle_number,
-              from_location: d.from_location,
+              from_location: originPlant,
               destination: d.destination,
+              destination_plant: destPlant,
               dispatch_date: d.dispatch_date,
               model_code: item.cooler_models?.code || '—',
               model_name: item.cooler_models?.name || 'Cooler Model',
               quantity: item.quantity,
               status: d.status,
               employee_name: d.employees?.name || 'Staff',
-              remarks: d.remarks || '',
+              remarks: cleanRem,
             });
             if (d.status === 'confirmed') {
               totalQuantity += item.quantity;
@@ -183,6 +209,7 @@ export async function GET(request) {
       return NextResponse.json({
         report_type: 'daily_dispatch',
         date,
+        plant,
         total_confirmed_quantity: totalQuantity,
         data: rows,
       });
@@ -423,6 +450,7 @@ export async function GET(request) {
           id: row.id,
           serial_no: index + 1,
           production_date: row.production_date,
+          plant: resolvePlantFromRecord(row),
           thekedar_name: thekedar,
           contractor_name: thekedar,
           model_id: row.model_id,
@@ -430,15 +458,20 @@ export async function GET(request) {
           model_name: row.cooler_models?.name || 'Cooler Model',
           quantity: row.quantity,
           employee_name: row.employees?.name || 'Staff',
-          remarks: cleanRemarks,
+          remarks: cleanPlantRemarks(cleanRemarks),
           created_at: row.created_at,
         };
       });
 
+      // Filter by plant first if requested
+      const plantFilteredRows = (!plant || plant === ALL_PLANTS_ID)
+        ? allRows
+        : allRows.filter((r) => r.plant === plant);
+
       // Filter by thekedar if requested
       const filteredRows = selectedThekedar === 'all'
-        ? allRows
-        : allRows.filter((r) => r.thekedar_name.toLowerCase() === selectedThekedar.toLowerCase());
+        ? plantFilteredRows
+        : plantFilteredRows.filter((r) => r.thekedar_name.toLowerCase() === selectedThekedar.toLowerCase());
 
       const totalQuantity = filteredRows.reduce((sum, r) => sum + r.quantity, 0);
 

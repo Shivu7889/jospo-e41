@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerSupabase, createAdminSupabase } from '@/lib/supabase-server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import { normalizePlant } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
@@ -93,6 +94,7 @@ export async function GET(request) {
     const endDateParam = searchParams.get('end_date');
     const contractorParam = searchParams.get('contractor_name') || searchParams.get('thekedar');
     const modelIdParam = searchParams.get('model_id');
+    const plantParam = searchParams.get('plant');
 
     // Default to today unless specified or 'all' or date range given
     const todayStr = getTodayIST();
@@ -122,7 +124,7 @@ export async function GET(request) {
     // Try selecting with contractor_name and manpower columns first
     let query = supabase
       .from('production_entries')
-      .select(`contractor_name, manpower, ${selectQuery}`)
+      .select(`contractor_name, manpower, plant, ${selectQuery}`)
       .order('production_date', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -141,8 +143,8 @@ export async function GET(request) {
 
     let { data: entries, error } = await query;
 
-    // Fallback if contractor_name or manpower columns don't exist yet in Supabase schema cache
-    if (error && (error.message?.includes('contractor_name') || error.message?.includes('manpower') || error.code === 'PGRST204')) {
+    // Fallback if contractor_name, manpower, or plant columns don't exist yet in Supabase schema cache
+    if (error && (error.message?.includes('contractor_name') || error.message?.includes('manpower') || error.message?.includes('plant') || error.code === 'PGRST204')) {
       let fallbackQuery = supabase
         .from('production_entries')
         .select(selectQuery)
@@ -172,23 +174,32 @@ export async function GET(request) {
       const manpower = extractManpower(entry);
       if (thekedar) uniqueThekedarsSet.add(thekedar);
 
+      const rawPlant = entry.plant || (entry.remarks?.match(/\[Plant:\s*([^\]]+)\]/i)?.[1]) || 'E41 G2';
+      const plant = normalizePlant(rawPlant);
+
       // Clean remarks by removing duplicate tags
       const displayRemarks = (entry.remarks || '')
         .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
         .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
-        .trim();
-
+        .replace(/\[Plant:\s*[^\]]+\]/gi, '')
       return {
         ...entry,
-        contractor_name: thekedar,
-        thekedar_name: thekedar,
-        manpower: manpower,
+        plant,
+        contractor_name: thekedar || 'Unknown',
+        thekedar_name: thekedar || 'Unknown',
+        manpower: manpower || null,
         display_remarks: displayRemarks,
         model_name: entry.cooler_models?.name || 'Unknown Model',
         model_code: entry.cooler_models?.code || 'N/A',
         employee_name: entry.employees?.name || 'Unknown Employee',
       };
     });
+
+    // Filter by plant if requested and not 'ALL'
+    if (plantParam && plantParam !== 'ALL') {
+      const targetP = normalizePlant(plantParam);
+      normalizedEntries = normalizedEntries.filter((e) => e.plant === targetP);
+    }
 
     // Apply contractor filter in memory if specified and not 'all'
     if (contractorParam && contractorParam !== 'all') {
@@ -255,11 +266,11 @@ export async function POST(request) {
       );
     }
 
-    if (!['admin', 'production'].includes(employee.role)) {
+    if (!['owner', 'admin', 'production'].includes(employee.role)) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Forbidden. Only Production or Admin staff may log production entries.',
+          error: 'Forbidden. Only Production, Admin, or Owner staff may log production entries.',
         },
         { status: 403 }
       );
@@ -376,6 +387,11 @@ export async function POST(request) {
         }
       }
 
+      const targetPlant = normalizePlant(item.plant || body.plant || employee.plant || 'E41 G2');
+      if (targetPlant) {
+        combinedRemarks = `[Plant: ${targetPlant}] ${combinedRemarks}`.trim();
+      }
+
       const insertPayload = {
         model_id: item.model_id,
         quantity: item.quantity,
@@ -383,6 +399,7 @@ export async function POST(request) {
         remarks: combinedRemarks || null,
         employee_id: employee.id,
         contractor_name: thekedarName,
+        plant: targetPlant,
         ...(item.manpower && item.manpower > 0 ? { manpower: item.manpower } : {}),
       };
 
@@ -397,17 +414,18 @@ export async function POST(request) {
         employees (id, name)
       `;
 
-      // Try inserting with contractor_name and manpower columns
+      // Try inserting with contractor_name, manpower, and plant columns
       let { data: prodEntry, error: prodErr } = await supabase
         .from('production_entries')
         .insert(insertPayload)
         .select(selectFields)
         .single();
 
-      // If contractor_name or manpower column doesn't exist yet, retry without them (remarks tag holds both)
-      if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.message?.includes('manpower') || prodErr.code === 'PGRST204')) {
+      // If contractor_name, manpower, or plant column doesn't exist yet, retry without them
+      if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.message?.includes('manpower') || prodErr.message?.includes('plant') || prodErr.code === 'PGRST204')) {
         delete insertPayload.contractor_name;
         delete insertPayload.manpower;
+        delete insertPayload.plant;
         const retryResult = await supabase
           .from('production_entries')
           .insert(insertPayload)
@@ -421,19 +439,29 @@ export async function POST(request) {
         throw new Error(prodErr?.message || 'Failed to insert production entry');
       }
 
-      // Insert into stock_transactions
-      const stockNote = `Production: +${item.quantity} units of ${model.code} (Thekedar: ${thekedarName}${item.manpower ? `, Manpower: ${item.manpower}` : ''})`;
+      // Insert into stock_transactions with plant
+      const stockNote = `Production: +${item.quantity} units of ${model.code} at ${targetPlant} (Thekedar: ${thekedarName}${item.manpower ? `, Manpower: ${item.manpower}` : ''})`;
 
-      const { error: stockErr } = await supabase
+      let stockPayload = {
+        model_id: item.model_id,
+        transaction_type: 'production',
+        quantity: item.quantity,
+        reference_id: prodEntry.id,
+        employee_id: employee.id,
+        plant: targetPlant,
+        notes: stockNote,
+      };
+
+      let { error: stockErr } = await supabase
         .from('stock_transactions')
-        .insert({
-          model_id: item.model_id,
-          transaction_type: 'production',
-          quantity: item.quantity,
-          reference_id: prodEntry.id,
-          employee_id: employee.id,
-          notes: stockNote,
-        });
+        .insert(stockPayload);
+
+      if (stockErr && (stockErr.message?.includes('plant') || stockErr.code === 'PGRST204')) {
+        delete stockPayload.plant;
+        stockPayload.notes = `[Plant: ${targetPlant}] ${stockNote}`;
+        const fbStock = await supabase.from('stock_transactions').insert(stockPayload);
+        stockErr = fbStock.error;
+      }
 
       if (stockErr) {
         // Rollback production entry

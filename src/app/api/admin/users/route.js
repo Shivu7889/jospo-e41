@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 // GET: List all employees
 export async function GET(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
 
@@ -30,12 +30,12 @@ export async function GET(request) {
 // POST: Add new employee profile (supports 1-step creation with password or manual UUID)
 export async function POST(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
     const body = await request.json();
 
-    const { id, name, email, role, password, is_active = true } = body;
+    const { id, name, email, role, plant = 'E41 G2', password, is_active = true } = body;
 
     // Validation
     if (!name || !name.trim()) {
@@ -44,9 +44,9 @@ export async function POST(request) {
     if (!email || !email.trim()) {
       return NextResponse.json({ error: 'Employee email is required' }, { status: 400 });
     }
-    if (!['admin', 'production', 'dispatch'].includes(role)) {
+    if (!['owner', 'admin', 'production', 'dispatch'].includes(role)) {
       return NextResponse.json(
-        { error: 'Role must be one of: "admin", "production", "dispatch"' },
+        { error: 'Role must be one of: "owner", "admin", "production", "dispatch"' },
         { status: 400 }
       );
     }
@@ -77,7 +77,7 @@ export async function POST(request) {
         email: email.trim().toLowerCase(),
         password: password,
         email_confirm: true,
-        user_metadata: { name: name.trim(), role },
+        user_metadata: { name: name.trim(), role, plant },
       });
 
       if (authCreateErr) {
@@ -102,19 +102,34 @@ export async function POST(request) {
     }
 
     // Insert into employees table
-    const { data, error } = await supabase
+    const insertPayload = {
+      id: authUserId,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      role,
+      plant: role === 'owner' ? 'ALL' : plant,
+      is_active,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    let { data, error } = await supabase
       .from('employees')
-      .insert({
-        id: authUserId,
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        role,
-        is_active,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .insert(insertPayload)
       .select()
       .single();
+
+    // Fallback if plant column doesn't exist in DB schema yet
+    if (error && (error.message?.includes('plant') || error.code === 'PGRST204')) {
+      delete insertPayload.plant;
+      const retryResult = await supabase
+        .from('employees')
+        .insert(insertPayload)
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
@@ -130,14 +145,14 @@ export async function POST(request) {
   }
 }
 
-// PATCH: Toggle active status or update role/name
+// PATCH: Toggle active status or update role/name/plant
 export async function PATCH(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
     const body = await request.json();
-    const { id, is_active, role, name } = body;
+    const { id, is_active, role, name, plant } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'Employee ID is required' }, { status: 400 });
@@ -145,15 +160,28 @@ export async function PATCH(request) {
 
     const updateFields = { updated_at: new Date().toISOString() };
     if (typeof is_active === 'boolean') updateFields.is_active = is_active;
-    if (role && ['admin', 'production', 'dispatch'].includes(role)) updateFields.role = role;
+    if (role && ['owner', 'admin', 'production', 'dispatch'].includes(role)) updateFields.role = role;
     if (name && name.trim()) updateFields.name = name.trim();
+    if (plant && ['E41 G2', 'D4', 'C116', 'ALL'].includes(plant)) updateFields.plant = plant;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('employees')
       .update(updateFields)
       .eq('id', id)
       .select()
       .single();
+
+    if (error && (error.message?.includes('plant') || error.code === 'PGRST204')) {
+      delete updateFields.plant;
+      const retryResult = await supabase
+        .from('employees')
+        .update(updateFields)
+        .eq('id', id)
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });

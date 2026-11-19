@@ -8,10 +8,18 @@ import StatsCard from '@/components/StatsCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
+import { usePlant } from '@/contexts/PlantContext';
+import {
+  PLANTS,
+  ALL_PLANTS_ID,
+  DEFAULT_PLANT_ID,
+  getPlantMeta,
+} from '@/lib/plants';
 
 export default function AdminPage() {
   const { employee, user } = useAuth();
   const { showToast } = useToast();
+  const { activePlant, isOwner } = usePlant();
   const supabase = getSupabase();
 
   // Active section tab: 'thekedars' | 'users' | 'adjustments' | 'system'
@@ -24,6 +32,10 @@ export default function AdminPage() {
   const [submittingUser, setSubmittingUser] = useState(false);
   const [submittingAdjustment, setSubmittingAdjustment] = useState(false);
   const [actionInProgress, setActionInProgress] = useState(null); // id of employee being updated
+
+  // Plant state for user creation and stock adjustment
+  const [newUserPlant, setNewUserPlant] = useState(DEFAULT_PLANT_ID);
+  const [adjustmentPlant, setAdjustmentPlant] = useState(DEFAULT_PLANT_ID);
 
   // Thekedar (Contractor) Management State
   const [thekedarsList, setThekedarsList] = useState([]);
@@ -262,6 +274,7 @@ export default function AdminPage() {
       name: newUserName.trim(),
       email: newUserEmail.trim(),
       role: newUserRole,
+      plant: newUserPlant,
       is_active: true,
     };
 
@@ -300,6 +313,7 @@ export default function AdminPage() {
       setNewUserEmail('');
       setNewUserPassword('');
       setNewUserRole('production');
+      setNewUserPlant(DEFAULT_PLANT_ID);
       await fetchEmployees();
     } catch (err) {
       console.error('Error adding employee:', err);
@@ -345,8 +359,8 @@ export default function AdminPage() {
 
   // Handle Role Change
   const handleChangeRole = async (emp, newRole) => {
-    if (emp.id === employee?.id && newRole !== 'admin') {
-      showToast('You cannot remove admin privileges from your own account.', 'warning');
+    if (emp.id === employee?.id && newRole !== 'admin' && newRole !== 'owner') {
+      showToast('You cannot remove admin/owner privileges from your own account.', 'warning');
       return;
     }
 
@@ -369,6 +383,32 @@ export default function AdminPage() {
     } catch (err) {
       console.error('Error updating role:', err);
       showToast(err.message || 'Failed to update role', 'error');
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Handle Plant Change
+  const handleChangePlant = async (emp, newPlant) => {
+    try {
+      setActionInProgress(emp.id);
+      const res = await fetch('/api/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: emp.id,
+          plant: newPlant,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to update employee plant');
+
+      showToast(`Assigned ${emp.name} to ${newPlant}`, 'success');
+      await fetchEmployees();
+    } catch (err) {
+      console.error('Error updating plant assignment:', err);
+      showToast(err.message || 'Failed to update plant assignment', 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -411,19 +451,32 @@ export default function AdminPage() {
         return;
       }
 
-      // Insert audited transaction
-      const { error } = await supabase.from('stock_transactions').insert({
+      // Insert audited transaction (dual-mode: native plant column with fallback to notes)
+      const auditNotes = `[Plant: ${adjustmentPlant}] Emergency Adjustment (${adjustmentType.toUpperCase()}): ${adjustmentReason.trim()}`;
+      let { error: insertError } = await supabase.from('stock_transactions').insert({
         model_id: selectedModelId,
         transaction_type: 'adjustment',
         quantity: netDelta,
         employee_id: employee.id,
-        notes: `Emergency Adjustment (${adjustmentType.toUpperCase()}): ${adjustmentReason.trim()}`,
+        plant: adjustmentPlant,
+        notes: auditNotes,
       });
 
-      if (error) throw error;
+      if (insertError && (insertError.code === 'PGRST204' || insertError.message?.includes('plant'))) {
+        const fallback = await supabase.from('stock_transactions').insert({
+          model_id: selectedModelId,
+          transaction_type: 'adjustment',
+          quantity: netDelta,
+          employee_id: employee.id,
+          notes: auditNotes,
+        });
+        insertError = fallback.error;
+      }
+
+      if (insertError) throw insertError;
 
       showToast(
-        `Stock successfully ${adjustmentType === 'add' ? 'added' : 'deducted'} for ${model?.code || 'model'}.`,
+        `Stock successfully ${adjustmentType === 'add' ? 'added' : 'deducted'} for ${model?.code || 'model'} at ${adjustmentPlant}.`,
         'success'
       );
 
@@ -455,7 +508,7 @@ export default function AdminPage() {
   }, [employees, models, recentAdjustments]);
 
   return (
-    <AppShell allowedRoles={['admin']}>
+    <AppShell allowedRoles={['admin', 'owner']}>
       <div className="space-y-6">
         {/* Top Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -750,6 +803,9 @@ export default function AdminPage() {
                           Employee
                         </th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
+                          Assigned Plant
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
                           Role
                         </th>
                         <th className="px-4 py-3 text-center font-semibold text-gray-600 uppercase tracking-wider">
@@ -787,6 +843,29 @@ export default function AdminPage() {
                               </div>
                             </td>
 
+                            {/* Assigned Plant selector / badge */}
+                            <td className="px-4 py-3">
+                              {emp.role === 'owner' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300">
+                                  <span>👑</span> All Plants (Owner)
+                                </span>
+                              ) : (
+                                <select
+                                  value={emp.plant || DEFAULT_PLANT_ID}
+                                  onChange={(e) => handleChangePlant(emp, e.target.value)}
+                                  disabled={actionInProgress === emp.id}
+                                  className="text-xs font-semibold rounded-lg px-2 py-1 border border-blue-200 focus:ring-1 focus:ring-primary-500 bg-blue-50 text-blue-900"
+                                >
+                                  {PLANTS.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      🏭 {p.id} ({p.name})
+                                    </option>
+                                  ))}
+                                  <option value="ALL">🌐 ALL (All Plants)</option>
+                                </select>
+                              )}
+                            </td>
+
                             {/* Role selector dropdown */}
                             <td className="px-4 py-3">
                               <select
@@ -794,7 +873,9 @@ export default function AdminPage() {
                                 onChange={(e) => handleChangeRole(emp, e.target.value)}
                                 disabled={actionInProgress === emp.id}
                                 className={`text-xs font-semibold rounded-lg px-2 py-1 border border-gray-300 focus:ring-1 focus:ring-primary-500 ${
-                                  emp.role === 'admin'
+                                  emp.role === 'owner'
+                                    ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold'
+                                    : emp.role === 'admin'
                                     ? 'bg-purple-50 text-purple-800 border-purple-200'
                                     : emp.role === 'production'
                                     ? 'bg-amber-50 text-amber-800 border-amber-200'
@@ -804,6 +885,7 @@ export default function AdminPage() {
                                 <option value="production">Production</option>
                                 <option value="dispatch">Dispatch</option>
                                 <option value="admin">Admin</option>
+                                <option value="owner">👑 Owner</option>
                               </select>
                             </td>
 
@@ -900,6 +982,28 @@ export default function AdminPage() {
                       );
                     })}
                   </select>
+                </div>
+
+                {/* Target Plant for Adjustment */}
+                <div className="sm:col-span-2">
+                  <label htmlFor="adjustPlant" className="label text-xs">
+                    Target Plant <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="adjustPlant"
+                    value={adjustmentPlant}
+                    onChange={(e) => setAdjustmentPlant(e.target.value)}
+                    className="input-field text-sm py-2 font-semibold"
+                  >
+                    {PLANTS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        🏭 {p.id} — {p.name} ({p.city})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Select which manufacturing plant&apos;s physical inventory balance is being adjusted.
+                  </p>
                 </div>
 
                 {/* Adjustment Type: Add or Deduct */}
@@ -1314,6 +1418,28 @@ export default function AdminPage() {
                 )}
 
                 <div>
+                  <label htmlFor="newUserPlant" className="label text-xs">
+                    Assigned Manufacturing Plant <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="newUserPlant"
+                    value={newUserPlant}
+                    onChange={(e) => setNewUserPlant(e.target.value)}
+                    className="input-field text-xs bg-white"
+                  >
+                    {PLANTS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        🏭 {p.id} — {p.name} ({p.city})
+                      </option>
+                    ))}
+                    <option value="ALL">🌐 ALL — Multi-Plant Oversight</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Staff will strictly only see this plant&apos;s inventory, dispatches, and production entries.
+                  </p>
+                </div>
+
+                <div>
                   <label htmlFor="newUserRole" className="label text-xs">
                     System Role <span className="text-red-500">*</span>
                   </label>
@@ -1326,6 +1452,7 @@ export default function AdminPage() {
                     <option value="production">Production (Manufacturing Entries & View Stock)</option>
                     <option value="dispatch">Dispatch (QR Scanning, Loading & Vehicle Outward)</option>
                     <option value="admin">Admin (Full System Permissions & Reports)</option>
+                    <option value="owner">👑 Owner (Multi-Plant Oversight & Consolidated Control)</option>
                   </select>
                 </div>
 

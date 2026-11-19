@@ -9,13 +9,35 @@ import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import SearchableSelect from '@/components/SearchableSelect';
+import { usePlant } from '@/contexts/PlantContext';
+import {
+  PLANTS,
+  ALL_PLANTS_ID,
+  DEFAULT_PLANT_ID,
+  normalizePlant,
+  getPlantMeta,
+} from '@/lib/plants';
 
 export default function ProductionPage() {
   const { employee } = useAuth();
   const { showToast } = useToast();
   const supabase = getSupabase();
+  const { activePlant, isOwner, userPlant } = usePlant();
 
   const getTodayStr = () => getTodayIST();
+
+  const isAdmin = employee?.role === 'admin' || isOwner;
+
+  // Plant selection for logging entry
+  const [entryPlant, setEntryPlant] = useState(
+    activePlant !== ALL_PLANTS_ID ? activePlant : (userPlant !== ALL_PLANTS_ID ? userPlant : DEFAULT_PLANT_ID)
+  );
+
+  useEffect(() => {
+    if (activePlant && activePlant !== ALL_PLANTS_ID) {
+      setEntryPlant(activePlant);
+    }
+  }, [activePlant]);
 
   // Form State
   const [productionDate, setProductionDate] = useState(getTodayStr());
@@ -25,8 +47,6 @@ export default function ProductionPage() {
     { id: 'item-1', model_id: '', quantity: '' },
   ]);
   const [submitting, setSubmitting] = useState(false);
-
-  const isAdmin = employee?.role === 'admin';
 
   // Thekedar (Assembly Contractor) State
   const [thekedars, setThekedars] = useState([
@@ -110,12 +130,13 @@ export default function ProductionPage() {
     }
   }, []);
 
-  // Fetch production log for the selected/today date
+  // Fetch production log for the selected/today date and plant
   const fetchTodayLog = useCallback(async (targetDate = productionDate) => {
     try {
       setLoadingLog(true);
       const queryDate = targetDate || getTodayStr();
-      const res = await fetch(`/api/production?date=${encodeURIComponent(queryDate)}`);
+      const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&plant=${encodeURIComponent(activePlant)}` : '';
+      const res = await fetch(`/api/production?date=${encodeURIComponent(queryDate)}${plantParam}`);
       const data = await res.json();
 
       if (!res.ok || !data.success) {
@@ -133,13 +154,13 @@ export default function ProductionPage() {
     } finally {
       setLoadingLog(false);
     }
-  }, [productionDate, showToast]);
+  }, [productionDate, activePlant, showToast]);
 
   useEffect(() => {
     fetchModels();
     fetchThekedars();
     fetchTodayLog(productionDate);
-  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate]);
+  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate, activePlant]);
 
   // Admin-only helper: Add new Thekedar
   const handleAddNewThekedar = async (e) => {
@@ -365,6 +386,7 @@ export default function ProductionPage() {
           production_date: productionDate,
           contractor_name: finalThekedar,
           thekedar_name: finalThekedar,
+          plant: normalizePlant(entryPlant || activePlant || userPlant),
           manpower: manpower !== '' && !isNaN(Number(manpower)) ? parseInt(manpower, 10) : null,
           remarks: remarks.trim() || null,
         }),
@@ -458,11 +480,18 @@ export default function ProductionPage() {
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 pb-5">
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2.5">
               <span className="text-2xl">🏭</span>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
                 Production Entry
               </h1>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                activePlant === ALL_PLANTS_ID
+                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                  : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+              }`}>
+                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant} Plant`}
+              </span>
             </div>
             <p className="mt-1 text-sm text-gray-500">
               Record manufactured cooler units under Thekedars to automatically increment real-time stock balances.
@@ -508,6 +537,44 @@ export default function ProductionPage() {
               </div>
 
               <form onSubmit={handleSubmitProduction} className="space-y-5">
+                {/* Plant Selector */}
+                <div>
+                  <label className="label text-xs font-bold text-gray-700">
+                    Manufacturing Plant <span className="text-red-500">*</span>
+                  </label>
+                  {isOwner ? (
+                    <div>
+                      <div className="flex rounded-lg shadow-xs overflow-hidden border border-gray-300">
+                        {PLANTS.map((p) => {
+                          const isSelected = normalizePlant(entryPlant) === p.id;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => setEntryPlant(p.id)}
+                              className={`flex-1 py-1.5 px-2 text-xs font-bold text-center transition-colors ${
+                                isSelected
+                                  ? 'bg-primary-600 text-white shadow-xs'
+                                  : 'bg-white text-gray-700 hover:bg-gray-50'
+                              }`}
+                            >
+                              {p.icon} {p.shortName}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <span className="text-[11px] text-gray-400 mt-1 block">
+                        Owner oversight: Choose plant to add inventory stock to.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-800">
+                      <span>🏭</span>
+                      <span>{normalizePlant(userPlant)} Plant</span>
+                      <span className="text-[10px] text-gray-400 font-normal ml-auto">(Your Plant)</span>
+                    </div>
+                  )}
+                </div>
                 {/* Date Picker */}
                 <div>
                   <label className="label">
@@ -882,6 +949,9 @@ export default function ProductionPage() {
                         <thead>
                           <tr className="bg-gray-50/80 text-gray-500 font-semibold uppercase tracking-wider text-[10px]">
                             <th scope="col" className="px-3 py-2 text-left w-20">Time</th>
+                            {activePlant === ALL_PLANTS_ID && (
+                              <th scope="col" className="px-3 py-2 text-left w-24">Plant</th>
+                            )}
                             <th scope="col" className="px-3 py-2 text-left">Cooler Model</th>
                             <th scope="col" className="px-3 py-2 text-center w-24">Manpower</th>
                             <th scope="col" className="px-3 py-2 text-right w-24">Quantity</th>
@@ -905,6 +975,15 @@ export default function ProductionPage() {
                                     {row.employee_name || 'Staff'}
                                   </span>
                                 </td>
+
+                                {/* Plant Badge (When viewing all plants) */}
+                                {activePlant === ALL_PLANTS_ID && (
+                                  <td className="px-3 py-2.5 whitespace-nowrap">
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-800 border border-gray-200">
+                                      🏭 {normalizePlant(row.plant)}
+                                    </span>
+                                  </td>
+                                )}
 
                                 {/* Cooler Model & Remarks */}
                                 <td className="px-3 py-2.5 min-w-0">
@@ -1004,6 +1083,14 @@ export default function ProductionPage() {
                                   <span>{formatTime(row.created_at)}</span>
                                   <span>•</span>
                                   <span>{row.employee_name || 'Staff'}</span>
+                                  {activePlant === ALL_PLANTS_ID && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="font-bold text-gray-700 bg-gray-100 px-1 py-0.2 rounded">
+                                        🏭 {normalizePlant(row.plant)}
+                                      </span>
+                                    </>
+                                  )}
                                   {row.manpower && (
                                     <>
                                       <span>•</span>

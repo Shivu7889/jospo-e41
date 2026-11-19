@@ -95,9 +95,11 @@ export async function PUT(request, { params }) {
       vehicle_number,
       from_location,
       destination,
+      destination_plant,
       dispatch_date,
       remarks,
       dispatch_type,
+      transfer_status,
       items,
     } = body;
 
@@ -105,12 +107,19 @@ export async function PUT(request, { params }) {
     if (vehicle_number !== undefined) updateFields.vehicle_number = vehicle_number.trim().toUpperCase();
     if (from_location !== undefined) updateFields.from_location = from_location.trim();
     if (destination !== undefined) updateFields.destination = destination.trim();
+    if (destination_plant !== undefined) updateFields.destination_plant = destination_plant ? destination_plant.trim() : null;
+    if (transfer_status !== undefined) updateFields.transfer_status = transfer_status;
     if (dispatch_date !== undefined) updateFields.dispatch_date = dispatch_date;
     if (dispatch_type !== undefined) updateFields.dispatch_type = dispatch_type === 'local' ? 'local' : 'party';
 
-    if (remarks !== undefined || dispatch_type !== undefined) {
+    if (remarks !== undefined || dispatch_type !== undefined || destination_plant !== undefined) {
       const effectiveType = dispatch_type || existing.dispatch_type || (existing.remarks?.includes('[Type: Local]') ? 'local' : 'party');
-      updateFields.remarks = formatDispatchRemarks(remarks !== undefined ? remarks : existing.remarks, effectiveType);
+      let compRemarks = formatDispatchRemarks(remarks !== undefined ? remarks : existing.remarks, effectiveType);
+      const destPlant = destination_plant !== undefined ? destination_plant : (existing.destination_plant || null);
+      if (destPlant) {
+        compRemarks = `[DestPlant: ${destPlant}] ${compRemarks}`.trim();
+      }
+      updateFields.remarks = compRemarks;
     }
     updateFields.updated_at = new Date().toISOString();
 
@@ -122,9 +131,13 @@ export async function PUT(request, { params }) {
       .select()
       .single();
 
-    // Fallback if dispatch_type column does not exist yet in database
-    if (updateError && (updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
-      delete updateFields.dispatch_type;
+    // Fallback if destination_plant, transfer_status, or dispatch_type column does not exist yet in database
+    if (updateError && (updateError.message?.includes('destination_plant') || updateError.message?.includes('transfer_status') || updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
+      delete updateFields.destination_plant;
+      delete updateFields.transfer_status;
+      if (updateError.message?.includes('dispatch_type')) {
+        delete updateFields.dispatch_type;
+      }
       const retryResult = await supabase
         .from('dispatches')
         .update(updateFields)

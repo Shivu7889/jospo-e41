@@ -1,12 +1,13 @@
 import './globals.css';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { PlantProvider } from '@/contexts/PlantContext';
 import { ToastProvider } from '@/components/Toast';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata = {
-  title: 'Jospo E41 - Manufacturing & Stock Management',
-  description: 'Production, inventory, and dispatch management system for Jospo E41 manufacturing unit.',
+  title: 'Jospo Enterprise - Multi-Plant Manufacturing & Stock Management',
+  description: 'Enterprise multi-plant production, inter-plant transfer, inventory, and dispatch management system for E41 G2, D4, and C116.',
 };
 
 export default function RootLayout({ children }) {
@@ -14,9 +15,11 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body className="font-sans">
         <AuthProvider>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+          <PlantProvider>
+            <ToastProvider>
+              {children}
+            </ToastProvider>
+          </PlantProvider>
         </AuthProvider>
       </body>
     </html>

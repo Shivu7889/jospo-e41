@@ -8,11 +8,14 @@ import StatsCard from '@/components/StatsCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getTodayIST } from '@/lib/date';
+import { usePlant } from '@/contexts/PlantContext';
+import { ALL_PLANTS_ID } from '@/lib/plants';
 
 export default function ReportsPage() {
   const { employee } = useAuth();
   const { showToast } = useToast();
-  const isAdmin = employee?.role === 'admin';
+  const { activePlant, isOwner } = usePlant();
+  const isAdmin = employee?.role === 'admin' || employee?.role === 'owner' || isOwner;
 
   // Active Tab: 'thekedar_production' | 'daily_production' | 'daily_dispatch' | 'monthly_summary' | 'model_stock'
   const [activeTab, setActiveTab] = useState('thekedar_production');
@@ -188,6 +191,8 @@ export default function ReportsPage() {
         url += `&start_date=${thekedarStartDate}&end_date=${thekedarEndDate}&thekedar=${encodeURIComponent(selectedThekedar)}`;
       }
 
+      url += `&plant=${encodeURIComponent(activePlant)}`;
+
       const res = await fetch(url);
       const json = await res.json();
 
@@ -215,6 +220,7 @@ export default function ReportsPage() {
     thekedarStartDate,
     thekedarEndDate,
     selectedThekedar,
+    activePlant,
     showToast,
   ]);
 
@@ -228,14 +234,25 @@ export default function ReportsPage() {
   ];
 
   return (
-    <AppShell allowedRoles={['admin']}>
+    <AppShell allowedRoles={['admin', 'owner']}>
       <div className="space-y-6">
         {/* Top Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
-              Manufacturing & Stock Reports
-            </h1>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
+                Manufacturing & Stock Reports
+              </h1>
+              {activePlant === ALL_PLANTS_ID ? (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  🌐 Consolidated (All 3 Plants)
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 text-xs font-bold rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
+                  🏭 Plant: {activePlant}
+                </span>
+              )}
+            </div>
             <p className="mt-1 text-sm text-gray-600">
               Audit logs, production figures, dispatch performance, and Excel spreadsheets.
             </p>

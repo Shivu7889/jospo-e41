@@ -1,144 +1,173 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import { normalizePlant, isOwnerUser, ALL_PLANTS_ID } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/stock
- * Returns current stock from current_stock view and summary statistics
+ * Returns stock scoped to plant or consolidated multi-plant matrix
  * Query params:
  *   - model_id (optional: filter stock view by specific model)
+ *   - plant (optional: 'ALL', 'E41 G2', 'D4', 'C116')
  */
 export async function GET(request) {
   try {
     const auth = await authenticateRequest();
     if (auth.error) return auth.error;
-    const { supabase } = auth;
+    const { supabase, employee } = auth;
     const { searchParams } = new URL(request.url);
     const modelIdFilter = searchParams.get('model_id');
+    const plantParam = searchParams.get('plant');
+
+    const isOwner = isOwnerUser(employee);
+    // If user is not owner, lock to employee's assigned plant
+    const targetPlant = isOwner
+      ? (plantParam ? (plantParam === ALL_PLANTS_ID ? ALL_PLANTS_ID : normalizePlant(plantParam)) : ALL_PLANTS_ID)
+      : normalizePlant(employee?.plant);
 
     const todayStr = getTodayIST();
 
-    // 1. Fetch current stock from current_stock view
-    let stockQuery = supabase
-      .from('current_stock')
-      .select('model_id, model_name, model_code, current_stock')
-      .order('model_code', { ascending: true });
+    // 1. Fetch active cooler models
+    let cmQuery = supabase
+      .from('cooler_models')
+      .select('id, name, code, description, is_active')
+      .eq('is_active', true)
+      .order('code', { ascending: true });
 
     if (modelIdFilter) {
-      stockQuery = stockQuery.eq('model_id', modelIdFilter);
+      cmQuery = cmQuery.eq('id', modelIdFilter);
     }
 
-    const { data: stockData, error: stockError } = await stockQuery;
+    const { data: models, error: modelsErr } = await cmQuery;
+    if (modelsErr) throw modelsErr;
 
-    let currentStock = [];
-    if (!stockError && stockData) {
-      currentStock = stockData.map((row) => ({
-        ...row,
-        current_stock: Number(row.current_stock ?? 0),
-      }));
-    } else {
-      // Fallback: Query cooler_models and compute sum of stock_transactions
-      try {
-        let cmQuery = supabase
-          .from('cooler_models')
-          .select('id, name, code, is_active')
-          .eq('is_active', true)
-          .order('code', { ascending: true });
+    // 2. Fetch stock transactions with plant info
+    let txQuery = supabase
+      .from('stock_transactions')
+      .select('model_id, quantity, plant, notes');
 
-        if (modelIdFilter) {
-          cmQuery = cmQuery.eq('id', modelIdFilter);
+    let { data: transactions, error: txErr } = await txQuery;
+    if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
+      // Fallback if plant column doesn't exist yet
+      const fbTx = await supabase.from('stock_transactions').select('model_id, quantity, notes');
+      transactions = fbTx.data || [];
+    }
+
+    // Map transactions into plant breakdown & total per model
+    const stockMapByPlant = {
+      'E41 G2': {},
+      'D4': {},
+      'C116': {},
+      total: {},
+    };
+
+    (transactions || []).forEach((tx) => {
+      const mid = tx.model_id;
+      const qty = Number(tx.quantity) || 0;
+      let p = normalizePlant(tx.plant);
+
+      // Check notes for fallback plant tag if plant column was missing
+      if (!tx.plant && tx.notes) {
+        const match = tx.notes.match(/\[Plant:\s*([^\]]+)\]/i);
+        if (match && match[1]) {
+          p = normalizePlant(match[1]);
         }
-
-        const { data: models } = await cmQuery;
-
-        const { data: transactions } = await supabase
-          .from('stock_transactions')
-          .select('model_id, quantity');
-
-        const txMap = {};
-        (transactions || []).forEach((tx) => {
-          txMap[tx.model_id] = (txMap[tx.model_id] || 0) + (tx.quantity || 0);
-        });
-
-        currentStock = (models || []).map((m) => ({
-          model_id: m.id,
-          model_name: m.name,
-          model_code: m.code,
-          current_stock: txMap[m.id] || 0,
-        }));
-      } catch (fbErr) {
-        console.error('Stock fallback query error:', fbErr);
       }
-    }
 
-    // 2. Fetch summary statistics
-    let totalStock = 0;
-    let todayProduction = 0;
-    let todayDispatch = 0;
-    let activeModelsCount = 0;
+      if (!stockMapByPlant[p]) stockMapByPlant[p] = {};
+      stockMapByPlant[p][mid] = (stockMapByPlant[p][mid] || 0) + qty;
+      stockMapByPlant.total[mid] = (stockMapByPlant.total[mid] || 0) + qty;
+    });
 
-    // Total Stock (Sum of all active models)
-    if (currentStock && !modelIdFilter) {
-      totalStock = currentStock.reduce((acc, row) => acc + (row.current_stock || 0), 0);
-    } else {
-      const { data: allStockTx } = await supabase
-        .from('stock_transactions')
-        .select('quantity');
-      totalStock = (allStockTx || []).reduce((acc, row) => acc + (row.quantity || 0), 0);
-    }
+    // Format currentStock array based on targetPlant
+    const currentStock = (models || []).map((m) => {
+      const e41Qty = stockMapByPlant['E41 G2'][m.id] || 0;
+      const d4Qty = stockMapByPlant['D4'][m.id] || 0;
+      const c116Qty = stockMapByPlant['C116'][m.id] || 0;
+      const totalQty = stockMapByPlant.total[m.id] || 0;
+
+      let effectiveStock = totalQty;
+      if (targetPlant === 'E41 G2') effectiveStock = e41Qty;
+      else if (targetPlant === 'D4') effectiveStock = d4Qty;
+      else if (targetPlant === 'C116') effectiveStock = c116Qty;
+
+      return {
+        model_id: m.id,
+        model_name: m.name,
+        model_code: m.code,
+        current_stock: effectiveStock,
+        plant_breakdown: {
+          'E41 G2': e41Qty,
+          'D4': d4Qty,
+          'C116': c116Qty,
+          total: totalQty,
+        },
+      };
+    });
+
+    // 3. Fetch summary statistics scoped to targetPlant
+    let totalStock = currentStock.reduce((acc, row) => acc + (row.current_stock || 0), 0);
 
     // Today's Production
-    const { data: todayProdData } = await supabase
+    let prodQuery = supabase
       .from('production_entries')
-      .select('quantity')
+      .select('quantity, plant, remarks')
       .eq('production_date', todayStr);
 
-    todayProduction = (todayProdData || []).reduce(
-      (sum, row) => sum + (row.quantity || 0),
-      0
-    );
+    const { data: todayProdData } = await prodQuery;
+    let todayProduction = 0;
+    (todayProdData || []).forEach((row) => {
+      let p = normalizePlant(row.plant);
+      if (!row.plant && row.remarks) {
+        const match = row.remarks.match(/\[Plant:\s*([^\]]+)\]/i);
+        if (match && match[1]) p = normalizePlant(match[1]);
+      }
+      if (targetPlant === ALL_PLANTS_ID || p === targetPlant) {
+        todayProduction += row.quantity || 0;
+      }
+    });
 
     // Today's Confirmed Dispatch
-    const { data: todayDispatchData } = await supabase
+    let dispQuery = supabase
       .from('dispatches')
-      .select('id, dispatch_items(quantity)')
+      .select('id, from_location, remarks, dispatch_items(quantity)')
       .eq('dispatch_date', todayStr)
       .eq('status', 'confirmed');
 
-    if (todayDispatchData) {
-      for (const d of todayDispatchData) {
-        for (const item of d.dispatch_items || []) {
-          todayDispatch += item.quantity || 0;
-        }
+    const { data: todayDispatchData } = await dispQuery;
+    let todayDispatch = 0;
+    (todayDispatchData || []).forEach((d) => {
+      let p = normalizePlant(d.from_location);
+      if (!d.from_location && d.remarks) {
+        const match = d.remarks.match(/\[Plant:\s*([^\]]+)\]/i);
+        if (match && match[1]) p = normalizePlant(match[1]);
       }
-    }
-
-    // Number of active models
-    const { count: modelsCount } = await supabase
-      .from('cooler_models')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_active', true);
-
-    activeModelsCount = modelsCount ?? currentStock.length;
-
-    return NextResponse.json({
-      success: true,
-      stats: {
-        totalStock: Math.max(0, totalStock),
-        todayProduction,
-        todayDispatch,
-        activeModelsCount,
-      },
-      currentStock,
-      timestamp: new Date().toISOString(),
+      if (targetPlant === ALL_PLANTS_ID || p === targetPlant) {
+        (d.dispatch_items || []).forEach((item) => {
+          todayDispatch += item.quantity || 0;
+        });
+      }
     });
-  } catch (error) {
-    console.error('API /api/stock GET error:', error);
+
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to fetch stock overview' },
-      { status: 500 }
+      {
+        success: true,
+        target_plant: targetPlant,
+        currentStock,
+        stats: {
+          totalStock: Math.max(0, totalStock),
+          todayProduction,
+          todayDispatch,
+          activeModelsCount: models.length,
+        },
+        timestamp: new Date().toISOString(),
+      },
+      { status: 200 }
     );
+  } catch (err) {
+    console.error('API /api/stock GET error:', err);
+    return NextResponse.json({ success: false, error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }

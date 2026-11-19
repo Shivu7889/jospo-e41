@@ -93,7 +93,8 @@ export default function AppShell({ children, allowedRoles }) {
 
   // Role check: if allowedRoles is specified and employee.role is not permitted
   if (allowedRoles && Array.isArray(allowedRoles) && allowedRoles.length > 0) {
-    if (!allowedRoles.includes(employee.role)) {
+    const isOwner = employee.role === 'owner' || employee.is_owner === true;
+    if (!isOwner && !allowedRoles.includes(employee.role)) {
       return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
           <Navbar />

@@ -78,8 +78,9 @@ export async function POST(request) {
     const body = await request.json();
     const {
       vehicle_number,
-      from_location = 'Jospo E41',
+      from_location = 'E41 G2',
       destination,
+      destination_plant,
       dispatch_date = getTodayIST(),
       remarks,
       dispatch_type = 'party',
@@ -88,6 +89,10 @@ export async function POST(request) {
     } = body;
 
     const normalizedType = dispatch_type === 'local' ? 'local' : 'party';
+    const normalizedFromPlant = from_location.trim();
+    const destPlant = normalizedType === 'local'
+      ? (destination_plant ? destination_plant.trim() : (destination.trim()))
+      : null;
 
     // 1. Validation
     if (!vehicle_number || !vehicle_number.trim()) {
@@ -140,16 +145,24 @@ export async function POST(request) {
       }
     }
 
-    // 3. Insert dispatch record with dispatch_type and remarks fallback
+    // 3. Insert dispatch record with dispatch_type, destination_plant, transfer_status and fallback remarks
+    const initialTransferStatus = normalizedType === 'local' ? 'in_transit' : 'completed';
+    let compiledRemarks = formatDispatchRemarks(remarks, normalizedType);
+    if (destPlant) {
+      compiledRemarks = `[DestPlant: ${destPlant}] [TransferStatus: ${initialTransferStatus}] ${compiledRemarks}`.trim();
+    }
+
     const insertPayload = {
       vehicle_number: vehicle_number.trim().toUpperCase(),
-      from_location: from_location.trim(),
+      from_location: normalizedFromPlant,
       destination: destination.trim(),
       dispatch_date,
-      remarks: formatDispatchRemarks(remarks, normalizedType),
+      remarks: compiledRemarks,
       status: 'draft',
       employee_id: employeeId,
       dispatch_type: normalizedType,
+      destination_plant: destPlant,
+      transfer_status: initialTransferStatus,
     };
 
     let { data: dispatchRecord, error: dispatchError } = await supabase
@@ -158,9 +171,13 @@ export async function POST(request) {
       .select()
       .single();
 
-    // Fallback if dispatch_type column does not exist yet in Supabase schema cache
-    if (dispatchError && (dispatchError.message?.includes('dispatch_type') || dispatchError.code === 'PGRST204')) {
-      delete insertPayload.dispatch_type;
+    // Fallback if destination_plant or dispatch_type column does not exist yet in Supabase schema cache
+    if (dispatchError && (dispatchError.message?.includes('destination_plant') || dispatchError.message?.includes('transfer_status') || dispatchError.code === 'PGRST204')) {
+      delete insertPayload.destination_plant;
+      delete insertPayload.transfer_status;
+      if (dispatchError.message?.includes('dispatch_type')) {
+        delete insertPayload.dispatch_type;
+      }
       const retryResult = await supabase
         .from('dispatches')
         .insert(insertPayload)

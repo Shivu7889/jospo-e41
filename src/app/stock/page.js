@@ -9,10 +9,19 @@ import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import { exportToExcel } from '@/lib/exportExcel';
+import { usePlant } from '@/contexts/PlantContext';
+import {
+  PLANTS,
+  ALL_PLANTS_ID,
+  DEFAULT_PLANT_ID,
+  normalizePlant,
+  getPlantMeta,
+} from '@/lib/plants';
 
 export default function StockPage() {
   const { showToast } = useToast();
   const supabase = getSupabase();
+  const { activePlant, isOwner, userPlant } = usePlant();
 
   // Summary and Stock State
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -42,85 +51,39 @@ export default function StockPage() {
   // Active models for dropdown
   const [availableModels, setAvailableModels] = useState([]);
 
-  // 1. Fetch Overview & Current Stock
+  // Plant-wise stock totals for consolidated view
+  const plantTotals = useMemo(() => {
+    const totals = { 'E41 G2': 0, 'D4': 0, 'C116': 0 };
+    stockList.forEach((item) => {
+      if (item.plant_breakdown) {
+        totals['E41 G2'] += item.plant_breakdown['E41 G2'] || 0;
+        totals['D4'] += item.plant_breakdown['D4'] || 0;
+        totals['C116'] += item.plant_breakdown['C116'] || 0;
+      }
+    });
+    return totals;
+  }, [stockList]);
+
+  // 1. Fetch Overview & Current Stock (scoped to activePlant)
   const fetchStockOverview = useCallback(async () => {
     try {
       setLoadingOverview(true);
-
-      // Query current_stock view directly via Supabase client
-      const { data: stockData, error: stockErr } = await supabase
-        .from('current_stock')
-        .select('*')
-        .order('model_code', { ascending: true });
-
-      if (stockErr) {
-        // Fallback to API route if view query has RLS/permission issues
-        const res = await fetch('/api/stock');
-        const apiData = await res.json();
-        if (apiData.success) {
-          setStockList(apiData.currentStock || []);
-          setStats(apiData.stats || {});
-          setAvailableModels(apiData.currentStock || []);
-          return;
-        }
-        throw stockErr;
+      const res = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`);
+      const apiData = await res.json();
+      if (apiData.success) {
+        setStockList(apiData.currentStock || []);
+        setStats(apiData.stats || {});
+        setAvailableModels(apiData.currentStock || []);
+        return;
       }
-
-      const formattedStock = (stockData || []).map((row) => ({
-        ...row,
-        current_stock: Number(row.current_stock ?? 0),
-      }));
-
-      setStockList(formattedStock);
-      setAvailableModels(formattedStock);
-
-      // Also compute stats from DB
-      const todayStr = getTodayIST();
-
-      // Total Stock
-      const totalUnits = formattedStock.reduce(
-        (sum, item) => sum + (item.current_stock || 0),
-        0
-      );
-
-      // Today's Production
-      const { data: prodData } = await supabase
-        .from('production_entries')
-        .select('quantity')
-        .eq('production_date', todayStr);
-      const prodSum = (prodData || []).reduce(
-        (acc, r) => acc + (r.quantity || 0),
-        0
-      );
-
-      // Today's Dispatch
-      const { data: dispData } = await supabase
-        .from('dispatches')
-        .select('id, dispatch_items(quantity)')
-        .eq('dispatch_date', todayStr)
-        .eq('status', 'confirmed');
-      let dispSum = 0;
-      if (dispData) {
-        for (const d of dispData) {
-          for (const item of d.dispatch_items || []) {
-            dispSum += item.quantity || 0;
-          }
-        }
-      }
-
-      setStats({
-        totalStock: totalUnits,
-        todayProduction: prodSum,
-        todayDispatch: dispSum,
-        activeModelsCount: formattedStock.length,
-      });
+      throw new Error(apiData.error || 'Failed to fetch stock data');
     } catch (err) {
       console.error('Error fetching stock overview:', err);
       showToast('Could not load current stock data', 'error');
     } finally {
       setLoadingOverview(false);
     }
-  }, [supabase, showToast]);
+  }, [activePlant, showToast]);
 
   // 2. Fetch Stock Ledger
   const fetchStockLedger = useCallback(async () => {
@@ -131,6 +94,10 @@ export default function StockPage() {
         .from('stock_ledger')
         .select('*', { count: 'exact' })
         .order('created_at', { ascending: false });
+
+      if (activePlant && activePlant !== ALL_PLANTS_ID) {
+        query = query.eq('plant', activePlant);
+      }
 
       if (selectedModel) {
         query = query.eq('model_code', selectedModel);
@@ -159,20 +126,26 @@ export default function StockPage() {
       if (error) {
         // If view is missing, fallback query from stock_transactions table
         console.warn('stock_ledger view query error, attempting fallback:', error);
-        const { data: rawTx, count: rawCount } = await supabase
+        let fbQuery = supabase
           .from('stock_transactions')
           .select(`
             id,
             created_at,
             transaction_type,
             quantity,
+            plant,
             notes,
             reference_id,
             cooler_models (name, code),
             employees (name)
           `, { count: 'exact' })
-          .order('created_at', { ascending: false })
-          .range(fromIndex, toIndex);
+          .order('created_at', { ascending: false });
+
+        if (activePlant && activePlant !== ALL_PLANTS_ID) {
+          fbQuery = fbQuery.eq('plant', activePlant);
+        }
+
+        const { data: rawTx, count: rawCount } = await fbQuery.range(fromIndex, toIndex);
 
         if (rawTx) {
           const transformed = rawTx.map((tx) => ({
@@ -182,6 +155,7 @@ export default function StockPage() {
             model_code: tx.cooler_models?.code || '—',
             transaction_type: tx.transaction_type,
             quantity: tx.quantity,
+            plant: tx.plant || 'E41 G2',
             notes: tx.notes,
             employee_name: tx.employees?.name || 'Employee',
             reference_id: tx.reference_id,
@@ -201,7 +175,7 @@ export default function StockPage() {
     } finally {
       setLoadingLedger(false);
     }
-  }, [supabase, selectedModel, selectedType, startDate, endDate, page, showToast]);
+  }, [supabase, activePlant, selectedModel, selectedType, startDate, endDate, page, showToast]);
 
   useEffect(() => {
     fetchStockOverview();
@@ -298,71 +272,169 @@ export default function StockPage() {
     showToast(`Exported ${rows.length} ledger transactions to Excel`, 'success');
   };
 
-  // Current Stock Table Columns
-  const currentStockColumns = [
-    {
-      key: 'model_code',
-      label: 'Model Code',
-      render: (val) => (
-        <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
-          {val}
-        </span>
-      ),
-    },
-    {
-      key: 'model_name',
-      label: 'Model Name',
-      render: (val) => (
-        <span className="font-semibold text-gray-900 text-sm">{val}</span>
-      ),
-    },
-    {
-      key: 'current_stock',
-      label: 'Current Stock',
-      align: 'right',
-      render: (val) => {
-        const qty = Number(val ?? 0);
-        let colorClass = 'text-emerald-700 font-extrabold';
-        if (qty === 0) {
-          colorClass = 'text-rose-600 font-extrabold';
-        } else if (qty < 10) {
-          colorClass = 'text-amber-600 font-extrabold';
-        }
-        return (
-          <span className={`font-mono text-base ${colorClass}`}>
-            {qty.toLocaleString()} <span className="text-xs font-normal text-gray-500">units</span>
+  // Current Stock Table Columns (Dynamic: Consolidated Matrix or Single Plant)
+  const currentStockColumns = useMemo(() => {
+    if (activePlant === ALL_PLANTS_ID) {
+      return [
+        {
+          key: 'model_code',
+          label: 'Model Code',
+          render: (val) => (
+            <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
+              {val}
+            </span>
+          ),
+        },
+        {
+          key: 'model_name',
+          label: 'Cooler Model',
+          render: (val) => <span className="font-semibold text-gray-900 text-sm">{val}</span>,
+        },
+        {
+          key: 'e41_stock',
+          label: '🏭 E41 G2',
+          align: 'right',
+          render: (_, row) => {
+            const qty = Number(row.plant_breakdown?.['E41 G2'] ?? 0);
+            return (
+              <span className={`font-mono text-xs font-bold ${qty > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
+                {qty.toLocaleString()} <span className="text-[10px] text-gray-400">pcs</span>
+              </span>
+            );
+          },
+        },
+        {
+          key: 'd4_stock',
+          label: '🏭 D4 Plant',
+          align: 'right',
+          render: (_, row) => {
+            const qty = Number(row.plant_breakdown?.['D4'] ?? 0);
+            return (
+              <span className={`font-mono text-xs font-bold ${qty > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>
+                {qty.toLocaleString()} <span className="text-[10px] text-gray-400">pcs</span>
+              </span>
+            );
+          },
+        },
+        {
+          key: 'c116_stock',
+          label: '🏭 C116 Plant',
+          align: 'right',
+          render: (_, row) => {
+            const qty = Number(row.plant_breakdown?.['C116'] ?? 0);
+            return (
+              <span className={`font-mono text-xs font-bold ${qty > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+                {qty.toLocaleString()} <span className="text-[10px] text-gray-400">pcs</span>
+              </span>
+            );
+          },
+        },
+        {
+          key: 'current_stock',
+          label: 'Total Stock',
+          align: 'right',
+          render: (val) => {
+            const qty = Number(val ?? 0);
+            let colorClass = 'text-primary-700 font-extrabold';
+            if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
+            else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
+            return (
+              <span className={`font-mono text-sm ${colorClass}`}>
+                {qty.toLocaleString()} <span className="text-xs font-normal text-gray-500">units</span>
+              </span>
+            );
+          },
+        },
+        {
+          key: 'status',
+          label: 'Status',
+          align: 'center',
+          render: (_, row) => {
+            const qty = Number(row.current_stock ?? 0);
+            if (qty === 0) {
+              return (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                  ● Out of Stock
+                </span>
+              );
+            }
+            if (qty < 10) {
+              return (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                  ▲ Low (&lt;10)
+                </span>
+              );
+            }
+            return (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                ✓ Available
+              </span>
+            );
+          },
+        },
+      ];
+    }
+
+    return [
+      {
+        key: 'model_code',
+        label: 'Model Code',
+        render: (val) => (
+          <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
+            {val}
           </span>
-        );
+        ),
       },
-    },
-    {
-      key: 'status',
-      label: 'Stock Status',
-      align: 'center',
-      render: (_, row) => {
-        const qty = Number(row.current_stock ?? 0);
-        if (qty === 0) {
+      {
+        key: 'model_name',
+        label: 'Model Name',
+        render: (val) => <span className="font-semibold text-gray-900 text-sm">{val}</span>,
+      },
+      {
+        key: 'current_stock',
+        label: `Current Stock (${activePlant})`,
+        align: 'right',
+        render: (val) => {
+          const qty = Number(val ?? 0);
+          let colorClass = 'text-emerald-700 font-extrabold';
+          if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
+          else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
           return (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
-              ● Out of Stock (0)
+            <span className={`font-mono text-base ${colorClass}`}>
+              {qty.toLocaleString()} <span className="text-xs font-normal text-gray-500">units</span>
             </span>
           );
-        }
-        if (qty < 10) {
+        },
+      },
+      {
+        key: 'status',
+        label: 'Stock Status',
+        align: 'center',
+        render: (_, row) => {
+          const qty = Number(row.current_stock ?? 0);
+          if (qty === 0) {
+            return (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                ● Out of Stock (0)
+              </span>
+            );
+          }
+          if (qty < 10) {
+            return (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                ▲ Low Stock (&lt;10)
+              </span>
+            );
+          }
           return (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
-              ▲ Low Stock (&lt;10)
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+              ✓ Good Stock ({qty})
             </span>
           );
-        }
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-            ✓ Good Stock ({qty})
-          </span>
-        );
+        },
       },
-    },
-  ];
+    ];
+  }, [activePlant]);
 
   // Stock Ledger Table Columns
   const ledgerColumns = [
@@ -487,11 +559,18 @@ export default function StockPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 pb-5">
           <div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2.5">
               <span className="text-2xl">📊</span>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
                 Inventory & Stock Overview
               </h1>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                activePlant === ALL_PLANTS_ID
+                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                  : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+              }`}>
+                {activePlant === ALL_PLANTS_ID ? '🌐 All Plants' : `🏭 ${activePlant} Plant`}
+              </span>
             </div>
             <p className="mt-1 text-sm text-gray-500">
               Live balances per model, daily activity summaries, and full audit ledger history.
@@ -533,21 +612,21 @@ export default function StockPage() {
             value={stats.totalStock}
             icon="📦"
             color="indigo"
-            subtitle="Combined across all models"
+            subtitle={activePlant === ALL_PLANTS_ID ? 'Combined across all 3 plants' : `Total stock at ${activePlant}`}
           />
           <StatsCard
             title="Today's Production"
             value={stats.todayProduction}
             icon="🏭"
             color="green"
-            subtitle="Units manufactured today"
+            subtitle={activePlant === ALL_PLANTS_ID ? 'All plants manufactured today' : `${activePlant} manufactured today`}
           />
           <StatsCard
             title="Today's Dispatch"
             value={stats.todayDispatch}
             icon="🚚"
             color="yellow"
-            subtitle="Units dispatched & confirmed"
+            subtitle={activePlant === ALL_PLANTS_ID ? 'All confirmed dispatches' : `${activePlant} confirmed dispatches`}
           />
           <StatsCard
             title="Active Models"
@@ -558,13 +637,82 @@ export default function StockPage() {
           />
         </div>
 
+        {/* Multi-Plant Inventory Breakdown (Owner Consolidated View) */}
+        {activePlant === ALL_PLANTS_ID && (
+          <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-4 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-indigo-200/50 mb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-lg">🏭</span>
+                <h3 className="text-sm font-bold text-gray-900">Plant-Wise Physical Stock Breakdown</h3>
+              </div>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                3 Facilities
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-white rounded-xl p-3.5 border border-indigo-200/80 shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-semibold text-gray-500">🏭 Unit 1</span>
+                  <div className="text-sm font-bold text-indigo-900">E41 G2 Plant</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xl font-extrabold text-indigo-600 font-mono">
+                    {plantTotals['E41 G2'].toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-medium">coolers in stock</span>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-3.5 border border-emerald-200/80 shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-semibold text-gray-500">🏭 Unit 2</span>
+                  <div className="text-sm font-bold text-emerald-900">D4 Plant</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xl font-extrabold text-emerald-600 font-mono">
+                    {plantTotals['D4'].toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-medium">coolers in stock</span>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-3.5 border border-amber-200/80 shadow-xs flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-semibold text-gray-500">🏭 Unit 3</span>
+                  <div className="text-sm font-bold text-amber-900">C116 Plant</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xl font-extrabold text-amber-600 font-mono">
+                    {plantTotals['C116'].toLocaleString()}
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-medium">coolers in stock</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* SECTION 2: Current Stock Table */}
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Current Stock by Model</h2>
+              <h2 className="text-xl font-bold text-gray-900 flex items-center space-x-2">
+                <span>Current Stock by Model</span>
+                {activePlant === ALL_PLANTS_ID ? (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                    Consolidated 3-Plant Matrix
+                  </span>
+                ) : (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                    {activePlant} Stock
+                  </span>
+                )}
+              </h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Real-time on-hand inventory levels calculated from stock transactions.
+                {activePlant === ALL_PLANTS_ID
+                  ? 'Real-time on-hand inventory levels broken down across E41 G2, D4, and C116 facilities.'
+                  : `Real-time on-hand inventory levels for ${activePlant} facility.`}
               </p>
             </div>
 

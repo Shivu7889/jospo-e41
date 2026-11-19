@@ -13,6 +13,17 @@ import { getTodayIST } from '@/lib/date';
 import SearchableSelect from '@/components/SearchableSelect';
 import DeliveryChallanModal from '@/components/DeliveryChallanModal';
 import { resolveDispatchType, formatDispatchRemarks, cleanDispatchRemarks } from '@/lib/dispatch';
+import { usePlant } from '@/contexts/PlantContext';
+import {
+  PLANTS,
+  ALL_PLANTS_ID,
+  DEFAULT_PLANT_ID,
+  normalizePlant,
+  getOtherPlants,
+  formatPlantRemarks,
+  cleanPlantRemarks,
+  resolveDestinationPlant,
+} from '@/lib/plants';
 
 // Static 20 models registry to ensure zero-latency & offline scanning fallback
 export const JOSPO_20_ACTIVE_MODELS = [
@@ -59,6 +70,7 @@ function NewDispatchContent() {
   const { employee } = useAuth();
   const { showToast } = useToast();
   const supabase = getSupabase();
+  const { activePlant, isOwner, userPlant } = usePlant();
 
   // Multi-step navigation: 1 = Vehicle Details, 2 = QR Scanning & Items, 3 = Review & Confirm
   const [currentStep, setCurrentStep] = useState(1);
@@ -70,10 +82,17 @@ function NewDispatchContent() {
   const [existingDispatchStatus, setExistingDispatchStatus] = useState(null);
   const [dispatchType, setDispatchType] = useState('party'); // 'party' | 'local'
 
+  // Default plant selection for origin
+  const defaultPlant = useMemo(() => {
+    if (activePlant && activePlant !== ALL_PLANTS_ID) return activePlant;
+    if (userPlant && userPlant !== ALL_PLANTS_ID) return userPlant;
+    return DEFAULT_PLANT_ID;
+  }, [activePlant, userPlant]);
+
   // Form State - Step 1: Vehicle Details
   const todayStr = useMemo(() => getTodayIST(), []);
   const [vehicleNumber, setVehicleNumber] = useState('');
-  const [fromLocation, setFromLocation] = useState('Jospo E41');
+  const [fromLocation, setFromLocation] = useState(defaultPlant);
   const [destination, setDestination] = useState('');
   const [dispatchDate, setDispatchDate] = useState(todayStr);
   const [remarks, setRemarks] = useState('');
@@ -109,29 +128,48 @@ function NewDispatchContent() {
   const barcodeBufferRef = useRef('');
   const lastKeyTimeRef = useRef(0);
 
-  // Load models catalog and current stock (with multi-tier fallback)
-  const loadModelsAndStock = useCallback(async () => {
+  // Load models catalog and current stock for origin plant (with multi-tier fallback)
+  const loadModelsAndStock = useCallback(async (targetPlant = null) => {
     try {
       let loadedModels = [];
       let loadedStocks = {};
+      const plantToLoad = normalizePlant(targetPlant || fromLocation);
 
-      // 1. Try fetching via API route
+      // 1. Try fetching via API stock route scoped to the origin plant
       try {
-        const res = await fetch('/api/models?active_only=true');
+        const res = await fetch(`/api/stock?plant=${plantToLoad}`);
         if (res.ok) {
           const data = await res.json();
-          if (data.success && data.models?.length > 0) {
-            loadedModels = data.models;
-            data.models.forEach((m) => {
+          if (data.success && data.stock?.length > 0) {
+            loadedModels = data.stock;
+            data.stock.forEach((m) => {
               loadedStocks[m.id] = m.current_stock ?? 0;
             });
           }
         }
       } catch (apiErr) {
-        console.warn('API models fetch fallback to direct supabase:', apiErr);
+        console.warn('API stock fetch fallback to models:', apiErr);
       }
 
-      // 2. Fallback to direct supabase query
+      // 2. Try fetching via /api/models route if stock API failed
+      if (loadedModels.length === 0) {
+        try {
+          const res = await fetch('/api/models?active_only=true');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.models?.length > 0) {
+              loadedModels = data.models;
+              data.models.forEach((m) => {
+                loadedStocks[m.id] = m.current_stock ?? 0;
+              });
+            }
+          }
+        } catch (mErr) {
+          console.warn('API models fetch fallback to direct supabase:', mErr);
+        }
+      }
+
+      // 3. Fallback to direct supabase query
       if (loadedModels.length === 0 && supabase) {
         const { data: models, error: modelsError } = await supabase
           .from('cooler_models')
@@ -151,7 +189,7 @@ function NewDispatchContent() {
         }
       }
 
-      // 3. Fallback to JOSPO_20_ACTIVE_MODELS registry if offline or empty
+      // 4. Fallback to JOSPO_20_ACTIVE_MODELS registry if offline or empty
       if (loadedModels.length === 0) {
         loadedModels = JOSPO_20_ACTIVE_MODELS.map((m, idx) => ({
           id: `local-model-${idx + 1}`,
@@ -165,7 +203,7 @@ function NewDispatchContent() {
     } catch (err) {
       console.error('Error preloading models & stock:', err);
     }
-  }, [supabase]);
+  }, [supabase, fromLocation]);
 
   // Load existing draft if editing
   const loadExistingDraft = useCallback(async (id) => {
@@ -957,18 +995,24 @@ function NewDispatchContent() {
   const isStep1Valid = vehicleNumber.trim() && destination.trim() && dispatchDate;
   const isStep2Valid = items.length > 0 && totalQuantity > 0 && items.every((i) => (Number(i.quantity) || 0) > 0);
 
-  // Format remarks to include verified unique box serial numbers and dispatch type tag
+  // Format remarks to include verified unique box serial numbers, dispatch type tag, and multi-plant metadata
   const getCompiledRemarks = () => {
     const serialEntries = items
       .filter((i) => i.scanned_serials?.length > 0)
       .map((i) => `${i.model_code}: ${i.scanned_serials.map((s) => `#${s}`).join(', ')}`);
 
-    let finalRemarks = remarks.trim();
+    let finalRemarks = cleanPlantRemarks(remarks);
     if (serialEntries.length > 0) {
       const serialsTag = `Verified Box Serials:\n${serialEntries.join('\n')}`;
       finalRemarks = finalRemarks ? `${finalRemarks}\n\n${serialsTag}` : serialsTag;
     }
-    return formatDispatchRemarks(finalRemarks, dispatchType);
+    const formatted = formatDispatchRemarks(finalRemarks, dispatchType);
+    const destPlant = dispatchType === 'local' ? normalizePlant(destination) : null;
+    return formatPlantRemarks(formatted, {
+      plant: fromLocation,
+      destinationPlant: destPlant,
+      transferStatus: dispatchType === 'local' ? 'in_transit' : 'completed',
+    });
   };
 
   // Save as Draft
@@ -985,6 +1029,10 @@ function NewDispatchContent() {
     try {
       setSubmitting(true);
 
+      const originPlant = normalizePlant(fromLocation);
+      const destPlant = dispatchType === 'local' ? normalizePlant(destination) : null;
+      const transferStatus = dispatchType === 'local' ? 'in_transit' : 'completed';
+
       let targetDispatchId = editId;
 
       if (editId) {
@@ -994,8 +1042,10 @@ function NewDispatchContent() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             vehicle_number: vehicleNumber.trim().toUpperCase(),
-            from_location: fromLocation.trim(),
+            from_location: originPlant,
             destination: destination.trim(),
+            destination_plant: destPlant,
+            transfer_status: transferStatus,
             dispatch_date: dispatchDate,
             dispatch_type: dispatchType,
             remarks: getCompiledRemarks(),
@@ -1015,8 +1065,10 @@ function NewDispatchContent() {
         // Insert new draft dispatch
         const insertPayload = {
           vehicle_number: vehicleNumber.trim().toUpperCase(),
-          from_location: fromLocation.trim(),
+          from_location: originPlant,
           destination: destination.trim(),
+          destination_plant: destPlant,
+          transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
           remarks: getCompiledRemarks(),
@@ -1030,7 +1082,15 @@ function NewDispatchContent() {
           .select('id')
           .single();
 
-        if (insertError && (insertError.message?.includes('dispatch_type') || insertError.code === 'PGRST204')) {
+        if (
+          insertError &&
+          (insertError.message?.includes('destination_plant') ||
+            insertError.message?.includes('transfer_status') ||
+            insertError.message?.includes('dispatch_type') ||
+            insertError.code === 'PGRST204')
+        ) {
+          delete insertPayload.destination_plant;
+          delete insertPayload.transfer_status;
           delete insertPayload.dispatch_type;
           const retryRes = await supabase
             .from('dispatches')
@@ -1136,14 +1196,20 @@ function NewDispatchContent() {
     try {
       setSubmitting(true);
 
+      const originPlant = normalizePlant(fromLocation);
+      const destPlant = dispatchType === 'local' ? normalizePlant(destination) : null;
+      const transferStatus = dispatchType === 'local' ? 'in_transit' : 'completed';
+
       let targetDispatchId = editId;
 
       if (editId) {
         // Update existing header
         const updatePayload = {
           vehicle_number: vehicleNumber.trim().toUpperCase(),
-          from_location: fromLocation.trim(),
+          from_location: originPlant,
           destination: destination.trim(),
+          destination_plant: destPlant,
+          transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
           remarks: getCompiledRemarks(),
@@ -1155,7 +1221,15 @@ function NewDispatchContent() {
           .update(updatePayload)
           .eq('id', editId);
 
-        if (updateError && (updateError.message?.includes('dispatch_type') || updateError.code === 'PGRST204')) {
+        if (
+          updateError &&
+          (updateError.message?.includes('destination_plant') ||
+            updateError.message?.includes('transfer_status') ||
+            updateError.message?.includes('dispatch_type') ||
+            updateError.code === 'PGRST204')
+        ) {
+          delete updatePayload.destination_plant;
+          delete updatePayload.transfer_status;
           delete updatePayload.dispatch_type;
           const retryUpdate = await supabase
             .from('dispatches')
@@ -1172,8 +1246,10 @@ function NewDispatchContent() {
         // Insert new draft dispatch record
         const insertPayload = {
           vehicle_number: vehicleNumber.trim().toUpperCase(),
-          from_location: fromLocation.trim(),
+          from_location: originPlant,
           destination: destination.trim(),
+          destination_plant: destPlant,
+          transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
           remarks: getCompiledRemarks(),
@@ -1187,7 +1263,15 @@ function NewDispatchContent() {
           .select('id')
           .single();
 
-        if (insertError && (insertError.message?.includes('dispatch_type') || insertError.code === 'PGRST204')) {
+        if (
+          insertError &&
+          (insertError.message?.includes('destination_plant') ||
+            insertError.message?.includes('transfer_status') ||
+            insertError.message?.includes('dispatch_type') ||
+            insertError.code === 'PGRST204')
+        ) {
+          delete insertPayload.destination_plant;
+          delete insertPayload.transfer_status;
           delete insertPayload.dispatch_type;
           const retryRes = await supabase
             .from('dispatches')
@@ -1574,46 +1658,87 @@ function NewDispatchContent() {
               </p>
             </div>
 
-            {/* From Location */}
+            {/* From Location (Origin Plant) */}
             <div>
-              <label htmlFor="fromLocation" className="label">
-                From Location (Origin) <span className="text-red-500">*</span>
+              <label htmlFor="fromLocation" className="label text-xs font-bold text-gray-700">
+                Origin Plant (Dispatch Source) <span className="text-red-500">*</span>
               </label>
-              <input
-                id="fromLocation"
-                type="text"
-                required
-                value={fromLocation}
-                onChange={(e) => setFromLocation(e.target.value)}
-                className="input-field"
-              />
+              {isOwner ? (
+                <div>
+                  <div className="flex rounded-lg shadow-xs overflow-hidden border border-gray-300">
+                    {PLANTS.map((p) => {
+                      const isSelected = normalizePlant(fromLocation) === p.id;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => {
+                            setFromLocation(p.id);
+                            loadModelsAndStock(p.id);
+                            if (dispatchType === 'local' && normalizePlant(destination) === p.id) {
+                              const other = getOtherPlants(p.id)[0]?.id || '';
+                              setDestination(other);
+                            }
+                          }}
+                          className={`flex-1 py-2 px-2 text-xs font-bold text-center transition-colors ${
+                            isSelected
+                              ? 'bg-primary-600 text-white shadow-xs'
+                              : 'bg-white text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {p.icon} {p.shortName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Select origin plant. Stock availability will adjust accordingly.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-2 px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-800 text-xs font-bold">
+                  <span>🏭</span>
+                  <span>{normalizePlant(fromLocation)} Plant</span>
+                  <span className="text-[10px] text-gray-400 font-normal ml-auto">(Your Plant)</span>
+                </div>
+              )}
             </div>
 
             {/* Destination */}
             <div>
-              <label htmlFor="destination" className="label">
-                {dispatchType === 'local' ? 'Destination Plant / Receiving Unit' : 'Party / Customer Name & City'} <span className="text-red-500">*</span>
+              <label htmlFor="destination" className="label text-xs font-bold text-gray-700">
+                {dispatchType === 'local' ? 'Destination Plant (Receiving Unit)' : 'Party / Customer Name & City'}{' '}
+                <span className="text-red-500">*</span>
               </label>
               <input
                 id="destination"
                 type="text"
                 required
-                placeholder={dispatchType === 'local' ? 'e.g. Jospo Plant 2, Sanwer Road Unit' : 'e.g. Shree Ram Electronics, Jaipur'}
+                placeholder={
+                  dispatchType === 'local'
+                    ? 'e.g. D4 Plant, C116 Plant'
+                    : 'e.g. Shree Ram Electronics, Jaipur'
+                }
                 value={destination}
                 onChange={(e) => setDestination(e.target.value)}
                 className="input-field"
               />
               {dispatchType === 'local' && (
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-gray-400 font-medium">Quick pick:</span>
-                  {['Jospo Plant 2', 'Unit 2', 'Sanwer Road Plant', 'Other Plant'].map((chip) => (
+                  <span className="text-[10px] text-gray-400 font-medium">Select Receiving Plant:</span>
+                  {getOtherPlants(fromLocation).map((otherPlant) => (
                     <button
-                      key={chip}
+                      key={otherPlant.id}
                       type="button"
-                      onClick={() => setDestination(chip)}
-                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 transition-colors"
+                      onClick={() => setDestination(otherPlant.id)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1 ${
+                        normalizePlant(destination) === otherPlant.id
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                          : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                      }`}
                     >
-                      + {chip}
+                      <span>🏭</span>
+                      <span>{otherPlant.name}</span>
                     </button>
                   ))}
                 </div>
