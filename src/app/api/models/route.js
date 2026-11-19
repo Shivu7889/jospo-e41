@@ -62,32 +62,60 @@ export async function GET(request) {
       models = dataWithPlant || [];
     }
 
-    // 2. Fetch stock levels
+    // 2. Fetch stock levels (plant-specific if for_plant provided, otherwise consolidated)
     let stockMap = {};
-    const { data: stockData, error: stockError } = await supabase
-      .from('current_stock')
-      .select('model_id, current_stock');
+    const normalizedForPlant = forPlant && forPlant !== ALL_PLANTS_ID ? normalizePlant(forPlant) : null;
 
-    if (!stockError && stockData) {
-      stockData.forEach((row) => {
-        stockMap[row.model_id] = Number(row.current_stock ?? 0);
+    if (normalizedForPlant) {
+      let txQuery = supabase
+        .from('stock_transactions')
+        .select('model_id, quantity, plant, notes');
+
+      let { data: transactions, error: txErr } = await txQuery;
+      if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
+        const fbTx = await supabase.from('stock_transactions').select('model_id, quantity, notes');
+        transactions = fbTx.data || [];
+      }
+
+      (transactions || []).forEach((tx) => {
+        let p = normalizePlant(tx.plant);
+        if (!tx.plant && tx.notes) {
+          const match = tx.notes.match(/\[Plant:\s*([^\]]+)\]/i);
+          if (match && match[1]) {
+            p = normalizePlant(match[1]);
+          }
+        }
+        if (p === normalizedForPlant) {
+          const mid = tx.model_id;
+          stockMap[mid] = (stockMap[mid] || 0) + (Number(tx.quantity) || 0);
+        }
       });
     } else {
-      try {
-        const { data: txData } = await supabase
-          .from('stock_transactions')
-          .select('model_id, quantity');
-        if (txData) {
-          txData.forEach((tx) => {
-            stockMap[tx.model_id] = (stockMap[tx.model_id] || 0) + (tx.quantity || 0);
-          });
+      const { data: stockData, error: stockError } = await supabase
+        .from('current_stock')
+        .select('model_id, current_stock');
+
+      if (!stockError && stockData) {
+        stockData.forEach((row) => {
+          stockMap[row.model_id] = Number(row.current_stock ?? 0);
+        });
+      } else {
+        try {
+          const { data: txData } = await supabase
+            .from('stock_transactions')
+            .select('model_id, quantity');
+          if (txData) {
+            txData.forEach((tx) => {
+              stockMap[tx.model_id] = (stockMap[tx.model_id] || 0) + (tx.quantity || 0);
+            });
+          }
+        } catch (fbErr) {
+          console.warn('Fallback stock calculation error:', fbErr);
         }
-      } catch (fbErr) {
-        console.warn('Fallback stock calculation error:', fbErr);
       }
     }
 
-    // 3. Attach normalized manufacturing_plant and stock
+    // 3. Attach normalized manufacturing_plant and plant-specific stock
     let modelsWithStock = (models || []).map((m) => {
       const resolvedPlant = resolveModelManufacturingPlant(m);
       return {
@@ -98,18 +126,26 @@ export async function GET(request) {
     });
 
     // 4. Apply plant filtering based on user perspective:
-    // - If view === 'production': filter by what this plant can assemble/manufacture
-    //   (E41 G2 can only assemble E41 G2 models; C116 can only assemble C116 models;
-    //    D4 can only assemble D4 models — E41 G2 and C116 models arrive at D4 only via transfer!)
-    if (view === 'production' && forPlant && forPlant !== ALL_PLANTS_ID) {
-      modelsWithStock = modelsWithStock.filter((m) => isModelManufacturableAtPlant(m, forPlant));
-    } else if (view === 'stock' && forPlant && forPlant !== ALL_PLANTS_ID) {
-      // - If view === 'stock': E41 G2 only sees E41 G2 models; C116 only sees C116 models;
-      //   D4 sees ALL models because it holds stock of everything!
-      modelsWithStock = modelsWithStock.filter((m) => isModelVisibleInPlantStock(m, forPlant));
-    } else if (forPlant && forPlant !== ALL_PLANTS_ID && !view) {
-      // General filter by manufacturing plant if explicitly requested
-      modelsWithStock = modelsWithStock.filter((m) => m.manufacturing_plant === normalizePlant(forPlant));
+    if (normalizedForPlant) {
+      if (view === 'production') {
+        // Can only assemble/manufacture models assigned to this plant
+        modelsWithStock = modelsWithStock.filter((m) => isModelManufacturableAtPlant(m, normalizedForPlant));
+      } else if (view === 'dispatch') {
+        // When dispatching or co-loading from this plant:
+        // Strictly show models belonging to this plant, or models that have physical stock at this plant
+        modelsWithStock = modelsWithStock.filter(
+          (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
+        );
+      } else if (view === 'stock') {
+        modelsWithStock = modelsWithStock.filter((m) =>
+          isModelVisibleInPlantStock(m, normalizedForPlant, stockMap[m.id])
+        );
+      } else {
+        // General query with for_plant
+        modelsWithStock = modelsWithStock.filter(
+          (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
+        );
+      }
     }
 
     return NextResponse.json({

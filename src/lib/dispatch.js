@@ -4,7 +4,7 @@
  * and Multi-Plant Co-Loading (Shared Vehicle across E41, D4, C116)
  */
 
-import { normalizePlant } from './plants';
+import { normalizePlant, resolveModelManufacturingPlant } from './plants';
 
 export function resolveDispatchType(dispatch) {
   if (dispatch?.dispatch_type) {
@@ -103,8 +103,29 @@ export function resolveSecondPlant(dispatch) {
  */
 export function resolveItemLoadedPlant(item, dispatch) {
   if (item?.loaded_plant) return normalizePlant(item.loaded_plant);
-  const match = item?.notes?.match(/\[LoadedAt:\s*([^\]]+)\]/i);
-  if (match) return normalizePlant(match[1]);
+  if (item?.notes) {
+    const match = item.notes.match(/\[LoadedAt:\s*([^\]]+)\]/i);
+    if (match) return normalizePlant(match[1]);
+  }
+  // Check fallback plant item tags in dispatch.remarks (e.g. [Loaded_D4: mid1,mid2])
+  if (dispatch?.remarks && item?.model_id) {
+    const d4Match = dispatch.remarks.match(/\[Loaded_D4:\s*([^\]]+)\]/i);
+    if (d4Match && d4Match[1].includes(item.model_id)) return 'D4';
+    const c116Match = dispatch.remarks.match(/\[Loaded_C116:\s*([^\]]+)\]/i);
+    if (c116Match && c116Match[1].includes(item.model_id)) return 'C116';
+    const e41Match = dispatch.remarks.match(/\[Loaded_E41:\s*([^\]]+)\]/i);
+    if (e41Match && e41Match[1].includes(item.model_id)) return 'E41 G2';
+  }
+  // If model's known manufacturing plant matches second_plant or third_plant of this co-loading dispatch:
+  if (item?.cooler_models) {
+    const modelMfgPlant = resolveModelManufacturingPlant(item.cooler_models);
+    if (dispatch?.second_plant && normalizePlant(dispatch.second_plant) === modelMfgPlant) {
+      return modelMfgPlant;
+    }
+    if (dispatch?.third_plant && normalizePlant(dispatch.third_plant) === modelMfgPlant) {
+      return modelMfgPlant;
+    }
+  }
   // Default to dispatch from_location or E41 G2
   return normalizePlant(dispatch?.from_location || 'E41 G2');
 }
@@ -213,6 +234,7 @@ export function cleanDispatchRemarks(remarks) {
     .replace(/\[CoLoadingStatus:\s*[^\]]+\]/gi, '')
     .replace(/\[SecondPlant:\s*[^\]]+\]/gi, '')
     .replace(/\[ThirdPlant:\s*[^\]]+\]/gi, '')
+    .replace(/\[Loaded_[^:]+:\s*[^\]]+\]/gi, '')
     .trim();
 }
 
@@ -234,6 +256,9 @@ export function formatDispatchRemarks(remarks, dispatchType = 'party', coLoading
     }
     if (coLoadingOpts.thirdPlant) {
       tags.push(`[ThirdPlant: ${normalizePlant(coLoadingOpts.thirdPlant)}]`);
+    }
+    if (coLoadingOpts.loadedPlantTag && coLoadingOpts.loadedItemIds?.length) {
+      tags.push(`[Loaded_${normalizePlant(coLoadingOpts.loadedPlantTag)}: ${coLoadingOpts.loadedItemIds.join(',')}]`);
     }
   }
 

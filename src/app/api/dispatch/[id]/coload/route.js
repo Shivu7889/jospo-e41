@@ -202,6 +202,8 @@ export async function POST(request, { params }) {
       status: newStatus,
       secondPlant: secondPlantValue,
       thirdPlant: thirdPlantValue,
+      loadedPlantTag: loadingPlant,
+      loadedItemIds: items.map((it) => it.model_id),
     });
 
     const updatePayload = {

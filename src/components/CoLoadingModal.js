@@ -4,12 +4,16 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
 import { getPlantMeta, normalizePlant, PLANTS } from '@/lib/plants';
-import { resolveItemLoadedPlant } from '@/lib/dispatch';
+import { resolveItemLoadedPlant, resolveNextLoadingPlant } from '@/lib/dispatch';
 
 export default function CoLoadingModal({ dispatch, activePlant, currentPlant: propPlant, onClose, onSuccess }) {
   const { showToast } = useToast();
 
-  const currentPlant = normalizePlant(propPlant || activePlant || 'D4');
+  const currentPlant = normalizePlant(
+    propPlant ||
+    resolveNextLoadingPlant(dispatch) ||
+    (activePlant && activePlant !== 'ALL' ? activePlant : 'D4')
+  );
   const plantMeta = getPlantMeta(currentPlant);
   const originPlant = normalizePlant(dispatch?.from_location || 'E41 G2');
 
@@ -251,13 +255,13 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
         {/* Previously Loaded Items by Plant (Read-Only) */}
         {Object.keys(existingByPlant).length > 0 && (
-          <div className="border border-gray-200 rounded-xl p-3 bg-gray-50/60 space-y-2.5">
+          <div className="border border-indigo-200/80 rounded-xl p-3.5 bg-indigo-50/40 space-y-2.5">
             <div className="flex items-center justify-between">
-              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider flex items-center space-x-1.5">
-                <span>📦 Already Loaded on Vehicle</span>
+              <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wider flex items-center space-x-1.5">
+                <span>🚚 Cargo Already on Vehicle (Previous Stops)</span>
               </h4>
-              <span className="text-xs font-bold text-gray-600">
-                {existingTotalQty} units total
+              <span className="text-[11px] font-extrabold text-indigo-800 bg-indigo-100/90 px-2.5 py-0.5 rounded-full border border-indigo-300">
+                {existingTotalQty} units on board
               </span>
             </div>
 
@@ -265,13 +269,16 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
               {Object.entries(existingByPlant).map(([plantName, plantItems]) => {
                 const subtotal = plantItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
                 return (
-                  <div key={plantName} className="bg-white rounded-lg border border-gray-200 p-2.5 shadow-2xs">
+                  <div key={plantName} className="bg-white rounded-lg border border-indigo-200 p-2.5 shadow-2xs">
                     <div className="flex items-center justify-between text-xs font-bold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">
-                      <span className="flex items-center space-x-1.5 text-primary-800">
+                      <span className="flex items-center space-x-1.5 text-primary-900 font-extrabold">
                         <span>🏭</span>
                         <span>Loaded at {plantName} Plant</span>
+                        <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                          Read-Only (Already Loaded)
+                        </span>
                       </span>
-                      <span className="text-gray-600 font-extrabold">{subtotal} pcs</span>
+                      <span className="text-gray-700 font-extrabold">{subtotal} pcs</span>
                     </div>
                     <div className="space-y-1">
                       {plantItems.map((it, idx) => (
@@ -292,13 +299,13 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
         {/* Current Plant Loading Form */}
         <form onSubmit={handleSubmitCoLoad} className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between pt-1">
             <div>
-              <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
-                <span>➕ Add Models from {currentPlant} Plant</span>
+              <h4 className="text-xs font-black text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
+                <span>➕ Add Models to Load from {currentPlant} Plant</span>
               </h4>
               <p className="text-[11px] text-gray-500">
-                Stock will be deducted from {currentPlant} inventory upon confirmation.
+                Only {currentPlant} models and stock are listed below. Stock will be debited from {currentPlant} inventory.
               </p>
             </div>
             <button
@@ -313,11 +320,11 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
           {loadingModels ? (
             <div className="py-8 text-center bg-gray-50 rounded-xl border border-gray-200">
-              <LoadingSpinner message={`Loading models for ${currentPlant}...`} size="sm" />
+              <LoadingSpinner message={`Loading ${currentPlant} models & inventory...`} size="sm" />
             </div>
           ) : availableModels.length === 0 ? (
-            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 text-center">
-              No active cooler models found for {currentPlant} plant.
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 text-center font-medium">
+              ⚠️ No cooler models or stock available for {currentPlant} plant.
             </div>
           ) : (
             <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
@@ -333,7 +340,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-gray-600">
-                        Item #{index + 1}
+                        {currentPlant} Item #{index + 1}
                       </span>
                       {newItems.length > 1 && (
                         <button
@@ -354,10 +361,10 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                           className="input-field text-xs font-semibold bg-white"
                           required
                         >
-                          <option value="">-- Select Cooler Model ({currentPlant}) --</option>
+                          <option value="">-- Select Cooler Model ({currentPlant} Only) --</option>
                           {availableModels.map((m) => (
                             <option key={m.id} value={m.id}>
-                              {m.code} - {m.name} (In Stock: {m.current_stock ?? 0} pcs)
+                              {m.code} - {m.name} ({currentPlant} Stock: {m.current_stock ?? 0} pcs)
                             </option>
                           ))}
                         </select>
@@ -385,14 +392,14 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                     {selectedModel && (
                       <div className="flex items-center justify-between text-[11px] pt-1">
                         <span className="text-gray-500">
-                          Available at {currentPlant}:{' '}
+                          {currentPlant} Warehouse Stock:{' '}
                           <strong className={currentStock > 0 ? 'text-emerald-700' : 'text-red-600'}>
                             {currentStock} pcs
                           </strong>
                         </span>
                         {isOverStock && (
                           <span className="text-red-600 font-bold animate-pulse">
-                            ⚠️ Exceeds available stock by {Number(item.quantity) - currentStock} pcs
+                            ⚠️ Exceeds {currentPlant} stock by {Number(item.quantity) - currentStock} pcs
                           </span>
                         )}
                       </div>

@@ -243,15 +243,17 @@ export function isModelManufacturableAtPlant(model, plant) {
 
 /**
  * Check if a model should be visible in a plant's physical stock overview.
- * - E41 G2: only E41 G2 models.
- * - C116: only C116 models.
- * - D4: ALL models (E41 G2, C116, and D4) because D4 is the central storage hub receiving transfers from both!
+ * - E41 G2: only E41 G2 models (or models with positive physical stock from transfers).
+ * - C116: only C116 models (or models with positive physical stock from transfers).
+ * - D4: only D4 models (or models with positive physical stock from transfers).
  * - ALL (Owner): ALL models.
  */
-export function isModelVisibleInPlantStock(model, plant) {
+export function isModelVisibleInPlantStock(model, plant, plantStock = 0) {
   const norm = normalizePlant(plant);
-  if (norm === ALL_PLANTS_ID || norm === 'D4') return true;
+  if (norm === ALL_PLANTS_ID) return true;
   const mfgPlant = resolveModelManufacturingPlant(model);
-  return norm === mfgPlant;
+  if (norm === mfgPlant) return true;
+  if (Number(plantStock) > 0) return true;
+  return false;
 }
 

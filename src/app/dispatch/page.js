@@ -2048,9 +2048,8 @@ export default function DispatchListPage() {
           <CoLoadingModal
             dispatch={coLoadingModalData}
             currentPlant={
-              activePlant === ALL_PLANTS_ID
-                ? resolveNextLoadingPlant(coLoadingModalData) || 'D4'
-                : activePlant
+              resolveNextLoadingPlant(coLoadingModalData) ||
+              (activePlant !== ALL_PLANTS_ID ? activePlant : 'D4')
             }
             onClose={() => setCoLoadingModalData(null)}
             onSuccess={async () => {

@@ -64,12 +64,6 @@ export async function GET(request) {
       throw modelsErr;
     }
 
-    // Filter models visible in stock for this plant
-    // D4 and ALL see ALL models; E41 G2 only sees E41 G2 models; C116 only sees C116 models
-    const visibleModels = (rawModels || []).filter((m) =>
-      isModelVisibleInPlantStock(m, targetPlant)
-    );
-
     // 2. Fetch stock transactions with plant info
     let txQuery = supabase
       .from('stock_transactions')
@@ -105,6 +99,13 @@ export async function GET(request) {
       if (!stockMapByPlant[p]) stockMapByPlant[p] = {};
       stockMapByPlant[p][mid] = (stockMapByPlant[p][mid] || 0) + qty;
       stockMapByPlant.total[mid] = (stockMapByPlant.total[mid] || 0) + qty;
+    });
+
+    // Filter models visible in stock for this plant
+    // Shows models manufactured at targetPlant or models with physical stock (>0)
+    const visibleModels = (rawModels || []).filter((m) => {
+      const plantQty = stockMapByPlant[targetPlant]?.[m.id] || 0;
+      return isModelVisibleInPlantStock(m, targetPlant, plantQty);
     });
 
     // Format currentStock array based on targetPlant
