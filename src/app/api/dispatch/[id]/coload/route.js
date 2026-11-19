@@ -31,9 +31,17 @@ export async function POST(request, { params }) {
       next_plant = null,
     } = body;
 
-    if (!Array.isArray(items) || items.length === 0) {
+    const safeItems = Array.isArray(items)
+      ? items.filter((it) => it && it.model_id && Number(it.quantity) > 0)
+      : [];
+
+    const isFinal = Boolean(is_final_stop) || !next_plant;
+    const nextStopPlant = isFinal ? null : normalizePlant(next_plant);
+
+    // If 0 items are loaded, user must either select a next plant to forward to or mark as final stop
+    if (safeItems.length === 0 && !isFinal && !nextStopPlant) {
       return NextResponse.json(
-        { error: 'Please specify at least one cooler model and quantity to load from this plant.' },
+        { error: 'Please specify items to load, or select the next plant to move this vehicle to.' },
         { status: 400 }
       );
     }
@@ -99,8 +107,8 @@ export async function POST(request, { params }) {
       );
     }
 
-    // 2. Validate quantities and check stock at loadingPlant for each requested item
-    for (const item of items) {
+    // 2. Validate quantities and check stock at loadingPlant for each requested item (if any)
+    for (const item of safeItems) {
       const qty = Number(item.quantity);
       if (!qty || qty <= 0) {
         return NextResponse.json(
@@ -133,8 +141,8 @@ export async function POST(request, { params }) {
 
     const nowIso = new Date().toISOString();
 
-    // 3. Insert line items into dispatch_items with loaded_plant
-    for (const item of items) {
+    // 3. Insert line items into dispatch_items with loaded_plant (only if items were loaded)
+    for (const item of safeItems) {
       const itemPayload = {
         dispatch_id: id,
         model_id: item.model_id,
@@ -157,36 +165,36 @@ export async function POST(request, { params }) {
       }
     }
 
-    // 4. Deduct stock from stock_transactions for loadingPlant
-    const stockDeductions = items.map((item) => ({
-      model_id: item.model_id,
-      quantity: -Math.abs(Number(item.quantity)),
-      transaction_type: 'dispatch',
-      reference_id: id,
-      employee_id: employee.id,
-      plant: loadingPlant,
-      notes: `[Party Dispatch - Co-Load] Loaded at ${loadingPlant} Plant (Vehicle: ${dispatch.vehicle_number})${
-        notes ? ` - ${notes.trim()}` : ''
-      }`,
-    }));
+    // 4. Deduct stock from stock_transactions for loadingPlant (only if items were loaded)
+    if (safeItems.length > 0) {
+      const stockDeductions = safeItems.map((item) => ({
+        model_id: item.model_id,
+        quantity: -Math.abs(Number(item.quantity)),
+        transaction_type: 'dispatch',
+        reference_id: id,
+        employee_id: employee.id,
+        plant: loadingPlant,
+        notes: `[Party Dispatch - Co-Load] Loaded at ${loadingPlant} Plant (Vehicle: ${dispatch.vehicle_number})${
+          notes ? ` - ${notes.trim()}` : ''
+        }`,
+      }));
 
-    const { error: stockErr } = await supabase
-      .from('stock_transactions')
-      .insert(stockDeductions);
+      const { error: stockErr } = await supabase
+        .from('stock_transactions')
+        .insert(stockDeductions);
 
-    if (stockErr) {
-      console.warn('Stock transaction insert failed, retrying fallback:', stockErr.message);
-      await supabase.from('stock_transactions').insert(
-        stockDeductions.map((entry) => ({
-          ...entry,
-          notes: `[Party Dispatch - Co-Load] [Plant: ${loadingPlant}] Loaded (Vehicle: ${dispatch.vehicle_number})`,
-        }))
-      );
+      if (stockErr) {
+        console.warn('Stock transaction insert failed, retrying fallback:', stockErr.message);
+        await supabase.from('stock_transactions').insert(
+          stockDeductions.map((entry) => ({
+            ...entry,
+            notes: `[Party Dispatch - Co-Load] [Plant: ${loadingPlant}] Loaded (Vehicle: ${dispatch.vehicle_number})`,
+          }))
+        );
+      }
     }
 
     // 5. Determine whether vehicle is fully loaded or heading to 3rd plant
-    const isFinal = Boolean(is_final_stop) || !next_plant;
-    const nextStopPlant = isFinal ? null : normalizePlant(next_plant);
     const newStatus = isFinal ? 'fully_loaded' : 'part_loaded';
 
     // Track Stop 2 vs Stop 3 plant
@@ -202,9 +210,17 @@ export async function POST(request, { params }) {
       status: newStatus,
       secondPlant: secondPlantValue,
       thirdPlant: thirdPlantValue,
-      loadedPlantTag: loadingPlant,
-      loadedItemIds: items.map((it) => it.model_id),
+      loadedPlantTag: safeItems.length > 0 ? loadingPlant : null,
+      loadedItemIds: safeItems.map((it) => it.model_id),
     });
+
+    const effectiveNotes = notes
+      ? notes.trim()
+      : safeItems.length === 0
+      ? isFinal
+        ? `No coolers loaded at ${loadingPlant} Plant. Vehicle dispatched directly to destination.`
+        : `Items not in stock at ${loadingPlant} Plant. Vehicle moved to ${nextStopPlant} Plant for loading.`
+      : null;
 
     const updatePayload = {
       is_coloading: true,
@@ -218,12 +234,12 @@ export async function POST(request, { params }) {
       updatePayload.second_plant = loadingPlant;
       updatePayload.second_plant_employee_id = employee.id;
       updatePayload.second_plant_confirmed_at = nowIso;
-      updatePayload.second_plant_notes = notes ? notes.trim() : null;
+      updatePayload.second_plant_notes = effectiveNotes;
     } else if (isThirdPlant) {
       updatePayload.third_plant = loadingPlant;
       updatePayload.third_plant_employee_id = employee.id;
       updatePayload.third_plant_confirmed_at = nowIso;
-      updatePayload.third_plant_notes = notes ? notes.trim() : null;
+      updatePayload.third_plant_notes = effectiveNotes;
     }
 
     let { error: updateErr } = await supabase
@@ -243,6 +259,7 @@ export async function POST(request, { params }) {
       if (!hasSecondPlant) {
         fallbackPayload.second_plant = loadingPlant;
         fallbackPayload.second_plant_confirmed_at = nowIso;
+        fallbackPayload.second_plant_notes = effectiveNotes;
       }
       await supabase
         .from('dispatches')
@@ -250,13 +267,20 @@ export async function POST(request, { params }) {
         .eq('id', id);
     }
 
-    const addedQty = items.reduce((acc, it) => acc + Number(it.quantity), 0);
+    const addedQty = safeItems.reduce((acc, it) => acc + Number(it.quantity), 0);
     const previousQty = (dispatch.dispatch_items || []).reduce((acc, it) => acc + Number(it.quantity), 0);
     const totalVehicleQty = previousQty + addedQty;
 
-    const responseMessage = isFinal
-      ? `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} is now FULLY LOADED (${totalVehicleQty} total units dispatched to party).`
-      : `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} has been dispatched to ${nextStopPlant} Plant for final loading (${totalVehicleQty} units loaded so far).`;
+    let responseMessage = '';
+    if (addedQty === 0) {
+      responseMessage = isFinal
+        ? `Vehicle ${dispatch.vehicle_number} finalized from ${loadingPlant} Plant with 0 additional items (${totalVehicleQty} total units on board).`
+        : `Vehicle ${dispatch.vehicle_number} has been moved from ${loadingPlant} Plant to ${nextStopPlant} Plant for loading (${totalVehicleQty} units on board).`;
+    } else {
+      responseMessage = isFinal
+        ? `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} is now FULLY LOADED (${totalVehicleQty} total units dispatched to party).`
+        : `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} has been dispatched to ${nextStopPlant} Plant for final loading (${totalVehicleQty} units loaded so far).`;
+    }
 
     return NextResponse.json({
       success: true,

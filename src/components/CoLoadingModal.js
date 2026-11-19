@@ -20,6 +20,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   const [loadingModels, setLoadingModels] = useState(true);
   const [availableModels, setAvailableModels] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [skipLoading, setSkipLoading] = useState(false);
 
   // New items to load from current plant
   const [newItems, setNewItems] = useState([
@@ -71,8 +72,9 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   }, [dispatch, currentPlant]);
 
   const newTotalQty = useMemo(() => {
+    if (skipLoading) return 0;
     return newItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
-  }, [newItems]);
+  }, [newItems, skipLoading]);
 
   const grandTotalQty = existingTotalQty + newTotalQty;
 
@@ -84,6 +86,8 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
       const p = resolveItemLoadedPlant(it, dispatch);
       if (p) plants.add(p);
     });
+    if (dispatch?.second_plant) plants.add(normalizePlant(dispatch.second_plant));
+    if (dispatch?.third_plant) plants.add(normalizePlant(dispatch.third_plant));
     plants.add(currentPlant);
     return Array.from(plants);
   }, [dispatch, currentPlant]);
@@ -105,6 +109,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
   // Line item helpers
   const handleAddRow = () => {
+    setSkipLoading(false);
     setNewItems((prev) => [
       ...prev,
       { id: `coload-${Date.now()}-${prev.length + 1}`, model_id: '', quantity: 1 },
@@ -114,7 +119,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
   const handleRemoveRow = (rowId) => {
     setNewItems((prev) => {
       const filtered = prev.filter((it) => it.id !== rowId);
-      return filtered.length > 0 ? filtered : [{ id: `coload-${Date.now()}`, model_id: '', quantity: 1 }];
+      return filtered;
     });
   };
 
@@ -129,6 +134,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
   // Stock deficit verification
   const stockDeficits = useMemo(() => {
+    if (skipLoading) return [];
     const deficits = [];
     newItems.forEach((item) => {
       if (!item.model_id) return;
@@ -146,19 +152,26 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
       }
     });
     return deficits;
-  }, [newItems, availableModels]);
+  }, [newItems, availableModels, skipLoading]);
 
   // Submit co-loading
   const handleSubmitCoLoad = async (e) => {
     e.preventDefault();
 
-    const validItems = newItems.filter((it) => it.model_id && Number(it.quantity) > 0);
-    if (validItems.length === 0) {
-      showToast(`Please add at least one cooler model to load from ${currentPlant} Plant.`, 'warning');
+    const validItems = skipLoading
+      ? []
+      : newItems.filter((it) => it.model_id && Number(it.quantity) > 0);
+
+    const isFinal = unvisitedPlants.length === 0 ? true : isFinalStop;
+    const designatedNextPlant = (!isFinal && nextPlant) ? nextPlant : null;
+
+    // If no coolers selected and not marked pass-through, ensure user either forwards or marks final stop
+    if (validItems.length === 0 && !isFinal && !designatedNextPlant) {
+      showToast(`Please select the next plant to forward this vehicle to.`, 'warning');
       return;
     }
 
-    if (stockDeficits.length > 0) {
+    if (validItems.length > 0 && stockDeficits.length > 0) {
       showToast(
         `Insufficient stock for ${stockDeficits.map((d) => d.model_code).join(', ')}. Please adjust quantities.`,
         'error'
@@ -166,8 +179,13 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
       return;
     }
 
-    const isFinal = unvisitedPlants.length === 0 ? true : isFinalStop;
-    const designatedNextPlant = (!isFinal && nextPlant) ? nextPlant : null;
+    const effectiveNotes = notes.trim()
+      ? notes.trim()
+      : validItems.length === 0
+      ? isFinal
+        ? `No coolers loaded at ${currentPlant} Plant. Dispatched directly to destination.`
+        : `Items not in stock at ${currentPlant} Plant. Vehicle moved to ${designatedNextPlant} Plant for loading.`
+      : '';
 
     try {
       setSubmitting(true);
@@ -184,7 +202,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
               quantity: parseInt(it.quantity, 10),
             };
           }),
-          notes,
+          notes: effectiveNotes,
           is_final_stop: isFinal,
           next_plant: designatedNextPlant,
         }),
@@ -195,7 +213,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
         throw new Error(data.error || 'Failed to complete co-loading');
       }
 
-      showToast(data.message || 'Vehicle loading confirmed successfully!', 'success');
+      showToast(data.message || 'Vehicle movement confirmed successfully!', 'success');
       if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
@@ -299,6 +317,38 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
         {/* Current Plant Loading Form */}
         <form onSubmit={handleSubmitCoLoad} className="space-y-4">
+          {/* Quick Option: Skip loading if items out of stock / pass-through */}
+          <div className="p-3 bg-amber-50/80 border border-amber-300 rounded-xl space-y-1.5 transition-all">
+            <label className="flex items-center space-x-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={skipLoading}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setSkipLoading(checked);
+                  if (checked && unvisitedPlants.length > 0) {
+                    setIsFinalStop(false);
+                    if (!nextPlant && unvisitedPlants[0]) {
+                      setNextPlant(unvisitedPlants[0].id);
+                    }
+                  }
+                }}
+                className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+              />
+              <span className="text-xs font-bold text-amber-950 flex items-center space-x-1.5">
+                <span>⚡ Items not in stock at {currentPlant}?</span>
+                <span className="text-[10px] font-semibold bg-amber-200/80 text-amber-900 px-2 py-0.5 rounded-full">
+                  Pass-through / Forward vehicle without loading
+                </span>
+              </span>
+            </label>
+            {skipLoading && (
+              <p className="text-[11px] text-amber-800 pl-6.5 font-medium leading-relaxed">
+                Coolers are out of stock at {currentPlant}. 0 coolers will be loaded from {currentPlant}, and this vehicle will be forwarded to {unvisitedPlants.length > 0 ? (nextPlant ? <strong>{nextPlant} Plant</strong> : 'the next plant') : 'final destination'} for loading.
+              </p>
+            )}
+          </div>
+
           <div className="flex items-center justify-between pt-1">
             <div>
               <h4 className="text-xs font-black text-gray-900 uppercase tracking-wider flex items-center space-x-1.5">
@@ -308,27 +358,71 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                 Only {currentPlant} models and stock are listed below. Stock will be debited from {currentPlant} inventory.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleAddRow}
-              disabled={loadingModels}
-              className="text-xs font-bold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-md border border-primary-200 inline-flex items-center space-x-1 transition-colors"
-            >
-              <span>+ Add Model</span>
-            </button>
+            {!skipLoading && (
+              <button
+                type="button"
+                onClick={handleAddRow}
+                disabled={loadingModels}
+                className="text-xs font-bold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-md border border-primary-200 inline-flex items-center space-x-1 transition-colors"
+              >
+                <span>+ Add Model</span>
+              </button>
+            )}
           </div>
 
-          {loadingModels ? (
+          {skipLoading ? (
+            <div className="p-4 bg-gray-50 border border-dashed border-gray-300 rounded-xl text-center space-y-1.5">
+              <span className="text-2xl">🚚</span>
+              <p className="text-xs font-bold text-gray-800">
+                0 coolers will be loaded from {currentPlant} Plant.
+              </p>
+              <p className="text-[11px] text-gray-500">
+                Vehicle is carrying {existingTotalQty} units from prior stops.
+              </p>
+              <button
+                type="button"
+                onClick={() => setSkipLoading(false)}
+                className="text-xs text-primary-700 hover:underline font-semibold mt-1"
+              >
+                ← Want to load coolers? Click here to add items
+              </button>
+            </div>
+          ) : loadingModels ? (
             <div className="py-8 text-center bg-gray-50 rounded-xl border border-gray-200">
               <LoadingSpinner message={`Loading ${currentPlant} models & inventory...`} size="sm" />
             </div>
           ) : availableModels.length === 0 ? (
-            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 text-center font-medium">
-              ⚠️ No cooler models or stock available for {currentPlant} plant.
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 text-center font-medium space-y-2">
+              <p>⚠️ No cooler models or stock available for {currentPlant} plant.</p>
+              {unvisitedPlants.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSkipLoading(true);
+                    setIsFinalStop(false);
+                    if (!nextPlant && unvisitedPlants[0]) setNextPlant(unvisitedPlants[0].id);
+                  }}
+                  className="btn-primary text-xs py-1.5 px-3 bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                >
+                  Forward vehicle to {unvisitedPlants[0]?.name || 'Next Plant'} without loading
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
-              {newItems.map((item, index) => {
+              {newItems.length === 0 ? (
+                <div className="p-3 bg-gray-50 border border-dashed border-gray-300 rounded-xl text-center space-y-1">
+                  <p className="text-xs text-gray-500">No models added for {currentPlant}.</p>
+                  <button
+                    type="button"
+                    onClick={handleAddRow}
+                    className="text-xs font-bold text-primary-700 hover:underline"
+                  >
+                    + Add Cooler Model to Load
+                  </button>
+                </div>
+              ) : (
+                newItems.map((item, index) => {
                 const selectedModel = availableModels.find((m) => m.id === item.model_id);
                 const currentStock = selectedModel?.current_stock ?? 0;
                 const isOverStock = selectedModel && Number(item.quantity) > currentStock;
@@ -406,7 +500,8 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
                     )}
                   </div>
                 );
-              })}
+              })
+            )}
             </div>
           )}
 
@@ -552,7 +647,11 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
             </button>
             <button
               type="submit"
-              disabled={submitting || newTotalQty <= 0 || stockDeficits.length > 0}
+              disabled={
+                submitting ||
+                (!skipLoading && newTotalQty <= 0 && isFinalStop && unvisitedPlants.length > 0) ||
+                (newTotalQty > 0 && stockDeficits.length > 0)
+              }
               className={`btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md font-bold ${
                 !isFinalStop && unvisitedPlants.length > 0
                   ? 'bg-amber-600 hover:bg-amber-700 text-white'
@@ -561,7 +660,11 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
             >
               <span>
                 {submitting
-                  ? 'Confirming Loading...'
+                  ? 'Processing Vehicle...'
+                  : skipLoading || newTotalQty <= 0
+                  ? !isFinalStop && unvisitedPlants.length > 0
+                    ? `🚚 Move Vehicle to ${nextPlant || 'Next Plant'} (0 Coolers Loaded)`
+                    : `✅ Finalize Dispatch (0 Coolers Loaded from ${currentPlant})`
                   : !isFinalStop && unvisitedPlants.length > 0
                   ? `🚚 Complete & Send to ${nextPlant || '3rd Plant'}`
                   : '✅ Complete Loading & Finalize Dispatch'}
