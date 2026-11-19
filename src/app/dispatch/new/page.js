@@ -249,7 +249,7 @@ function NewDispatchContent() {
       if (error) throw error;
       if (!dispatch) throw new Error('Dispatch record not found');
 
-      const isAdmin = employee?.role === 'admin';
+      const isAdmin = employee?.role === 'admin' || employee?.role === 'owner';
       if (dispatch.status !== 'draft' && !isAdmin) {
         showToast('Only draft dispatches can be edited.', 'warning');
         router.push('/dispatch');

@@ -82,7 +82,7 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
-    const isAdmin = auth.employee.role === 'admin';
+    const isAdmin = auth.employee.role === 'admin' || auth.employee.role === 'owner';
 
     if (existing.status !== 'draft' && !isAdmin) {
       return NextResponse.json(
@@ -254,7 +254,7 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
-    const isAdmin = auth.employee.role === 'admin';
+    const isAdmin = auth.employee.role === 'admin' || auth.employee.role === 'owner';
 
     if (existing.status !== 'draft' && !isAdmin) {
       return NextResponse.json(

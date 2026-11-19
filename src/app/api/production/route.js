@@ -566,7 +566,7 @@ export async function PATCH(request) {
       return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
     }
 
-    const isAdmin = employee.role === 'admin';
+    const isAdmin = employee.role === 'admin' || employee.role === 'owner';
     const isProduction = employee.role === 'production';
 
     if (!isAdmin && !isProduction) {
@@ -887,7 +887,7 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
     }
 
-    const isAdmin = employee.role === 'admin';
+    const isAdmin = employee.role === 'admin' || employee.role === 'owner';
     const isProduction = employee.role === 'production';
 
     if (!isAdmin && !isProduction) {

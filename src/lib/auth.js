@@ -54,7 +54,9 @@ export async function authenticateRequest({ allowedRoles = null, requireActive =
     };
   }
 
-  if (allowedRoles && !allowedRoles.includes(employee.role)) {
+  // Owner has universal permission across all endpoints
+  const isOwner = employee.role === 'owner' || employee.is_owner === true;
+  if (allowedRoles && !isOwner && !allowedRoles.includes(employee.role)) {
     return {
       error: NextResponse.json(
         { success: false, error: `Access denied. Required role: ${allowedRoles.join(' or ')}` },
