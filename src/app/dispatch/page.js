@@ -44,8 +44,33 @@ export default function DispatchListPage() {
   const supabase = getSupabase();
   const { activePlant, isOwner, inboundTransfersCount, refreshInboundTransfersCount } = usePlant();
 
-  const [dispatches, setDispatches] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Instant SWR state: render cached dispatches in 0ms while refreshing in background
+  const [dispatches, setDispatches] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_dispatches');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  const [loading, setLoading] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_dispatches');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return false;
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
+
   const [refreshing, setRefreshing] = useState(false);
 
   // Tabs: 'outward' (dispatches from this plant) vs 'inbound' (incoming inter-plant shipments)
@@ -164,6 +189,11 @@ export default function DispatchListPage() {
 
       if (error) throw error;
       setDispatches(data || []);
+      if (typeof window !== 'undefined' && data) {
+        try {
+          sessionStorage.setItem('jospo_cached_dispatches', JSON.stringify(data));
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Error fetching dispatches:', err);
       showToast(err.message || 'Failed to load dispatches', 'error');

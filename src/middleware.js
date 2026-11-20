@@ -1,104 +1,33 @@
-import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 
 export async function middleware(request) {
-  let supabaseResponse = NextResponse.next({ request });
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
   const { pathname } = request.nextUrl;
 
   // 1. FAST PATH: API routes handle their own auth & role validation via authenticateRequest()
   // Bypassing middleware remote getUser() saves 300-600ms network round-trip on EVERY API call!
   if (pathname.startsWith('/api')) {
-    return supabaseResponse;
+    return NextResponse.next({ request });
   }
 
-  // 2. FAST PATH: If visiting /login and user has no Supabase auth cookies, skip remote network call
+  // 2. FAST COOKIE CHECK: Check if Supabase session cookie exists
+  // Reading cookies from incoming request headers is 0ms in edge runtime (local memory).
   const hasAuthCookie = request.cookies.getAll().some((c) => c.name.includes('sb-'));
-  if (pathname.startsWith('/login') && !hasAuthCookie) {
-    return supabaseResponse;
-  }
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return supabaseResponse;
-  }
-
-  const supabase = createServerClient(
-    supabaseUrl,
-    supabaseAnonKey,
-    {
-      cookieOptions: {
-        name: 'sb-jospo-auth-token',
-        maxAge: 60 * 60 * 24 * 365, // 1 year persistent session
-        path: '/',
-        sameSite: 'lax',
-      },
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, {
-              ...options,
-              maxAge: 60 * 60 * 24 * 365,
-              path: '/',
-              sameSite: 'lax',
-            })
-          );
-        },
-      },
-    }
-  );
-
-  const { data: { user } } = await supabase.auth.getUser();
-
-  // Helper to preserve auth cookies when redirecting
-  const createRedirectResponse = (targetPath) => {
+  // 3. If user has NO auth cookie and is trying to access a protected page:
+  // Redirect to /login immediately without any remote network call (saves ~500ms)
+  if (!hasAuthCookie && !pathname.startsWith('/login')) {
+    const returnUrl = pathname + request.nextUrl.search;
     const url = request.nextUrl.clone();
-    url.pathname = targetPath;
-    const redirectResponse = NextResponse.redirect(url);
-    supabaseResponse.cookies.getAll().forEach((cookie) => {
-      redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
-    });
-    return redirectResponse;
-  };
-
-  // If not logged in: return 401 for API routes, redirect to /login for pages
-  if (!user) {
-    if (request.nextUrl.pathname.startsWith('/api')) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized: Authentication required.' },
-        { status: 401 }
-      );
+    url.pathname = '/login';
+    if (returnUrl && returnUrl !== '/') {
+      url.searchParams.set('next', returnUrl);
     }
-    if (!request.nextUrl.pathname.startsWith('/login')) {
-      const returnUrl = request.nextUrl.pathname + request.nextUrl.search;
-      const url = request.nextUrl.clone();
-      url.pathname = '/login';
-      if (returnUrl && returnUrl !== '/') {
-        url.searchParams.set('next', returnUrl);
-      }
-      const redirectResponse = NextResponse.redirect(url);
-      supabaseResponse.cookies.getAll().forEach((cookie) => {
-        redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
-      });
-      return redirectResponse;
-    }
+    return NextResponse.redirect(url);
   }
 
-  // If logged in and on login page, redirect to dashboard
-  if (user && request.nextUrl.pathname.startsWith('/login')) {
-    return createRedirectResponse('/');
-  }
-
-  return supabaseResponse;
+  // 4. Return immediately for authenticated users or /login
+  // Client-side AppShell and server-side authenticateRequest() perform full JWT verification
+  return NextResponse.next({ request });
 }
 
 export const config = {

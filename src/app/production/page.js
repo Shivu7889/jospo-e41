@@ -50,8 +50,19 @@ export default function ProductionPage() {
   ]);
   const [submitting, setSubmitting] = useState(false);
 
-  // Thekedar (Assembly Contractor) State (loaded dynamically per plant)
-  const [thekedars, setThekedars] = useState([]);
+  // Thekedar (Assembly Contractor) State (loaded dynamically per plant, with SWR caching)
+  const [thekedars, setThekedars] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_thekedars');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [selectedThekedar, setSelectedThekedar] = useState('');
   const [showManageThekedarsModal, setShowManageThekedarsModal] = useState(false);
   const [newThekedarName, setNewThekedarName] = useState('');
@@ -95,9 +106,31 @@ export default function ProductionPage() {
     return false;
   }, []);
 
-  // Active Models Dropdown Data
-  const [models, setModels] = useState([]);
-  const [loadingModels, setLoadingModels] = useState(true);
+  // Active Models Dropdown Data (with SWR caching)
+  const [models, setModels] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_models');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [loadingModels, setLoadingModels] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_models');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return false;
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
 
   // Today's Production Log State
   const [logEntries, setLogEntries] = useState([]);
@@ -106,12 +139,16 @@ export default function ProductionPage() {
   // Fetch active cooler models for the dropdown (including manufacturing plant)
   const fetchModels = useCallback(async () => {
     try {
-      setLoadingModels(true);
       const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&for_plant=${encodeURIComponent(activePlant)}&view=production` : '';
       const res = await fetch(`/api/models?active_only=true${plantParam}`);
       const data = await res.json();
       if (res.ok && data.success) {
         setModels(data.models || []);
+        if (typeof window !== 'undefined' && data.models) {
+          try {
+            sessionStorage.setItem('jospo_cached_models', JSON.stringify(data.models));
+          } catch (e) {}
+        }
       } else {
         throw new Error(data.error || 'Failed to load models');
       }
@@ -150,6 +187,11 @@ export default function ProductionPage() {
       if (res.ok && data.contractors && Array.isArray(data.contractors)) {
         setThekedars(data.contractors);
         setSelectedThekedar((curr) => (curr && data.contractors.includes(curr) ? curr : (data.contractors[0] || '')));
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem('jospo_cached_thekedars', JSON.stringify(data.contractors));
+          } catch (e) {}
+        }
       }
     } catch (e) {
       console.warn('Could not fetch contractors:', e);

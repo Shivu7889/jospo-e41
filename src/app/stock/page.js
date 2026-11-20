@@ -23,15 +23,48 @@ export default function StockPage() {
   const supabase = getSupabase();
   const { activePlant, isOwner, userPlant } = usePlant();
 
-  // Summary and Stock State
-  const [loadingOverview, setLoadingOverview] = useState(true);
-  const [stats, setStats] = useState({
-    totalStock: 0,
-    todayProduction: 0,
-    todayDispatch: 0,
-    activeModelsCount: 0,
+  // Summary and Stock State (SWR Instant Rendering)
+  const [stats, setStats] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_stats');
+        if (cached) return JSON.parse(cached);
+      } catch (e) {}
+    }
+    return {
+      totalStock: 0,
+      todayProduction: 0,
+      todayDispatch: 0,
+      activeModelsCount: 0,
+    };
   });
-  const [stockList, setStockList] = useState([]);
+
+  const [stockList, setStockList] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_list');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  const [loadingOverview, setLoadingOverview] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_list');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return false;
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
+
   const [stockSearchQuery, setStockSearchQuery] = useState('');
 
   // Stock Ledger State
@@ -49,7 +82,18 @@ export default function StockPage() {
   const [totalLedgerCount, setTotalLedgerCount] = useState(0);
 
   // Active models for dropdown
-  const [availableModels, setAvailableModels] = useState([]);
+  const [availableModels, setAvailableModels] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_list');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
 
   // Plant-wise stock totals for consolidated view
   const plantTotals = useMemo(() => {
@@ -67,13 +111,18 @@ export default function StockPage() {
   // 1. Fetch Overview & Current Stock (scoped to activePlant)
   const fetchStockOverview = useCallback(async () => {
     try {
-      setLoadingOverview(true);
       const res = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`);
       const apiData = await res.json();
       if (apiData.success) {
         setStockList(apiData.currentStock || []);
         setStats(apiData.stats || {});
         setAvailableModels(apiData.currentStock || []);
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem('jospo_cached_stock_list', JSON.stringify(apiData.currentStock || []));
+            sessionStorage.setItem('jospo_cached_stock_stats', JSON.stringify(apiData.stats || {}));
+          } catch (e) {}
+        }
         return;
       }
       throw new Error(apiData.error || 'Failed to fetch stock data');

@@ -22,17 +22,77 @@ import {
 export default function DashboardPage() {
   const { employee, user } = useAuth();
   const { activePlant, isOwner, userPlant, inboundTransfersCount } = usePlant();
-  const [stats, setStats] = useState({
-    total_production_today: 0,
-    total_dispatch_today: 0,
-    total_stock: 0,
-    pending_dispatches: 0,
-    total_models: 0,
+
+  // Instant SWR state initialization from sessionStorage
+  const [stats, setStats] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_dashboard_cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.stats) return parsed.stats;
+        }
+      } catch (e) {}
+    }
+    return {
+      total_production_today: 0,
+      total_dispatch_today: 0,
+      total_stock: 0,
+      pending_dispatches: 0,
+      total_models: 0,
+    };
   });
-  const [plantBreakdown, setPlantBreakdown] = useState(null);
-  const [todayProduction, setTodayProduction] = useState([]);
-  const [recentDispatches, setRecentDispatches] = useState([]);
-  const [loading, setLoading] = useState(true);
+
+  const [plantBreakdown, setPlantBreakdown] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_dashboard_cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.plantBreakdown) return parsed.plantBreakdown;
+        }
+      } catch (e) {}
+    }
+    return null;
+  });
+
+  const [todayProduction, setTodayProduction] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_dashboard_cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.todayProduction)) return parsed.todayProduction;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  const [recentDispatches, setRecentDispatches] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_dashboard_cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.recentDispatches)) return parsed.recentDispatches;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  // If cached data is present, render immediately (0ms) without showing loading spinner
+  const [loading, setLoading] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_dashboard_cache');
+        if (raw) return false;
+      } catch (e) {}
+    }
+    return true;
+  });
+
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
@@ -40,8 +100,6 @@ export default function DashboardPage() {
     try {
       if (isRefresh) {
         setRefreshing(true);
-      } else {
-        setLoading(true);
       }
       setError(null);
 
@@ -151,13 +209,26 @@ export default function DashboardPage() {
       }
 
       // 4. Process Recent Dispatches
+      let processedRecent = [];
       if (dispResult.status === 'fulfilled' && dispResult.value?.data) {
-        setRecentDispatches(
-          dispResult.value.data.map((d) => ({
-            ...d,
-            total_quantity: (d.dispatch_items || []).reduce((sum, item) => sum + (item.quantity || 0), 0),
-          }))
-        );
+        processedRecent = dispResult.value.data.map((d) => ({
+          ...d,
+          total_quantity: (d.dispatch_items || []).reduce((sum, item) => sum + (item.quantity || 0), 0),
+        }));
+        setRecentDispatches(processedRecent);
+      }
+
+      // 5. Cache snapshot to sessionStorage for instant 0ms subsequent renders
+      if (typeof window !== 'undefined') {
+        try {
+          const prodList = prodResult.status === 'fulfilled' && prodResult.value?.entries ? Object.values(grouped || {}) : [];
+          sessionStorage.setItem('jospo_dashboard_cache', JSON.stringify({
+            stats: fetchedStats,
+            plantBreakdown: plantBreakdown || null,
+            todayProduction: prodList,
+            recentDispatches: processedRecent,
+          }));
+        } catch (e) {}
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
