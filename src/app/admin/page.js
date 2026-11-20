@@ -326,7 +326,56 @@ export default function AdminPage() {
 
       const json = await res.json();
       if (!res.ok) {
-        throw new Error(json.error || 'Failed to create employee');
+        // Fallback: If SUPABASE_SERVICE_ROLE_KEY is missing on server, create auth user directly via client-side Supabase
+        if (json.error?.includes('SUPABASE_SERVICE_ROLE_KEY') && creationMode === 'auto' && newUserPassword) {
+          const { createClient } = await import('@supabase/supabase-js');
+          const tempClient = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            { auth: { persistSession: false, autoRefreshToken: false } }
+          );
+
+          const { data: signUpData, error: signUpErr } = await tempClient.auth.signUp({
+            email: newUserEmail.trim().toLowerCase(),
+            password: newUserPassword,
+            options: {
+              data: {
+                name: newUserName.trim(),
+                role: newUserRole,
+                plant: newUserPlant,
+              },
+            },
+          });
+
+          if (signUpErr) {
+            throw new Error(`Failed to create login credentials: ${signUpErr.message}`);
+          }
+
+          if (!signUpData.user?.id) {
+            throw new Error('Supabase Auth user created, but no user ID was returned.');
+          }
+
+          // Retry creating employee profile with newly created auth UUID
+          const retryRes = await fetch('/api/admin/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: signUpData.user.id,
+              name: newUserName.trim(),
+              email: newUserEmail.trim().toLowerCase(),
+              role: newUserRole,
+              plant: newUserPlant,
+              is_active: true,
+            }),
+          });
+
+          const retryJson = await retryRes.json();
+          if (!retryRes.ok) {
+            throw new Error(retryJson.error || 'Failed to save employee profile');
+          }
+        } else {
+          throw new Error(json.error || 'Failed to create employee');
+        }
       }
 
       showToast(`Employee ${newUserName} added successfully!`, 'success');

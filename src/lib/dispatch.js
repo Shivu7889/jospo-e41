@@ -10,7 +10,14 @@ export function resolveDispatchType(dispatch) {
   if (dispatch?.dispatch_type) {
     const dt = String(dispatch.dispatch_type).toLowerCase().trim();
     if (dt === 'local') return 'local';
-    return 'party';
+  }
+  // Check if destination is another internal manufacturing plant
+  const dest = dispatch?.destination_plant || dispatch?.destination;
+  if (dest) {
+    const norm = normalizePlant(dest);
+    if (['E41 G2', 'D4', 'C116'].includes(norm)) {
+      return 'local';
+    }
   }
   if (dispatch?.remarks?.includes('[Type: Local]')) {
     return 'local';
@@ -165,6 +172,9 @@ export function isDispatchRelevantToPlant(dispatch, plant) {
   if (resolveSecondPlant(dispatch) === p) return true;
   if (dispatch.third_plant && normalizePlant(dispatch.third_plant) === p) return true;
   if (dispatch.dispatch_items?.some((it) => resolveItemLoadedPlant(it, dispatch) === p)) return true;
+  // Destination plant relevance (inbound inter-plant transfers arriving at this plant)
+  const dest = dispatch.destination_plant || dispatch.destination;
+  if (dest && normalizePlant(dest) === p) return true;
   return false;
 }
 

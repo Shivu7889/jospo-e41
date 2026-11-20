@@ -44,11 +44,12 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: 'Dispatch not found' }, { status: 404 });
     }
 
-    // 2. Validate dispatch is a confirmed local transfer
+    // 2. Validate dispatch is a confirmed transfer
+    const destPlant = resolveDestinationPlant(dispatch);
     const dType = resolveDispatchType(dispatch);
-    if (dType !== 'local') {
+    if (dType !== 'local' && !destPlant) {
       return NextResponse.json(
-        { error: 'Only local inter-plant transfers can be accepted into plant stock' },
+        { error: 'Only inter-plant stock transfers can be accepted into plant stock' },
         { status: 400 }
       );
     }
@@ -69,15 +70,15 @@ export async function POST(request, { params }) {
     }
 
     // 3. Determine destination plant and check employee permission
-    const destPlant = resolveDestinationPlant(dispatch) || normalizePlant(employee.plant);
+    const resolvedDestPlant = destPlant || normalizePlant(employee.plant);
     const isOwner = isOwnerUser(employee);
 
     if (!isOwner) {
       const empPlant = normalizePlant(employee.plant);
-      if (empPlant !== destPlant) {
+      if (empPlant !== resolvedDestPlant) {
         return NextResponse.json(
           {
-            error: `Unauthorized: This transfer is destined for ${destPlant} Plant. Your assigned plant is ${empPlant} Plant.`,
+            error: `Unauthorized: This transfer is destined for ${resolvedDestPlant} Plant. Your assigned plant is ${empPlant} Plant.`,
           },
           { status: 403 }
         );
@@ -98,7 +99,7 @@ export async function POST(request, { params }) {
     // 4. Update dispatch transfer status to 'received'
     const updatedRemarks = formatPlantRemarks(dispatch.remarks, {
       plant: originPlant,
-      destinationPlant: destPlant,
+      destinationPlant: resolvedDestPlant,
       transferStatus: 'received',
     });
 
@@ -138,9 +139,9 @@ export async function POST(request, { params }) {
       quantity: Math.abs(Number(item.quantity) || 0),
       reference_id: dispatch.id,
       employee_id: employee.id,
-      plant: destPlant,
+      plant: resolvedDestPlant,
       transaction_type: 'transfer_in',
-      notes: `[Transfer-In] Received at ${destPlant} from ${originPlant} (Vehicle: ${dispatch.vehicle_number})${
+      notes: `[Transfer-In] Received at ${resolvedDestPlant} from ${originPlant} (Vehicle: ${dispatch.vehicle_number})${
         notes ? ` - ${notes.trim()}` : ''
       }`,
     }));
@@ -156,7 +157,7 @@ export async function POST(request, { params }) {
         reference_id: dispatch.id,
         employee_id: employee.id,
         transaction_type: 'adjustment',
-        notes: `[Transfer-In] [Plant: ${destPlant}] Received from ${originPlant} (Vehicle: ${dispatch.vehicle_number})${
+        notes: `[Transfer-In] [Plant: ${resolvedDestPlant}] Received from ${originPlant} (Vehicle: ${dispatch.vehicle_number})${
           notes ? ` - ${notes.trim()}` : ''
         }`,
       }));
@@ -172,8 +173,8 @@ export async function POST(request, { params }) {
     return NextResponse.json(
       {
         success: true,
-        message: `Transfer verified! Successfully received ${totalQty} coolers into ${destPlant} Plant stock.`,
-        destination_plant: destPlant,
+        message: `Transfer verified! Successfully received ${totalQty} coolers into ${resolvedDestPlant} Plant stock.`,
+        destination_plant: resolvedDestPlant,
         total_quantity: totalQty,
         received_at: nowIso,
       },

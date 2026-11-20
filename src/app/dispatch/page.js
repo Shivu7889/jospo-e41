@@ -260,10 +260,10 @@ export default function DispatchListPage() {
   // Inbound transfers list (confirmed local transfers received or in-transit to this plant)
   const filteredInboundTransfers = useMemo(() => {
     return dispatches.filter((d) => {
-      const isLocal = resolveDispatchType(d) === 'local';
+      const destPlant = resolveDestinationPlant(d);
+      const isLocal = resolveDispatchType(d) === 'local' || Boolean(destPlant);
       if (!isLocal || d.status !== 'confirmed') return false;
 
-      const destPlant = resolveDestinationPlant(d);
       if (activePlant !== ALL_PLANTS_ID) {
         if (destPlant !== activePlant) return false;
       }
@@ -286,6 +286,11 @@ export default function DispatchListPage() {
       return true;
     });
   }, [dispatches, activePlant, dateFrom, dateTo, searchTerm]);
+
+  // Pending inbound transfers arriving at this plant (in-transit, awaiting acceptance)
+  const pendingInboundTransfers = useMemo(() => {
+    return filteredInboundTransfers.filter((d) => resolveTransferStatus(d) === 'in_transit');
+  }, [filteredInboundTransfers]);
 
   // Aggregate stats (scoped to activePlant)
   const stats = useMemo(() => {
@@ -820,6 +825,91 @@ export default function DispatchListPage() {
           </div>
         )}
 
+        {/* Incoming Inbound Stock Transfers Alert Banner */}
+        {pendingInboundTransfers.length > 0 && (
+          <div className="bg-gradient-to-r from-emerald-500/10 via-teal-50 to-emerald-500/10 border-2 border-emerald-400 rounded-2xl p-4 sm:p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+              <div className="flex items-center space-x-2.5">
+                <span className="text-2xl">📥</span>
+                <div>
+                  <h3 className="text-base font-extrabold text-emerald-950 flex items-center space-x-2">
+                    <span>Incoming Stock Transfers Arriving at {activePlant !== ALL_PLANTS_ID ? activePlant : 'Plants'}</span>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-black bg-emerald-600 text-white shadow-xs animate-pulse">
+                      {pendingInboundTransfers.length} {pendingInboundTransfers.length === 1 ? 'Shipment' : 'Shipments'} Pending
+                    </span>
+                  </h3>
+                  <p className="text-xs text-emerald-800">
+                    Inter-plant transfers in-transit. Inspect physical coolers and click &quot;Verify &amp; Accept Stock&quot; to credit coolers to inventory.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pendingInboundTransfers.map((t) => {
+                const origin = normalizePlant(t.from_location);
+                const dest = resolveDestinationPlant(t) || activePlant;
+                const totalQty = calculateTotalQty(t.dispatch_items);
+
+                return (
+                  <div
+                    key={t.id}
+                    className="bg-white/95 backdrop-blur-xs border border-emerald-200 rounded-xl p-3.5 shadow-xs flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-black text-sm bg-gray-100 px-2 py-0.5 rounded text-gray-900 border border-gray-200">
+                          {t.vehicle_number}
+                        </span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                          🚚 In Transit
+                        </span>
+                      </div>
+                      <div className="text-xs space-y-1 text-gray-600 mb-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Route:</span>
+                          <span className="font-semibold text-gray-800">
+                            🏭 {origin} &rarr; 🏭 {dest}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Dispatch Date:</span>
+                          <span className="font-medium text-gray-700">{t.dispatch_date}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">Transfer Qty:</span>
+                          <span className="font-extrabold text-emerald-700">{totalQty} coolers</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-emerald-100 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewDetailsModal(t)}
+                        className="text-xs text-gray-600 hover:text-gray-900 underline font-medium"
+                      >
+                        View Items
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAcceptTransferModal(t);
+                          setAcceptNotes('');
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-lg shadow-sm transition-all inline-flex items-center space-x-1"
+                      >
+                        <span>📥</span>
+                        <span>Verify &amp; Accept Stock</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Main Tabs: Outward Dispatches vs Inbound Inter-Plant Transfers */}
         <div className="flex border-b border-gray-200 gap-3">
           <button
@@ -1155,6 +1245,29 @@ export default function DispatchListPage() {
                                     >
                                       <span>✏️ Edit {activePlant !== ALL_PLANTS_ID ? activePlant : 'Stop'} Load</span>
                                     </button>
+                                  )
+                                )}
+
+                              {/* Inbound Transfer Action: If this shipment arrives at this plant */}
+                              {dispatch.status === 'confirmed' &&
+                                resolveDestinationPlant(dispatch) &&
+                                (activePlant === ALL_PLANTS_ID || resolveDestinationPlant(dispatch) === activePlant) && (
+                                  resolveTransferStatus(dispatch) === 'in_transit' ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAcceptTransferModal(dispatch);
+                                        setAcceptNotes('');
+                                      }}
+                                      className="px-2.5 py-1 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-md shadow-xs transition-all inline-flex items-center space-x-1"
+                                      title={`Verify and accept stock into ${resolveDestinationPlant(dispatch)} inventory`}
+                                    >
+                                      <span>📥 Accept Stock</span>
+                                    </button>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      ✓ Received
+                                    </span>
                                   )
                                 )}
 
@@ -2397,6 +2510,25 @@ export default function DispatchListPage() {
                     🗑️ Delete Dispatch
                   </button>
                 )}
+                {/* Accept Inbound button in Details Modal */}
+                {viewDetailsModal.status === 'confirmed' &&
+                  resolveDestinationPlant(viewDetailsModal) &&
+                  (activePlant === ALL_PLANTS_ID || resolveDestinationPlant(viewDetailsModal) === activePlant) &&
+                  resolveTransferStatus(viewDetailsModal) === 'in_transit' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = viewDetailsModal;
+                        setViewDetailsModal(null);
+                        setAcceptTransferModal(d);
+                        setAcceptNotes('');
+                      }}
+                      className="px-3.5 py-2 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-lg shadow-sm inline-flex items-center space-x-1.5"
+                    >
+                      <span>📥</span>
+                      <span>Verify &amp; Accept Stock</span>
+                    </button>
+                  )}
                 <button
                   type="button"
                   onClick={() => setViewDetailsModal(null)}
