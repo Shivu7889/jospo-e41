@@ -6,10 +6,12 @@ import StatsCard from '@/components/StatsCard';
 import DataTable from '@/components/DataTable';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
+import { useAuth } from '@/contexts/AuthContext';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import { exportToExcel } from '@/lib/exportExcel';
 import { usePlant } from '@/contexts/PlantContext';
+import PrintStockModal from '@/components/PrintStockModal';
 import {
   PLANTS,
   ALL_PLANTS_ID,
@@ -20,8 +22,14 @@ import {
 
 export default function StockPage() {
   const { showToast } = useToast();
+  const { employee, user } = useAuth();
   const supabase = getSupabase();
   const { activePlant, isOwner, userPlant } = usePlant();
+
+  // Sorting & Filtering States for Current Stock (Sort by availability by default)
+  const [sortBy, setSortBy] = useState('stock_desc'); // 'stock_desc' (Highest stock first) | 'stock_asc' | 'out_of_stock' | 'code_asc' | 'code_desc'
+  const [stockAvailabilityFilter, setStockAvailabilityFilter] = useState('all'); // 'all' | 'in_stock' | 'low_stock' | 'out_of_stock'
+  const [showPrintModal, setShowPrintModal] = useState(false);
 
   // Summary and Stock State (SWR Instant Rendering)
   const [stats, setStats] = useState(() => {
@@ -259,16 +267,90 @@ export default function StockPage() {
     setPage(1);
   };
 
-  // Filter current stock table by search
+  // Availability counts for filter tabs
+  const availabilityCounts = useMemo(() => {
+    let inStock = 0;
+    let lowStock = 0;
+    let outOfStock = 0;
+
+    stockList.forEach((it) => {
+      const s = Number(it.current_stock) || 0;
+      if (s === 0) outOfStock += 1;
+      else if (s < 10) {
+        lowStock += 1;
+        inStock += 1;
+      } else {
+        inStock += 1;
+      }
+    });
+
+    return {
+      all: stockList.length,
+      inStock,
+      lowStock,
+      outOfStock,
+    };
+  }, [stockList]);
+
+  // Filter & Sort current stock list by search, availability status, and stock availability
   const filteredStockList = useMemo(() => {
+    let list = [...stockList];
+
+    // 1. Search filter
     const q = stockSearchQuery.toLowerCase().trim();
-    if (!q) return stockList;
-    return stockList.filter(
-      (item) =>
-        item.model_name?.toLowerCase().includes(q) ||
-        item.model_code?.toLowerCase().includes(q)
-    );
-  }, [stockList, stockSearchQuery]);
+    if (q) {
+      list = list.filter(
+        (item) =>
+          item.model_name?.toLowerCase().includes(q) ||
+          item.model_code?.toLowerCase().includes(q)
+      );
+    }
+
+    // 2. Stock Availability Filter
+    if (stockAvailabilityFilter === 'in_stock') {
+      list = list.filter((item) => (Number(item.current_stock) || 0) > 0);
+    } else if (stockAvailabilityFilter === 'low_stock') {
+      list = list.filter((item) => {
+        const s = Number(item.current_stock) || 0;
+        return s > 0 && s < 10;
+      });
+    } else if (stockAvailabilityFilter === 'out_of_stock') {
+      list = list.filter((item) => (Number(item.current_stock) || 0) === 0);
+    }
+
+    // 3. Sort according to stock availability or model code
+    list.sort((a, b) => {
+      const stockA = Number(a.current_stock) || 0;
+      const stockB = Number(b.current_stock) || 0;
+
+      if (sortBy === 'stock_desc') {
+        // Highest Stock Available First (Default)
+        if (stockB !== stockA) return stockB - stockA;
+        return (a.model_code || '').localeCompare(b.model_code || '');
+      }
+      if (sortBy === 'stock_asc') {
+        // Lowest Stock First
+        if (stockA !== stockB) return stockA - stockB;
+        return (a.model_code || '').localeCompare(b.model_code || '');
+      }
+      if (sortBy === 'out_of_stock') {
+        // Out of Stock (0) First, then ascending
+        if (stockA === 0 && stockB !== 0) return -1;
+        if (stockB === 0 && stockA !== 0) return 1;
+        if (stockA !== stockB) return stockA - stockB;
+        return (a.model_code || '').localeCompare(b.model_code || '');
+      }
+      if (sortBy === 'code_asc') {
+        return (a.model_code || '').localeCompare(b.model_code || '');
+      }
+      if (sortBy === 'code_desc') {
+        return (b.model_code || '').localeCompare(a.model_code || '');
+      }
+      return 0;
+    });
+
+    return list;
+  }, [stockList, stockSearchQuery, stockAvailabilityFilter, sortBy]);
 
   // Export Current Stock to Excel
   const handleExportStockSummary = () => {
@@ -795,16 +877,117 @@ export default function StockPage() {
                   : `Real-time on-hand inventory levels for ${activePlant} facility.`}
               </p>
             </div>
+          </div>
 
-            {/* Search Box & Export */}
-            <div className="flex items-center space-x-2 w-full sm:w-auto">
-              <div className="relative w-full sm:w-64">
+          {/* Controls Bar: Search, Availability Filter Chips, Sort Dropdown & Action Buttons */}
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+              {/* Availability Filter Chips */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setStockAvailabilityFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold border transition-colors flex items-center space-x-1.5 ${
+                    stockAvailabilityFilter === 'all'
+                      ? 'bg-gray-900 text-white border-gray-900 shadow-xs'
+                      : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <span>All Models</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    stockAvailabilityFilter === 'all' ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'
+                  }`}>
+                    {availabilityCounts.all}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStockAvailabilityFilter('in_stock')}
+                  className={`px-3 py-1.5 rounded-lg font-bold border transition-colors flex items-center space-x-1.5 ${
+                    stockAvailabilityFilter === 'in_stock'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  <span>✓ In Stock (&gt;0)</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    stockAvailabilityFilter === 'in_stock' ? 'bg-white/20 text-white' : 'bg-emerald-200 text-emerald-900'
+                  }`}>
+                    {availabilityCounts.inStock}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStockAvailabilityFilter('low_stock')}
+                  className={`px-3 py-1.5 rounded-lg font-bold border transition-colors flex items-center space-x-1.5 ${
+                    stockAvailabilityFilter === 'low_stock'
+                      ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <span>▲ Low Stock (&lt;10)</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    stockAvailabilityFilter === 'low_stock' ? 'bg-white/20 text-white' : 'bg-amber-200 text-amber-900'
+                  }`}>
+                    {availabilityCounts.lowStock}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStockAvailabilityFilter('out_of_stock')}
+                  className={`px-3 py-1.5 rounded-lg font-bold border transition-colors flex items-center space-x-1.5 ${
+                    stockAvailabilityFilter === 'out_of_stock'
+                      ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                      : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                  }`}
+                >
+                  <span>● Zero Stock (0)</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    stockAvailabilityFilter === 'out_of_stock' ? 'bg-white/20 text-white' : 'bg-rose-200 text-rose-900'
+                  }`}>
+                    {availabilityCounts.outOfStock}
+                  </span>
+                </button>
+              </div>
+
+              {/* Action Buttons: Print Stock & Export Excel */}
+              <div className="flex items-center space-x-2 self-start lg:self-center">
+                <button
+                  type="button"
+                  onClick={() => setShowPrintModal(true)}
+                  disabled={loadingOverview || !filteredStockList.length}
+                  className="btn-primary text-xs py-2 px-3.5 inline-flex items-center space-x-1.5 shadow-xs font-bold whitespace-nowrap bg-indigo-600 hover:bg-indigo-700"
+                  title="Print official physical stock inventory report"
+                >
+                  <span>🖨️</span>
+                  <span>Print Stock Sheet</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportStockSummary}
+                  disabled={loadingOverview || !filteredStockList.length}
+                  className="btn-success text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold whitespace-nowrap"
+                  title="Download current stock balances as Excel spreadsheet"
+                >
+                  <span>📥</span>
+                  <span>Export Excel</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Second row: Search & Sort By Availability */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-gray-100">
+              <div className="relative flex-1 max-w-md">
                 <input
                   type="text"
-                  placeholder="Filter by code or name..."
+                  placeholder="Filter by cooler name or code (e.g. ICECOOL, ROLEX)..."
                   value={stockSearchQuery}
                   onChange={(e) => setStockSearchQuery(e.target.value)}
-                  className="input-field text-xs pl-8 pr-3 py-2 bg-white"
+                  className="input-field text-xs pl-8 pr-3 py-1.5 bg-gray-50/60"
                 />
                 <svg
                   className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -820,16 +1003,22 @@ export default function StockPage() {
                   />
                 </svg>
               </div>
-              <button
-                type="button"
-                onClick={handleExportStockSummary}
-                disabled={loadingOverview || !filteredStockList.length}
-                className="btn-success text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold whitespace-nowrap"
-                title="Download current stock balances as Excel spreadsheet"
-              >
-                <span>📥</span>
-                <span>Export Excel</span>
-              </button>
+
+              {/* Sort by availability dropdown */}
+              <div className="flex items-center space-x-2 text-xs">
+                <span className="text-gray-500 font-semibold whitespace-nowrap">Sort by:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="input-field text-xs py-1.5 px-2.5 font-bold text-gray-800 bg-white border-gray-300 rounded-lg cursor-pointer"
+                >
+                  <option value="stock_desc">📈 Stock Availability: Highest First</option>
+                  <option value="stock_asc">📉 Stock Availability: Lowest First</option>
+                  <option value="out_of_stock">⚠️ Out of Stock (0) First</option>
+                  <option value="code_asc">🔤 Model Code (A to Z)</option>
+                  <option value="code_desc">🔤 Model Code (Z to A)</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -1032,6 +1221,18 @@ export default function StockPage() {
           )}
         </div>
       </div>
+
+      {/* Printable Physical Stock Inventory Modal */}
+      {showPrintModal && (
+        <PrintStockModal
+          stockList={filteredStockList}
+          activePlant={activePlant}
+          stats={stats}
+          plantTotals={plantTotals}
+          userName={employee?.name || user?.email?.split('@')[0] || 'Staff'}
+          onClose={() => setShowPrintModal(false)}
+        />
+      )}
     </AppShell>
   );
 }
