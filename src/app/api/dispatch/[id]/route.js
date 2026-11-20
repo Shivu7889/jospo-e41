@@ -184,6 +184,21 @@ export async function PUT(request, { params }) {
     if (third_plant !== undefined) updateFields.third_plant = third_plant ? normalizePlant(third_plant) : null;
 
     const effectiveType = dispatch_type || existing.dispatch_type || resolveDispatchType(existing);
+    const effectiveFromPlant = normalizePlant(updateFields.from_location || existing.from_location || 'E41 G2');
+    const effectiveDest = updateFields.destination || existing.destination || '';
+    const effectiveDestPlant = updateFields.destination_plant !== undefined
+      ? (updateFields.destination_plant ? normalizePlant(updateFields.destination_plant) : null)
+      : (existing.destination_plant ? normalizePlant(existing.destination_plant) : null);
+
+    if (effectiveType === 'local') {
+      const targetPlant = effectiveDestPlant || normalizePlant(effectiveDest);
+      if (effectiveFromPlant === targetPlant) {
+        return NextResponse.json(
+          { error: `Invalid dispatch: Origin plant (${effectiveFromPlant}) and destination plant (${targetPlant}) cannot be the same.` },
+          { status: 400 }
+        );
+      }
+    }
 
     if (
       remarks !== undefined ||

@@ -150,25 +150,35 @@ export function resolvePlantFromRecord(record, defaultPlant = DEFAULT_PLANT_ID) 
 
 /**
  * Resolve destination plant for inter-plant transfers
+ * Constraint: Origin plant and destination plant can NEVER be the same.
  */
 export function resolveDestinationPlant(dispatch) {
+  const originPlant = dispatch?.from_location ? normalizePlant(dispatch.from_location) : null;
+
+  let candidate = null;
   if (dispatch?.destination_plant) {
-    return normalizePlant(dispatch.destination_plant);
-  }
-  if (dispatch?.remarks) {
+    candidate = normalizePlant(dispatch.destination_plant);
+  } else if (dispatch?.remarks) {
     const match = dispatch.remarks.match(/\[DestPlant:\s*([^\]]+)\]/i);
     if (match && match[1]) {
-      return normalizePlant(match[1]);
+      candidate = normalizePlant(match[1]);
     }
   }
+
   // Try matching destination text
-  if (dispatch?.destination) {
+  if (!candidate && dispatch?.destination) {
     const norm = normalizePlant(dispatch.destination);
     if (['E41 G2', 'D4', 'C116'].includes(norm)) {
-      return norm;
+      candidate = norm;
     }
   }
-  return null;
+
+  // Same plant cannot be destination of an inter-plant transfer
+  if (candidate && originPlant && candidate === originPlant) {
+    return null;
+  }
+
+  return candidate || null;
 }
 
 /**

@@ -105,8 +105,10 @@ export function PlantProvider({ children }) {
       let count = 0;
       (data || []).forEach((d) => {
         const destPlant = resolveDestinationPlant(d);
+        const originPlant = normalizePlant(d.from_location);
         const status = resolveTransferStatus(d);
-        if (status === 'in_transit') {
+        // Constraint: Valid inter-plant transfer must not originate and terminate at the same plant
+        if (destPlant && destPlant !== originPlant && status === 'in_transit') {
           if (activePlant === ALL_PLANTS_ID) {
             count += 1;
           } else if (destPlant === activePlant) {

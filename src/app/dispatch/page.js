@@ -292,6 +292,9 @@ export default function DispatchListPage() {
   const filteredInboundTransfers = useMemo(() => {
     return dispatches.filter((d) => {
       const destPlant = resolveDestinationPlant(d);
+      const originPlant = normalizePlant(d.from_location);
+      // Constraint: Inter-plant transfers cannot originate and terminate at the same plant
+      if (!destPlant || destPlant === originPlant) return false;
       const isLocal = resolveDispatchType(d) === 'local' || Boolean(destPlant);
       if (!isLocal || d.status !== 'confirmed') return false;
 
@@ -466,11 +469,17 @@ export default function DispatchListPage() {
   // Open Edit Dispatch Modal (for Admin & Dispatch staff)
   const handleOpenEditDispatch = (dispatch) => {
     setEditDispatchModal(dispatch);
-    setEditDispatchType(resolveDispatchType(dispatch));
+    const dType = resolveDispatchType(dispatch);
+    setEditDispatchType(dType);
     setEditVehicleNumber(dispatch.vehicle_number || '');
-    setEditDestination(dispatch.destination || '');
     const origin = normalizePlant(dispatch.from_location || 'E41 G2');
     setEditFromLocation(origin);
+    let dest = dispatch.destination || '';
+    if (dType === 'local' && normalizePlant(dest) === origin) {
+      const others = getOtherPlants(origin);
+      dest = others[0]?.id || 'D4';
+    }
+    setEditDestination(dest);
     setEditDispatchDate(dispatch.dispatch_date || getTodayIST());
     setEditRemarks(cleanDispatchRemarks(dispatch.remarks || ''));
 
@@ -589,6 +598,11 @@ export default function DispatchListPage() {
     }
     if (!dest) {
       showToast('Destination is required', 'warning');
+      return;
+    }
+
+    if (editDispatchType === 'local' && normalizePlant(dest) === normalizePlant(editFromLocation)) {
+      showToast(`Invalid Destination: Transfer cannot be sent to the same plant (${normalizePlant(editFromLocation)}). Please select a different receiving plant.`, 'error');
       return;
     }
 
@@ -1916,7 +1930,13 @@ export default function DispatchListPage() {
 
                       <button
                         type="button"
-                        onClick={() => setEditDispatchType('local')}
+                        onClick={() => {
+                          setEditDispatchType('local');
+                          const others = getOtherPlants(editFromLocation);
+                          if (normalizePlant(editDestination) === normalizePlant(editFromLocation) || !editDestination) {
+                            setEditDestination(others[0]?.id || 'D4');
+                          }
+                        }}
                         className={`p-2 rounded-xl border text-left text-xs transition-all flex items-center space-x-2 ${
                           editDispatchType === 'local'
                             ? 'border-amber-500 bg-amber-50 text-amber-900 font-bold ring-1 ring-amber-500'
@@ -1947,17 +1967,32 @@ export default function DispatchListPage() {
 
                     <div>
                       <label className="label text-[11px]">
-                        {editDispatchType === 'local' ? 'Destination Plant' : 'Destination Party / City'}{' '}
+                        {editDispatchType === 'local' ? 'Destination Plant (Receiving Unit)' : 'Destination Party / City'}{' '}
                         <span className="text-red-500">*</span>
                       </label>
-                      <input
-                        type="text"
-                        value={editDestination}
-                        onChange={(e) => setEditDestination(e.target.value)}
-                        placeholder={editDispatchType === 'local' ? 'e.g. Jospo Plant 2, Unit 2' : 'e.g. Jaipur Depot, Client Warehouse'}
-                        className="input-field text-xs"
-                        required
-                      />
+                      {editDispatchType === 'local' ? (
+                        <select
+                          value={normalizePlant(editDestination)}
+                          onChange={(e) => setEditDestination(e.target.value)}
+                          className="input-field text-xs font-semibold"
+                          required
+                        >
+                          {getOtherPlants(editFromLocation).map((p) => (
+                            <option key={p.id} value={p.id}>
+                              🏭 {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={editDestination}
+                          onChange={(e) => setEditDestination(e.target.value)}
+                          placeholder="e.g. Jaipur Depot, Client Warehouse"
+                          className="input-field text-xs"
+                          required
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -1966,7 +2001,16 @@ export default function DispatchListPage() {
                       <label className="label text-[11px]">Origin Location / Plant</label>
                       <select
                         value={editFromLocation}
-                        onChange={(e) => setEditFromLocation(e.target.value)}
+                        onChange={(e) => {
+                          const newFrom = e.target.value;
+                          setEditFromLocation(newFrom);
+                          if (editDispatchType === 'local') {
+                            const others = getOtherPlants(newFrom);
+                            if (normalizePlant(editDestination) === normalizePlant(newFrom) || !editDestination) {
+                              setEditDestination(others[0]?.id || 'D4');
+                            }
+                          }
+                        }}
                         className="input-field text-xs font-medium"
                       >
                         {PLANTS.map((p) => (

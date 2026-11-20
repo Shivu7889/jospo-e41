@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
 import { formatDispatchRemarks } from '@/lib/dispatch';
+import { normalizePlant } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
@@ -91,10 +92,17 @@ export async function POST(request) {
     } = body;
 
     const normalizedType = dispatch_type === 'local' ? 'local' : 'party';
-    const normalizedFromPlant = from_location.trim();
+    const normalizedFromPlant = normalizePlant(from_location || 'E41 G2');
     const destPlant = normalizedType === 'local'
-      ? (destination_plant ? destination_plant.trim() : (destination.trim()))
+      ? (destination_plant ? normalizePlant(destination_plant) : normalizePlant(destination))
       : null;
+
+    if (normalizedType === 'local' && normalizedFromPlant === destPlant) {
+      return NextResponse.json(
+        { error: `Invalid dispatch: Origin plant (${normalizedFromPlant}) and destination plant (${destPlant}) cannot be the same.` },
+        { status: 400 }
+      );
+    }
 
     const isCoLoad = normalizedType === 'party' && Boolean(is_coloading);
     const nextPlant = isCoLoad && next_loading_plant ? next_loading_plant.trim() : null;

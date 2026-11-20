@@ -110,6 +110,18 @@ function NewDispatchContent() {
     }
   }, [fromLocation, nextLoadingPlant]);
 
+  // Ensure local dispatch destination is NEVER the same plant as fromLocation
+  useEffect(() => {
+    if (dispatchType === 'local') {
+      const fromNorm = normalizePlant(fromLocation);
+      const destNorm = normalizePlant(destination);
+      if (fromNorm === destNorm || !destination) {
+        const other = getOtherPlants(fromNorm)[0]?.id || '';
+        if (other) setDestination(other);
+      }
+    }
+  }, [fromLocation, dispatchType, destination]);
+
   // Items State - Step 2: Scanned & Manual Items
   // Item structure: { model_id, model_name, model_code, quantity, available_stock, scanned_serials: [] }
   const [items, setItems] = useState([]);
@@ -1064,7 +1076,8 @@ function NewDispatchContent() {
   }, [items]);
 
   // Validation
-  const isStep1Valid = vehicleNumber.trim() && destination.trim() && dispatchDate;
+  const isSamePlant = dispatchType === 'local' && normalizePlant(destination) === normalizePlant(fromLocation);
+  const isStep1Valid = Boolean(vehicleNumber.trim() && destination.trim() && dispatchDate && !isSamePlant);
   const isStep2Valid = items.length > 0 && totalQuantity > 0 && items.every((i) => (Number(i.quantity) || 0) > 0);
 
   // Format remarks to include verified unique box serial numbers, dispatch type tag, and multi-plant metadata
@@ -1096,6 +1109,10 @@ function NewDispatchContent() {
   const handleSaveAsDraft = async () => {
     if (!employee?.id) {
       showToast('Employee profile missing. Please log in again.', 'error');
+      return;
+    }
+    if (dispatchType === 'local' && normalizePlant(destination) === normalizePlant(fromLocation)) {
+      showToast(`Invalid Destination: Transfer cannot be sent to the same plant (${normalizePlant(fromLocation)}). Please select a different receiving plant.`, 'error');
       return;
     }
     if (items.length === 0) {
@@ -1286,6 +1303,11 @@ function NewDispatchContent() {
     }
     if (items.length === 0) {
       showToast('Cannot confirm empty dispatch. Add at least one item.', 'warning');
+      return;
+    }
+
+    if (dispatchType === 'local' && normalizePlant(destination) === normalizePlant(fromLocation)) {
+      showToast(`Invalid Destination: Transfer cannot be sent to the same plant (${normalizePlant(fromLocation)}). Please select a different receiving plant.`, 'error');
       return;
     }
 
@@ -1851,37 +1873,61 @@ function NewDispatchContent() {
                 {dispatchType === 'local' ? 'Destination Plant (Receiving Unit)' : 'Party / Customer Name & City'}{' '}
                 <span className="text-red-500">*</span>
               </label>
-              <input
-                id="destination"
-                type="text"
-                required
-                placeholder={
-                  dispatchType === 'local'
-                    ? 'e.g. D4 Plant, C116 Plant'
-                    : 'e.g. Shree Ram Electronics, Jaipur'
-                }
-                value={destination}
-                onChange={(e) => setDestination(e.target.value)}
-                className="input-field"
-              />
-              {dispatchType === 'local' && (
-                <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-gray-500 font-semibold">Select Receiving Plant:</span>
-                  {getOtherPlants(fromLocation).map((otherPlant) => (
-                    <button
-                      key={otherPlant.id}
-                      type="button"
-                      onClick={() => setDestination(otherPlant.id)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors flex items-center space-x-1.5 ${
-                        normalizePlant(destination) === otherPlant.id
-                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
-                          : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                      }`}
-                    >
-                      <span>🏭</span>
-                      <span>{otherPlant.name}</span>
-                    </button>
-                  ))}
+
+              {dispatchType === 'local' ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                    {getOtherPlants(fromLocation).map((otherPlant) => {
+                      const isSelected = normalizePlant(destination) === otherPlant.id;
+                      return (
+                        <button
+                          key={otherPlant.id}
+                          type="button"
+                          onClick={() => setDestination(otherPlant.id)}
+                          className={`p-3 rounded-xl border text-left transition-all flex items-center space-x-2.5 ${
+                            isSelected
+                              ? 'bg-purple-600 text-white border-purple-600 shadow-sm ring-2 ring-purple-300 font-bold'
+                              : 'bg-white border-gray-200 hover:border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          <span className="text-xl">🏭</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-bold leading-tight">{otherPlant.name}</div>
+                            <div className={`text-[10px] mt-0.5 ${isSelected ? 'text-purple-100' : 'text-gray-400'}`}>
+                              Receiving Unit
+                            </div>
+                          </div>
+                          {isSelected && <span className="text-white text-xs font-bold">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {isSamePlant && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700 flex items-center space-x-1.5 font-bold">
+                      <span>⚠️</span>
+                      <span>Origin and Destination cannot be the same plant. Please select an alternate plant above.</span>
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-gray-500">
+                    Stock will transfer out of <strong>{normalizePlant(fromLocation)}</strong> and await verification &amp; acceptance at <strong>{destination ? normalizePlant(destination) : 'selected plant'}</strong>.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    id="destination"
+                    type="text"
+                    required
+                    placeholder="e.g. Shree Ram Electronics, Jaipur"
+                    value={destination}
+                    onChange={(e) => setDestination(e.target.value)}
+                    className="input-field"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Enter the recipient buyer, party, or distributor warehouse location.
+                  </p>
                 </div>
               )}
             </div>

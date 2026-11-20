@@ -7,17 +7,23 @@
 import { normalizePlant, resolveModelManufacturingPlant } from './plants';
 
 export function resolveDispatchType(dispatch) {
+  const fromPlant = dispatch?.from_location ? normalizePlant(dispatch.from_location) : null;
+  const dest = dispatch?.destination_plant || dispatch?.destination;
+  const destNorm = dest ? normalizePlant(dest) : null;
+
+  // An inter-plant transfer CANNOT have the same origin and destination plant
+  if (fromPlant && destNorm && fromPlant === destNorm) {
+    return 'party';
+  }
+
   if (dispatch?.dispatch_type) {
     const dt = String(dispatch.dispatch_type).toLowerCase().trim();
     if (dt === 'local') return 'local';
+    if (dt === 'party') return 'party';
   }
   // Check if destination is another internal manufacturing plant
-  const dest = dispatch?.destination_plant || dispatch?.destination;
-  if (dest) {
-    const norm = normalizePlant(dest);
-    if (['E41 G2', 'D4', 'C116'].includes(norm)) {
-      return 'local';
-    }
+  if (destNorm && ['E41 G2', 'D4', 'C116'].includes(destNorm)) {
+    return 'local';
   }
   if (dispatch?.remarks?.includes('[Type: Local]')) {
     return 'local';
