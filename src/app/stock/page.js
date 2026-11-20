@@ -705,7 +705,7 @@ export default function StockPage() {
 
   return (
     <AppShell>
-      <div className="space-y-8">
+      <div className={`space-y-8 ${showPrintModal ? 'print:hidden' : ''}`}>
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 pb-5">
           <div>
@@ -1225,7 +1225,8 @@ export default function StockPage() {
       {/* Printable Physical Stock Inventory Modal */}
       {showPrintModal && (
         <PrintStockModal
-          stockList={filteredStockList}
+          stockList={stockList}
+          initialSearch={stockSearchQuery}
           activePlant={activePlant}
           stats={stats}
           plantTotals={plantTotals}

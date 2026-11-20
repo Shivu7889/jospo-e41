@@ -5,25 +5,32 @@ import { ALL_PLANTS_ID } from '@/lib/plants';
 
 export default function PrintStockModal({
   stockList = [],
+  initialSearch = '',
   activePlant = ALL_PLANTS_ID,
   stats = {},
   plantTotals = {},
   userName = 'Staff',
   onClose,
 }) {
-  const [printFilter, setPrintFilter] = useState('all'); // 'all' | 'in_stock' | 'out_of_stock'
+  const [searchQuery, setSearchQuery] = useState(initialSearch || '');
   const [printSort, setPrintSort] = useState('stock_desc'); // 'stock_desc' | 'stock_asc' | 'code_asc'
 
-  // Filter & sort for print document
+  // Strictly filter for models that have available stock (> 0)
   const printableList = useMemo(() => {
-    let list = [...stockList];
+    // 1. Only include items with current_stock > 0
+    let list = stockList.filter((it) => (Number(it.current_stock) || 0) > 0);
 
-    if (printFilter === 'in_stock') {
-      list = list.filter((it) => (Number(it.current_stock) || 0) > 0);
-    } else if (printFilter === 'out_of_stock') {
-      list = list.filter((it) => (Number(it.current_stock) || 0) === 0);
+    // 2. Search query filter (if provided)
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter(
+        (it) =>
+          it.model_code?.toLowerCase().includes(q) ||
+          it.model_name?.toLowerCase().includes(q)
+      );
     }
 
+    // 3. Sort models
     list.sort((a, b) => {
       const stockA = Number(a.current_stock) || 0;
       const stockB = Number(b.current_stock) || 0;
@@ -43,19 +50,11 @@ export default function PrintStockModal({
     });
 
     return list;
-  }, [stockList, printFilter, printSort]);
+  }, [stockList, searchQuery, printSort]);
 
   const totalCalculatedUnits = useMemo(() => {
     return printableList.reduce((sum, item) => sum + (Number(item.current_stock) || 0), 0);
   }, [printableList]);
-
-  const inStockCount = useMemo(() => {
-    return stockList.filter((it) => (Number(it.current_stock) || 0) > 0).length;
-  }, [stockList]);
-
-  const outOfStockCount = useMemo(() => {
-    return stockList.filter((it) => (Number(it.current_stock) || 0) === 0).length;
-  }, [stockList]);
 
   const printDateStr = useMemo(() => {
     return new Intl.DateTimeFormat('en-IN', {
@@ -83,57 +82,42 @@ export default function PrintStockModal({
           <div className="flex items-center space-x-2">
             <span className="text-2xl">🖨️</span>
             <div>
-              <h3 className="text-base font-bold text-gray-900">
-                Print Stock Inventory Sheet
+              <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
+                <span>Print Stock Sheet</span>
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
+                  ✓ Available Stock Only (&gt;0)
+                </span>
               </h3>
               <p className="text-xs text-gray-500">
-                Official physical audit sheet sorted by stock availability
+                Official physical audit report containing only models with positive available stock
               </p>
             </div>
           </div>
 
-          {/* Quick Filter & Sort Controls for Print */}
+          {/* Quick Sort & Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-lg border border-gray-300 p-0.5 bg-gray-50 text-xs">
-              <button
-                type="button"
-                onClick={() => setPrintFilter('all')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  printFilter === 'all'
-                    ? 'bg-white text-gray-900 shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search model code/name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="input-field text-xs pl-7 pr-3 py-1.5 w-44 bg-gray-50 border-gray-300"
+              />
+              <svg
+                className="w-3.5 h-3.5 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
               >
-                All ({stockList.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setPrintFilter('in_stock')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  printFilter === 'in_stock'
-                    ? 'bg-white text-emerald-800 shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                In Stock ({inStockCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setPrintFilter('out_of_stock')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  printFilter === 'out_of_stock'
-                    ? 'bg-white text-rose-800 shadow-xs'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Zero Stock ({outOfStockCount})
-              </button>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
             </div>
 
             <select
               value={printSort}
               onChange={(e) => setPrintSort(e.target.value)}
-              className="px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold bg-white text-gray-700"
+              className="px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold bg-white text-gray-700 cursor-pointer"
             >
               <option value="stock_desc">📈 Stock: High to Low</option>
               <option value="stock_asc">📉 Stock: Low to High</option>
@@ -143,7 +127,8 @@ export default function PrintStockModal({
             <button
               type="button"
               onClick={handlePrint}
-              className="btn-primary text-xs py-1.5 px-4 inline-flex items-center space-x-1.5 font-bold shadow-sm"
+              disabled={!printableList.length}
+              className="btn-primary text-xs py-1.5 px-4 inline-flex items-center space-x-1.5 font-bold shadow-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
             >
               <span>🖨️ Print Now</span>
             </button>
@@ -167,10 +152,10 @@ export default function PrintStockModal({
               JOSPO APPLIANCES PRIVATE LIMITED
             </h1>
             <p className="text-[11px] text-gray-700 font-medium tracking-wide mt-0.5">
-              Manufacturing Facilities: E41 G2 • D4 Plant • C116 Plant • Enterprise Inventory Control
+              Manufacturing Facilities: E41 G2 • D4 Plant • C116 Plant • Active On-Hand Inventory
             </p>
             <div className="mt-2 inline-block px-4 py-1 bg-black text-white font-extrabold text-xs uppercase tracking-widest rounded print:bg-black print:text-white">
-              PHYSICAL STOCK INVENTORY &amp; AUDIT REPORT
+              AVAILABLE PHYSICAL STOCK REPORT
             </div>
           </div>
 
@@ -187,9 +172,9 @@ export default function PrintStockModal({
               <span className="font-semibold text-gray-800 text-[11px] block">{printDateStr}</span>
             </div>
             <div>
-              <span className="text-[10px] text-gray-500 uppercase font-bold block">Total Models</span>
+              <span className="text-[10px] text-gray-500 uppercase font-bold block">In-Stock Models</span>
               <span className="font-extrabold text-gray-900 text-xs">
-                {printableList.length} Model{printableList.length === 1 ? '' : 's'} Listed
+                {printableList.length} Model{printableList.length === 1 ? '' : 's'} with Stock
               </span>
             </div>
             <div>
@@ -240,7 +225,7 @@ export default function PrintStockModal({
                       <th className="border border-gray-300 px-2 py-1.5 text-right font-mono">C116</th>
                     </>
                   )}
-                  <th className="border border-gray-300 px-3 py-1.5 text-right font-bold">
+                  <th className="border border-gray-300 px-3 py-1.5 text-right font-bold bg-amber-50/50">
                     Available Stock
                   </th>
                   <th className="border border-gray-300 px-2.5 py-1.5 text-center">Status</th>
@@ -254,23 +239,15 @@ export default function PrintStockModal({
                   <tr>
                     <td
                       colSpan={activePlant === ALL_PLANTS_ID ? 9 : 6}
-                      className="text-center py-6 text-gray-500 italic"
+                      className="text-center py-8 text-gray-500 italic bg-gray-50"
                     >
-                      No models matching selected print criteria.
+                      No models currently have available stock (&gt;0 units) for this facility.
                     </td>
                   </tr>
                 ) : (
                   printableList.map((item, idx) => {
                     const stock = Number(item.current_stock ?? 0);
-                    let statusLabel = 'Available';
-                    let statusClass = 'text-emerald-800 font-bold';
-                    if (stock === 0) {
-                      statusLabel = 'Out of Stock';
-                      statusClass = 'text-rose-700 font-bold';
-                    } else if (stock < 10) {
-                      statusLabel = 'Low Stock';
-                      statusClass = 'text-amber-800 font-bold';
-                    }
+                    const isLow = stock < 10;
 
                     return (
                       <tr key={item.id || idx} className={idx % 2 === 1 ? 'bg-gray-50/50' : 'bg-white'}>
@@ -299,11 +276,13 @@ export default function PrintStockModal({
                             </td>
                           </>
                         )}
-                        <td className="border border-gray-300 px-3 py-1.5 text-right font-mono font-black text-sm">
+                        <td className="border border-gray-300 px-3 py-1.5 text-right font-mono font-black text-sm bg-amber-50/30 text-gray-900">
                           {stock.toLocaleString()}
                         </td>
-                        <td className={`border border-gray-300 px-2.5 py-1.5 text-center text-[11px] ${statusClass}`}>
-                          {statusLabel}
+                        <td className={`border border-gray-300 px-2.5 py-1.5 text-center text-[11px] font-bold ${
+                          isLow ? 'text-amber-800' : 'text-emerald-800'
+                        }`}>
+                          {isLow ? '▲ Low Stock' : '✓ In Stock'}
                         </td>
                         <td className="border border-gray-300 px-3 py-1.5 text-center print:table-cell hidden">
                           <div className="border-b border-dotted border-gray-400 h-4"></div>
@@ -321,10 +300,10 @@ export default function PrintStockModal({
                   >
                     Grand Total Available Stock:
                   </td>
-                  <td className="border border-gray-300 px-3 py-2 text-right font-mono text-sm text-black font-black">
+                  <td className="border border-gray-300 px-3 py-2 text-right font-mono text-sm text-black font-black bg-amber-100/50">
                     {totalCalculatedUnits.toLocaleString()} units
                   </td>
-                  <td className="border border-gray-300 px-2.5 py-2 text-center text-[11px]">
+                  <td className="border border-gray-300 px-2.5 py-2 text-center text-[11px] text-emerald-800 font-bold">
                     {printableList.length} Models
                   </td>
                   <td className="border border-gray-300 px-3 py-2 print:table-cell hidden"></td>
@@ -356,14 +335,14 @@ export default function PrintStockModal({
           <div className="mt-5 pt-2 border-t border-gray-200 text-center text-[10px] text-gray-400 flex justify-between items-center">
             <span>Jospo E41 Manufacturing &amp; Inventory Management System</span>
             <span>Generated By: {userName}</span>
-            <span>Official Audit Record</span>
+            <span>Official Available Stock Audit</span>
           </div>
         </div>
 
         {/* Modal Bottom Actions (Screen Only) */}
         <div className="mt-4 flex items-center justify-between print:hidden">
           <span className="text-xs text-gray-500">
-            Tip: Press <strong>Ctrl+P</strong> or <strong>Cmd+P</strong> or click <strong>Print Now</strong>. The document is formatted for standard A4 paper.
+            Tip: Press <strong>Ctrl+P</strong> or <strong>Cmd+P</strong> or click <strong>Print Now</strong>. Formatted cleanly for A4 paper.
           </span>
           <div className="flex items-center space-x-2">
             <button
@@ -376,7 +355,8 @@ export default function PrintStockModal({
             <button
               type="button"
               onClick={handlePrint}
-              className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 font-bold shadow-md"
+              disabled={!printableList.length}
+              className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 font-bold shadow-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
             >
               <span>🖨️ Print Now</span>
             </button>
