@@ -85,10 +85,19 @@ export function PlantProvider({ children }) {
     try {
       setLoadingTransfers(true);
       // Fetch confirmed local dispatches
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('dispatches')
-        .select('id, destination, destination_plant, transfer_status, status, remarks, from_location')
+        .select('id, destination, destination_plant, transfer_status, status, remarks, from_location, received_at')
         .eq('status', 'confirmed');
+
+      if (error && error.message?.includes('received_at')) {
+        const retry = await supabase
+          .from('dispatches')
+          .select('id, destination, destination_plant, transfer_status, status, remarks, from_location')
+          .eq('status', 'confirmed');
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error) throw error;
 

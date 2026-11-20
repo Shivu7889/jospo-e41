@@ -289,7 +289,9 @@ export default function DispatchListPage() {
 
   // Pending inbound transfers arriving at this plant (in-transit, awaiting acceptance)
   const pendingInboundTransfers = useMemo(() => {
-    return filteredInboundTransfers.filter((d) => resolveTransferStatus(d) === 'in_transit');
+    return filteredInboundTransfers.filter(
+      (d) => !d.received_at && resolveTransferStatus(d) === 'in_transit'
+    );
   }, [filteredInboundTransfers]);
 
   // Aggregate stats (scoped to activePlant)
@@ -1548,7 +1550,8 @@ export default function DispatchListPage() {
                   const dest = resolveDestinationPlant(dispatch);
                   const tStatus = resolveTransferStatus(dispatch);
                   const totalQty = calculateTotalQty(dispatch.dispatch_items);
-                  const isPending = tStatus === 'in_transit';
+                  const isAccepted = Boolean(dispatch.received_at || tStatus === 'received');
+                  const isPending = !isAccepted && dispatch.status === 'confirmed';
 
                   return (
                     <tr key={dispatch.id} className="hover:bg-gray-50/80 transition-colors">
@@ -1587,7 +1590,7 @@ export default function DispatchListPage() {
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-amber-100 text-amber-800 border border-amber-200 animate-pulse">
                             🚚 In Transit (Pending Acceptance)
                           </span>
-                        ) : (
+                        ) : isAccepted ? (
                           <div className="space-y-0.5">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                               ✓ Stock Accepted &amp; Added
@@ -1598,6 +1601,10 @@ export default function DispatchListPage() {
                               </div>
                             )}
                           </div>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700 border border-gray-200">
+                            {dispatch.status || 'Draft'}
+                          </span>
                         )}
                       </td>
                       <td className="px-3.5 py-3 whitespace-nowrap text-right text-xs font-medium space-x-2">

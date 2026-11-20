@@ -175,22 +175,29 @@ export function resolveDestinationPlant(dispatch) {
  * Resolve transfer status: 'in_transit' | 'received' | 'completed'
  */
 export function resolveTransferStatus(dispatch) {
-  if (dispatch?.transfer_status) {
+  // If explicitly received with receipt timestamp or received status with received_at
+  if (dispatch?.received_at) {
+    return 'received';
+  }
+  if (dispatch?.transfer_status === 'received' && dispatch?.received_at) {
+    return 'received';
+  }
+  if (dispatch?.remarks?.includes('[TransferStatus: received]') && dispatch?.received_at) {
+    return 'received';
+  }
+
+  // If it's a confirmed dispatch with destination plant different from origin,
+  // it is ALWAYS in_transit until someone actually clicks Verify & Accept!
+  const destPlant = resolveDestinationPlant(dispatch);
+  const originPlant = normalizePlant(dispatch?.from_location);
+  if (dispatch?.status === 'confirmed' && destPlant && destPlant !== originPlant) {
+    return 'in_transit';
+  }
+
+  if (dispatch?.transfer_status && !['completed', 'received'].includes(dispatch.transfer_status)) {
     return dispatch.transfer_status;
   }
-  if (dispatch?.remarks) {
-    const match = dispatch.remarks.match(/\[TransferStatus:\s*([^\]]+)\]/i);
-    if (match && match[1]) {
-      return match[1].toLowerCase().trim();
-    }
-  }
-  // If confirmed local dispatch with destination plant, default to in_transit if not marked received
-  if (dispatch?.status === 'confirmed') {
-    const destPlant = resolveDestinationPlant(dispatch);
-    if (destPlant) {
-      return dispatch?.received_at ? 'received' : 'in_transit';
-    }
-  }
+
   return 'completed';
 }
 
