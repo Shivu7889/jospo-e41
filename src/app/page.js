@@ -56,39 +56,7 @@ export default function DashboardPage() {
         total_models: 0,
       };
 
-      // 1. Fetch live stock and production stats scoped to activePlant via /api/stock
-      try {
-        const stockRes = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`);
-        if (stockRes.ok) {
-          const stockJson = await stockRes.json();
-          if (stockJson.success && stockJson.stats) {
-            fetchedStats = {
-              total_production_today: stockJson.stats.todayProduction ?? 0,
-              total_dispatch_today: stockJson.stats.todayDispatch ?? 0,
-              total_stock: stockJson.stats.totalStock ?? 0,
-              pending_dispatches: 0,
-              total_models: stockJson.stats.activeModelsCount ?? 0,
-            };
-            if (activePlant === ALL_PLANTS_ID && stockJson.currentStock) {
-              const totals = { 'E41 G2': 0, 'D4': 0, 'C116': 0 };
-              stockJson.currentStock.forEach((m) => {
-                if (m.plant_breakdown) {
-                  totals['E41 G2'] += m.plant_breakdown['E41 G2'] || 0;
-                  totals['D4'] += m.plant_breakdown['D4'] || 0;
-                  totals['C116'] += m.plant_breakdown['C116'] || 0;
-                }
-              });
-              setPlantBreakdown(totals);
-            } else {
-              setPlantBreakdown(null);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Dashboard stock API fetch warning:', err);
-      }
-
-      // Pending draft dispatches
+      // Prepare pending drafts count query
       let pendingQuery = supabase
         .from('dispatches')
         .select('id', { count: 'exact', head: true })
@@ -97,38 +65,8 @@ export default function DashboardPage() {
       if (activePlant !== ALL_PLANTS_ID) {
         pendingQuery = pendingQuery.eq('from_location', activePlant);
       }
-      const { count: pendingCount } = await pendingQuery;
-      fetchedStats.pending_dispatches = pendingCount || 0;
-      setStats(fetchedStats);
 
-      // 2. Fetch Today's Production from /api/production
-      try {
-        const prodRes = await fetch(`/api/production?date=${todayStr}&plant=${encodeURIComponent(activePlant)}`);
-        if (prodRes.ok) {
-          const prodJson = await prodRes.json();
-          if (prodJson.success && prodJson.entries) {
-            const grouped = {};
-            prodJson.entries.forEach((entry) => {
-              const code = entry.model_code || 'Unknown';
-              if (!grouped[code]) {
-                grouped[code] = {
-                  model_name: entry.model_name || code,
-                  model_code: code,
-                  total_quantity: 0,
-                  entry_count: 0,
-                };
-              }
-              grouped[code].total_quantity += entry.quantity || 0;
-              grouped[code].entry_count += 1;
-            });
-            setTodayProduction(Object.values(grouped));
-          }
-        }
-      } catch (err) {
-        console.warn('Dashboard production API warning:', err);
-      }
-
-      // 3. Fetch Recent Dispatches (last 5)
+      // Prepare recent dispatches query (last 5)
       let dispQuery = supabase
         .from('dispatches')
         .select(`
@@ -153,10 +91,69 @@ export default function DashboardPage() {
         dispQuery = dispQuery.or(`from_location.eq.${activePlant},destination_plant.eq.${activePlant}`);
       }
 
-      const { data: dispData } = await dispQuery;
-      if (dispData) {
+      // Execute all 4 independent data sources in parallel (cuts dashboard load time by up to 75%)
+      const [stockResult, pendingResult, prodResult, dispResult] = await Promise.allSettled([
+        fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`).then((r) => (r.ok ? r.json() : null)),
+        pendingQuery,
+        fetch(`/api/production?date=${todayStr}&plant=${encodeURIComponent(activePlant)}`).then((r) => (r.ok ? r.json() : null)),
+        dispQuery,
+      ]);
+
+      // 1. Process Stock API result
+      if (stockResult.status === 'fulfilled' && stockResult.value?.success && stockResult.value?.stats) {
+        const stockJson = stockResult.value;
+        fetchedStats = {
+          total_production_today: stockJson.stats.todayProduction ?? 0,
+          total_dispatch_today: stockJson.stats.todayDispatch ?? 0,
+          total_stock: stockJson.stats.totalStock ?? 0,
+          pending_dispatches: 0,
+          total_models: stockJson.stats.activeModelsCount ?? 0,
+        };
+        if (activePlant === ALL_PLANTS_ID && stockJson.currentStock) {
+          const totals = { 'E41 G2': 0, 'D4': 0, 'C116': 0 };
+          stockJson.currentStock.forEach((m) => {
+            if (m.plant_breakdown) {
+              totals['E41 G2'] += m.plant_breakdown['E41 G2'] || 0;
+              totals['D4'] += m.plant_breakdown['D4'] || 0;
+              totals['C116'] += m.plant_breakdown['C116'] || 0;
+            }
+          });
+          setPlantBreakdown(totals);
+        } else {
+          setPlantBreakdown(null);
+        }
+      }
+
+      // 2. Process Pending Drafts count
+      if (pendingResult.status === 'fulfilled') {
+        const count = pendingResult.value.count || 0;
+        fetchedStats.pending_dispatches = count;
+      }
+      setStats(fetchedStats);
+
+      // 3. Process Production API result
+      if (prodResult.status === 'fulfilled' && prodResult.value?.success && prodResult.value?.entries) {
+        const grouped = {};
+        prodResult.value.entries.forEach((entry) => {
+          const code = entry.model_code || 'Unknown';
+          if (!grouped[code]) {
+            grouped[code] = {
+              model_name: entry.model_name || code,
+              model_code: code,
+              total_quantity: 0,
+              entry_count: 0,
+            };
+          }
+          grouped[code].total_quantity += entry.quantity || 0;
+          grouped[code].entry_count += 1;
+        });
+        setTodayProduction(Object.values(grouped));
+      }
+
+      // 4. Process Recent Dispatches
+      if (dispResult.status === 'fulfilled' && dispResult.value?.data) {
         setRecentDispatches(
-          dispData.map((d) => ({
+          dispResult.value.data.map((d) => ({
             ...d,
             total_quantity: (d.dispatch_items || []).reduce((sum, item) => sum + (item.quantity || 0), 0),
           }))

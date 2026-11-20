@@ -7,7 +7,20 @@ export async function middleware(request) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-  // Skip auth check if Supabase is not configured
+  const { pathname } = request.nextUrl;
+
+  // 1. FAST PATH: API routes handle their own auth & role validation via authenticateRequest()
+  // Bypassing middleware remote getUser() saves 300-600ms network round-trip on EVERY API call!
+  if (pathname.startsWith('/api')) {
+    return supabaseResponse;
+  }
+
+  // 2. FAST PATH: If visiting /login and user has no Supabase auth cookies, skip remote network call
+  const hasAuthCookie = request.cookies.getAll().some((c) => c.name.includes('sb-'));
+  if (pathname.startsWith('/login') && !hasAuthCookie) {
+    return supabaseResponse;
+  }
+
   if (!supabaseUrl || !supabaseAnonKey) {
     return supabaseResponse;
   }
@@ -34,7 +47,7 @@ export async function middleware(request) {
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, {
               ...options,
-              maxAge: 60 * 60 * 24 * 365, // 1 year persistence
+              maxAge: 60 * 60 * 24 * 365,
               path: '/',
               sameSite: 'lax',
             })

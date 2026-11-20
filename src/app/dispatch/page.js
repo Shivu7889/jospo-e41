@@ -109,9 +109,9 @@ export default function DispatchListPage() {
   const [newItemPlant, setNewItemPlant] = useState('E41 G2');
   const [savingDispatchEdit, setSavingDispatchEdit] = useState(false);
 
-  // Preload cooler models catalog for item editor dropdown
+  // Defer cooler models catalog preload until after initial page rendering
   useEffect(() => {
-    async function loadCatalog() {
+    const timer = setTimeout(async () => {
       try {
         const res = await fetch('/api/models?view=all');
         if (res.ok) {
@@ -123,17 +123,17 @@ export default function DispatchListPage() {
           }
         }
         if (supabase) {
-          const { data } = await supabase.from('cooler_models').select('*').eq('is_active', true).order('code');
+          const { data } = await supabase.from('cooler_models').select('id, name, code, is_active').eq('is_active', true).order('code');
           if (data) setAvailableModels(data);
         }
       } catch (err) {
         console.warn('Failed to preload models for edit modal:', err);
       }
-    }
-    loadCatalog();
+    }, 800);
+    return () => clearTimeout(timer);
   }, [supabase]);
 
-  // Fetch dispatches
+  // Fetch dispatches (limited to recent 150 records for instant loading)
   const fetchDispatches = useCallback(async (isRefresh = false) => {
     try {
       if (isRefresh) setRefreshing(true);
@@ -159,7 +159,8 @@ export default function DispatchListPage() {
             name
           )
         `)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(150);
 
       if (error) throw error;
       setDispatches(data || []);

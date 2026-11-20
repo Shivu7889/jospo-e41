@@ -84,11 +84,12 @@ export function PlantProvider({ children }) {
     if (!employee) return;
     try {
       setLoadingTransfers(true);
-      // Fetch confirmed local dispatches
+      // Fetch only unreceived confirmed dispatches (drastically reduces payload from thousands to just a few rows)
       let { data, error } = await supabase
         .from('dispatches')
         .select('id, destination, destination_plant, transfer_status, status, remarks, from_location, received_at')
-        .eq('status', 'confirmed');
+        .eq('status', 'confirmed')
+        .is('received_at', null);
 
       if (error && error.message?.includes('received_at')) {
         const retry = await supabase
