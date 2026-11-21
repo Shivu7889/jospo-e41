@@ -212,10 +212,9 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
 
     if (validItems.length > 0 && stockDeficits.length > 0) {
       showToast(
-        `Insufficient stock for ${stockDeficits.map((d) => d.model_code).join(', ')}. Please adjust quantities.`,
-        'error'
+        `⚡ Advance Dispatch: Co-loading with negative stock balance for ${stockDeficits.map((d) => d.model_code).join(', ')}.`,
+        'info'
       );
-      return;
     }
 
     const effectiveNotes = notes.trim()
@@ -762,8 +761,7 @@ export default function CoLoadingModal({ dispatch, activePlant, currentPlant: pr
               type="submit"
               disabled={
                 submitting ||
-                (!skipLoading && newTotalQty <= 0 && isFinalStop && unvisitedPlants.length > 0 && plantExistingItems.length === 0) ||
-                (newTotalQty > 0 && stockDeficits.length > 0)
+                (!skipLoading && newTotalQty <= 0 && isFinalStop && unvisitedPlants.length > 0 && plantExistingItems.length === 0)
               }
               className={`btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 shadow-md font-bold ${
                 !isFinalStop && unvisitedPlants.length > 0

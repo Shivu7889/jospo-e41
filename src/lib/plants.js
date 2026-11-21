@@ -273,7 +273,7 @@ export function isModelVisibleInPlantStock(model, plant, plantStock = 0) {
   if (norm === 'D4') return true;
   const mfgPlant = resolveModelManufacturingPlant(model);
   if (norm === mfgPlant) return true;
-  if (Number(plantStock) > 0) return true;
+  if (Number(plantStock) !== 0) return true;
   return false;
 }
 

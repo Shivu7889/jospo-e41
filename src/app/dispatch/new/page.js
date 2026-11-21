@@ -47,6 +47,11 @@ export const JOSPO_20_ACTIVE_MODELS = [
   { code: 'SHINE-100-NCG-WG', name: 'Jospo Shine 100 NCG WG', qr_data: 'JOSPO-SHINE100NCGWG' },
   { code: 'SHINE-80-CG-WG', name: 'Jospo Shine 80 CG WG', qr_data: 'JOSPO-SHINE80CGWG' },
   { code: 'SHINE-80-NCG-WG', name: 'Jospo Shine 80 NCG WG', qr_data: 'JOSPO-SHINE80NCGWG' },
+  { code: 'TBC-ICECOOL-65-NCG-WG', name: 'Turbocare icecool 65 ncg wg', qr_data: 'TBC-ICECOOL65NCGWG' },
+  { code: 'TBC-ICECOOL55NCGWG', name: 'Turbocare icecool 55 ncg wg', qr_data: 'TBC-ICECOOL55NCGWG' },
+  { code: 'GLOBEAM-REGAL-35-NCG-WG', name: 'Globeam Regal 35 NCG WG', qr_data: 'GLOBEAMREGAL35NCGWG' },
+  { code: 'GLOBEAM-REGAL-65-NCG-WG', name: 'Globeam Regal 65 NCG WG', qr_data: 'GLOBEAMREGAL65NCGWG' },
+  { code: 'NEELKAMAL-ROLEX-35-NCG-WG', name: 'Neelkamal Rolex 35 NCG WG', qr_data: 'NEELKAMAL-ROLEX35NCGWG' },
 ];
 
 function cleanAlphanumeric(str) {
@@ -56,10 +61,49 @@ function cleanAlphanumeric(str) {
 function getSignatures(str) {
   if (!str) return [];
   const base = cleanAlphanumeric(str);
-  const withoutBrand = base.replace(/^(?:jospo|jopso|jsp)/, '');
-  const withoutL = withoutBrand.replace(/(\d+)l([a-z]+)/, '$1$2');
-  const withL = withoutBrand.replace(/(\d+)(cg|ncg)/, '$1l$2');
-  return Array.from(new Set([base, withoutBrand, withoutL, withL])).filter(Boolean);
+  
+  const withoutBrand = base.replace(/^(?:jospo|jopso|jsp|turbocare|turbo|tbc|globeam|glbm|neelkamal|nk)/, '');
+  const withoutIcecool = withoutBrand.replace(/icecool/, '');
+  const baseWithoutIcecool = base.replace(/icecool/, '');
+  
+  const variations = new Set([
+    base,
+    withoutBrand,
+    withoutIcecool,
+    baseWithoutIcecool,
+  ]);
+
+  // Extract size (35, 55, 65, 80, 100)
+  const sizeMatch = base.match(/(\d{2,3})/);
+  if (sizeMatch && sizeMatch[1]) {
+    const sz = sizeMatch[1];
+    if (base.includes('turbo') || base.includes('tbc')) {
+      variations.add('turbocare' + sz);
+      variations.add('tbc' + sz);
+      variations.add('turbo' + sz);
+    }
+    if (base.includes('globeam') || base.includes('glbm')) {
+      variations.add('globeam' + sz);
+      variations.add('glbm' + sz);
+    }
+    if (base.includes('neelkamal') || base.includes('nk')) {
+      variations.add('neelkamal' + sz);
+      variations.add('nk' + sz);
+    }
+  }
+
+  for (const item of Array.from(variations)) {
+    if (!item) continue;
+    variations.add(item.replace(/(\d+)l([a-z]+)/, '$1$2'));
+    variations.add(item.replace(/(\d+)(cg|ncg)/, '$1l$2'));
+    if (item.startsWith('tbc')) {
+      variations.add(item.replace(/^tbc/, 'turbocare'));
+    } else if (item.startsWith('turbocare')) {
+      variations.add(item.replace(/^turbocare/, 'tbc'));
+    }
+  }
+
+  return Array.from(variations).filter(Boolean);
 }
 
 function NewDispatchContent() {
@@ -264,8 +308,8 @@ function NewDispatchContent() {
         }
       }
 
-      // 4. Fallback to JOSPO_20_ACTIVE_MODELS registry only for E41 G2 or D4 (never C116)
-      if (loadedModels.length === 0 && (plantToLoad === 'E41 G2' || plantToLoad === 'D4')) {
+      // 4. Fallback to active models registry if API / DB queries returned empty
+      if (loadedModels.length === 0) {
         loadedModels = JOSPO_20_ACTIVE_MODELS.map((m, idx) => ({
           id: `local-model-${idx + 1}`,
           ...m,
@@ -538,8 +582,18 @@ function NewDispatchContent() {
   // - ROLEX-35-CG-WG#000001 or ROLEX-35-CG-WG 000001 or ROLEX-35-CG-WG-000001
   // - Base model QRs without serial (backward compatibility fallback)
   const parseScannedQr = (rawQr, catalog = []) => {
-    const clean = (rawQr || '').trim();
+    let clean = (rawQr || '').trim();
     if (!clean) return null;
+
+    // Handle QR codes containing URLs (e.g. https://.../model-serial)
+    if (/^https?:\/\//i.test(clean)) {
+      try {
+        const u = new URL(clean);
+        clean = decodeURIComponent(u.pathname.replace(/^\/+/, '') + ' ' + u.search.replace(/^\?+/, ''));
+      } catch (e) {
+        clean = clean.replace(/^https?:\/\/[^/]+\/?/i, '');
+      }
+    }
 
     const effectiveCatalog = (catalog && catalog.length > 0)
       ? [...catalog]
@@ -619,10 +673,10 @@ function NewDispatchContent() {
     }
 
     // 4. Prefix matching for serialized codes:
-    // e.g. JOSPO-ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG-000001, ICECOOL-55-CG-WG-000001, JOSPO-ICECOOL55CGWG000001
+    // e.g. JOSPO-ICECOOL-55-CG-WG-000001, TURBOCARE-ICECOOL-55-NCG-WG-000001, TBC-ICECOOL55NCGWG-000001
     const sortedCatalog = [...effectiveCatalog].sort((a, b) => b.code.length - a.code.length);
     const normInput = cleanAlphanumeric(clean);
-    const normInputNoBrand = normInput.replace(/^(?:jospo|jopso|jsp)/, '');
+    const normInputNoBrand = normInput.replace(/^(?:jospo|jopso|jsp|turbocare|turbo|tbc|globeam|glbm|neelkamal|nk)/, '');
 
     for (const m of sortedCatalog) {
       const mSigs = [
@@ -632,10 +686,10 @@ function NewDispatchContent() {
       ].sort((a, b) => b.length - a.length);
 
       for (const pref of mSigs) {
-        const targetStr = normInputNoBrand.startsWith(pref)
-          ? normInputNoBrand
-          : normInput.startsWith(pref)
+        const targetStr = normInput.startsWith(pref)
           ? normInput
+          : normInputNoBrand.startsWith(pref)
+          ? normInputNoBrand
           : null;
 
         if (targetStr && targetStr.length > pref.length) {
@@ -685,8 +739,30 @@ function NewDispatchContent() {
     isProcessingScanRef.current = true;
 
     try {
-      // Parse the QR code (extracts model and unique box serial)
-      const parsed = parseScannedQr(cleanQr, modelsCatalog);
+      // 1. Parse the QR code using in-memory catalog
+      let parsed = parseScannedQr(cleanQr, modelsCatalog);
+
+      // 2. Dynamic DB Fallback: If not found in loaded catalog, search all active models in database!
+      if (!parsed || !parsed.matchedModel) {
+        try {
+          const { data: dbAllModels } = await supabase
+            .from('cooler_models')
+            .select('*')
+            .eq('is_active', true);
+          if (dbAllModels && dbAllModels.length > 0) {
+            parsed = parseScannedQr(cleanQr, dbAllModels);
+            if (parsed && parsed.matchedModel) {
+              setModelsCatalog((prev) => {
+                if (prev.some((m) => m.id === parsed.matchedModel.id)) return prev;
+                return [...prev, parsed.matchedModel];
+              });
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Dynamic DB lookup error:', dbErr);
+        }
+      }
+
       if (!parsed || !parsed.matchedModel) {
         playRejectTone();
         setLastScannedFeedback({
@@ -1313,10 +1389,9 @@ function NewDispatchContent() {
 
     if (stockDeficits.length > 0) {
       showToast(
-        `Insufficient stock for ${stockDeficits.map((d) => d.model_code).join(', ')}. Please adjust quantities.`,
-        'error'
+        `⚡ Advance Dispatch: Confirming with negative stock balance for ${stockDeficits.map((d) => d.model_code).join(', ')}.`,
+        'info'
       );
-      return;
     }
 
     try {
@@ -1449,16 +1524,14 @@ function NewDispatchContent() {
 
       if (itemsError) throw itemsError;
 
-      // Call RPC confirm_dispatch to atomically verify and deduct stock
-      const { data: rpcResult, error: rpcError } = await supabase.rpc('confirm_dispatch', {
-        p_dispatch_id: targetDispatchId,
-        p_employee_id: employee.id,
+      // Call confirm endpoint (handles RPC and negative stock deduction fallback)
+      const confirmRes = await fetch(`/api/dispatch/${targetDispatchId}/confirm`, {
+        method: 'POST',
       });
+      const confirmData = await confirmRes.json();
 
-      if (rpcError) throw rpcError;
-
-      if (rpcResult && rpcResult.success === false) {
-        throw new Error(rpcResult.error || 'Stock deduction failed during confirmation');
+      if (!confirmRes.ok || confirmData.success === false) {
+        throw new Error(confirmData.error || 'Stock deduction failed during confirmation');
       }
 
       // Clear local auto-save draft upon successful confirmation
@@ -2492,26 +2565,25 @@ function NewDispatchContent() {
             )}
           </div>
 
-          {/* Stock Deficit Warning Banner */}
+          {/* Stock Deficit Warning Banner - Advance Dispatch Allowed */}
           {stockDeficits.length > 0 && (
-            <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 text-xs text-rose-900">
-              <div className="flex items-center space-x-2 font-bold mb-1 text-sm text-rose-700">
-                <span>⚠️</span>
-                <span>Insufficient Stock Detected!</span>
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-xs text-amber-900 shadow-sm">
+              <div className="flex items-center space-x-2 font-bold mb-1 text-sm text-amber-800">
+                <span>⚡</span>
+                <span>Advance Dispatch: Negative Stock Allowed</span>
               </div>
-              <p className="mb-2 leading-relaxed">
-                The required dispatch quantity exceeds active inventory for the following cooler models:
+              <p className="mb-2 leading-relaxed text-amber-800">
+                Dispatched quantity exceeds current logged inventory for the following cooler models:
               </p>
-              <ul className="list-disc list-inside space-y-1 font-semibold">
+              <ul className="list-disc list-inside space-y-1 font-semibold text-amber-900">
                 {stockDeficits.map((d) => (
                   <li key={d.model_id}>
-                    {d.model_code} ({d.model_name}): Requested {d.quantity} units, but only{' '}
-                    {d.available_stock} available in stock.
+                    {d.model_code} ({d.model_name}): Dispatched {d.quantity} units (Current Logged Stock: {d.available_stock} pcs &rarr; Balance: <span className="text-purple-700 font-bold">{d.available_stock - d.quantity} pcs</span>)
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-[11px] text-rose-700">
-                You can save this as a draft, but the system will block confirmation until inventory is replenished or quantities are reduced.
+              <p className="mt-2 text-[11px] text-amber-800 bg-amber-100/70 p-2 rounded-lg border border-amber-200">
+                💡 <strong>Factory Overdraft Mode Active:</strong> You can confirm this dispatch immediately. Inventory stock will temporarily show negative until the daily production entry is logged by the supervisor/thekedar in the evening.
               </p>
             </div>
           )}
@@ -2532,7 +2604,7 @@ function NewDispatchContent() {
                   const deficit = item.quantity > item.available_stock;
                   const remaining = item.available_stock - item.quantity;
                   return (
-                    <tr key={item.model_id} className={deficit ? 'bg-rose-50/50' : ''}>
+                    <tr key={item.model_id} className={deficit ? 'bg-amber-50/40' : ''}>
                       <td className="px-3 py-3">
                         <span className="font-bold text-gray-900 text-sm block">{item.model_name}</span>
                         <span className="font-mono text-gray-500 text-[11px]">{item.model_code}</span>
@@ -2544,8 +2616,8 @@ function NewDispatchContent() {
                         {item.quantity} pcs
                       </td>
                       <td className="px-3 py-3 text-right font-bold">
-                        <span className={deficit ? 'text-red-600' : 'text-emerald-700'}>
-                          {remaining} pcs
+                        <span className={deficit ? 'text-purple-700 font-black' : 'text-emerald-700'}>
+                          {remaining} pcs {deficit ? '(Negative)' : ''}
                         </span>
                       </td>
                     </tr>
@@ -2590,7 +2662,7 @@ function NewDispatchContent() {
               <button
                 type="button"
                 onClick={handleConfirmDispatch}
-                disabled={submitting || (existingDispatchStatus !== 'confirmed' && stockDeficits.length > 0)}
+                disabled={submitting}
                 className="btn-success text-xs py-2.5 px-6 shadow-sm w-full sm:w-auto font-bold"
               >
                 {submitting

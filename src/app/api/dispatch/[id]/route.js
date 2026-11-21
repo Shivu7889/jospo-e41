@@ -303,55 +303,7 @@ export async function PUT(request, { params }) {
         };
       });
 
-      // If this dispatch is confirmed, verify warehouse stock availability for any increases
-      if (existing.status === 'confirmed') {
-        const oldTotals = {};
-        (previousItems || []).forEach((p) => {
-          const plant = normalizePlant(p.loaded_plant || resolveItemLoadedPlant(p, existing) || originPlant);
-          const key = `${p.model_id}__${plant}`;
-          oldTotals[key] = (oldTotals[key] || 0) + Number(p.quantity);
-        });
-
-        const newTotals = {};
-        lineItems.forEach((n) => {
-          const key = `${n.model_id}__${n.loaded_plant}`;
-          newTotals[key] = (newTotals[key] || 0) + Number(n.quantity);
-        });
-
-        for (const [key, newQty] of Object.entries(newTotals)) {
-          const oldQty = oldTotals[key] || 0;
-          const delta = newQty - oldQty;
-          if (delta > 0) {
-            const [modelId, plant] = key.split('__');
-            const { data: plantSt } = await supabase
-              .from('stock_transactions')
-              .select('quantity, plant')
-              .eq('model_id', modelId);
-
-            let currentWarehouseStock = 0;
-            if (plantSt) {
-              currentWarehouseStock = plantSt
-                .filter((st) => normalizePlant(st.plant || 'E41 G2') === plant)
-                .reduce((sum, st) => sum + Number(st.quantity || 0), 0);
-            }
-
-            if (currentWarehouseStock < delta) {
-              const { data: mData } = await supabase
-                .from('cooler_models')
-                .select('name, code')
-                .eq('id', modelId)
-                .single();
-              const modelDesc = mData ? `${mData.name} (${mData.code})` : modelId;
-              return NextResponse.json(
-                {
-                  error: `Insufficient stock at plant ${plant} for ${modelDesc}. Available in warehouse: ${currentWarehouseStock}, additional required: ${delta}.`,
-                },
-                { status: 400 }
-              );
-            }
-          }
-        }
-      }
+      // Advance dispatch mode: Negative stock is allowed when updating items on confirmed dispatches
 
       // Safely replace line items
       const { error: delError } = await supabase

@@ -382,19 +382,17 @@ export default function DispatchListPage() {
     }
   };
 
-  // Handle Confirm Dispatch via RPC
+  // Handle Confirm Dispatch (supports negative stock / advance dispatch)
   const handleConfirmDispatch = async () => {
     if (!confirmModalData || !employee?.id) return;
     try {
       setConfirming(true);
-      const { data, error } = await supabase.rpc('confirm_dispatch', {
-        p_dispatch_id: confirmModalData.id,
-        p_employee_id: employee.id,
+      const res = await fetch(`/api/dispatch/${confirmModalData.id}/confirm`, {
+        method: 'POST',
       });
+      const data = await res.json();
 
-      if (error) throw error;
-
-      if (data && data.success === false) {
+      if (!res.ok || data.success === false) {
         throw new Error(data.error || 'Failed to confirm dispatch');
       }
 

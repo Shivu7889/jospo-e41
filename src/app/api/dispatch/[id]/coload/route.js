@@ -133,38 +133,7 @@ export async function POST(request, { params }) {
       newTotals[it.model_id] = (newTotals[it.model_id] || 0) + Number(it.quantity);
     });
 
-    // Check stock availability at loadingPlant for any INCREASES in quantity
-    for (const [modelId, newQty] of Object.entries(newTotals)) {
-      const oldQty = oldTotals[modelId] || 0;
-      const delta = newQty - oldQty;
-      if (delta > 0) {
-        const { data: stockEntries, error: stockCheckErr } = await supabase
-          .from('stock_transactions')
-          .select('quantity')
-          .eq('model_id', modelId)
-          .eq('plant', loadingPlant);
-
-        if (stockCheckErr) {
-          console.warn('Stock check query error:', stockCheckErr.message);
-        }
-
-        const availableStock = (stockEntries || []).reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-        if (availableStock < delta) {
-          const { data: mData } = await supabase
-            .from('cooler_models')
-            .select('name, code')
-            .eq('id', modelId)
-            .single();
-          const modelDesc = mData ? `${mData.name} (${mData.code})` : modelId;
-          return NextResponse.json(
-            {
-              error: `Insufficient stock at ${loadingPlant} Plant for ${modelDesc}. Available: ${availableStock}, additional required to load: ${delta}.`,
-            },
-            { status: 400 }
-          );
-        }
-      }
-    }
+    // Advance dispatch mode: Negative stock is allowed when co-loading items
 
     const nowIso = new Date().toISOString();
 

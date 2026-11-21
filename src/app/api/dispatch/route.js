@@ -3,6 +3,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
 import { formatDispatchRemarks } from '@/lib/dispatch';
 import { normalizePlant } from '@/lib/plants';
+import { createAdminSupabase } from '@/lib/supabase-server';
 import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
@@ -131,28 +132,18 @@ export async function POST(request) {
       }
     }
 
-    // 2. If auto_confirm is requested, check stock availability for all items first
+    // 2. If auto_confirm is requested, verify model existence (negative stock allowed)
     if (auto_confirm) {
       for (const item of items) {
         const { data: stockData, error: stockErr } = await supabase
-          .from('current_stock')
-          .select('current_stock, model_name, model_code')
-          .eq('model_id', item.model_id)
+          .from('cooler_models')
+          .select('id, name, code')
+          .eq('id', item.model_id)
           .single();
 
-        if (stockErr) {
+        if (stockErr || !stockData) {
           return NextResponse.json(
-            { error: `Could not verify stock for model ID: ${item.model_id}` },
-            { status: 400 }
-          );
-        }
-
-        const available = stockData?.current_stock ?? 0;
-        if (available < item.quantity) {
-          return NextResponse.json(
-            {
-              error: `Insufficient stock for ${stockData?.model_code || 'item'} (${stockData?.model_name}). Required: ${item.quantity}, Available: ${available}`,
-            },
+            { error: `Could not verify model ID: ${item.model_id}` },
             { status: 400 }
           );
         }
@@ -253,21 +244,42 @@ export async function POST(request) {
       return NextResponse.json({ error: itemsError.message }, { status: 400 });
     }
 
-    // 5. If auto_confirm, invoke confirm_dispatch RPC
+    // 5. If auto_confirm, confirm dispatch and deduct stock (negative stock allowed)
     if (auto_confirm) {
-      const { data: rpcData, error: rpcError } = await supabase.rpc('confirm_dispatch', {
-        p_dispatch_id: dispatchRecord.id,
-        p_employee_id: employeeId,
-      });
+      let rpcConfirmed = false;
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('confirm_dispatch', {
+          p_dispatch_id: dispatchRecord.id,
+          p_employee_id: employeeId,
+        });
+        if (!rpcError && rpcData && rpcData.success !== false) {
+          rpcConfirmed = true;
+        }
+      } catch (e) {}
 
-      if (rpcError || (rpcData && rpcData.success === false)) {
-        return NextResponse.json(
-          {
-            error: rpcError?.message || rpcData?.error || 'Failed to auto-confirm dispatch and deduct stock',
-            dispatch_id: dispatchRecord.id,
-          },
-          { status: 400 }
-        );
+      if (!rpcConfirmed) {
+        // Fallback: Deduct negative stock directly with Admin client
+        const adminDb = createAdminSupabase() || supabase;
+        const originPlant = normalizePlant(dispatchRecord.from_location || 'E41 G2');
+        const stockEntries = lineItems.map((it) => ({
+          model_id: it.model_id,
+          transaction_type: 'dispatch',
+          quantity: -Math.abs(Number(it.quantity) || 1),
+          reference_id: dispatchRecord.id,
+          employee_id: employeeId,
+          plant: it.loaded_plant ? normalizePlant(it.loaded_plant) : originPlant,
+          notes: `Dispatch confirmed from plant ${it.loaded_plant || originPlant}`,
+        }));
+
+        await adminDb.from('stock_transactions').insert(stockEntries);
+        await adminDb
+          .from('dispatches')
+          .update({
+            status: 'confirmed',
+            confirmed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', dispatchRecord.id);
       }
 
       dispatchRecord.status = 'confirmed';

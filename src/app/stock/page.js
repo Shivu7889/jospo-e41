@@ -272,11 +272,16 @@ export default function StockPage() {
     let inStock = 0;
     let lowStock = 0;
     let outOfStock = 0;
+    let negativeStock = 0;
 
     stockList.forEach((it) => {
       const s = Number(it.current_stock) || 0;
-      if (s === 0) outOfStock += 1;
-      else if (s < 10) {
+      if (s < 0) {
+        negativeStock += 1;
+        outOfStock += 1;
+      } else if (s === 0) {
+        outOfStock += 1;
+      } else if (s < 10) {
         lowStock += 1;
         inStock += 1;
       } else {
@@ -289,6 +294,7 @@ export default function StockPage() {
       inStock,
       lowStock,
       outOfStock,
+      negativeStock,
     };
   }, [stockList]);
 
@@ -315,7 +321,9 @@ export default function StockPage() {
         return s > 0 && s < 10;
       });
     } else if (stockAvailabilityFilter === 'out_of_stock') {
-      list = list.filter((item) => (Number(item.current_stock) || 0) === 0);
+      list = list.filter((item) => (Number(item.current_stock) || 0) <= 0);
+    } else if (stockAvailabilityFilter === 'negative_stock') {
+      list = list.filter((item) => (Number(item.current_stock) || 0) < 0);
     }
 
     // 3. Sort according to stock availability or model code
@@ -486,7 +494,8 @@ export default function StockPage() {
           render: (val) => {
             const qty = Number(val ?? 0);
             let colorClass = 'text-primary-700 font-extrabold';
-            if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
+            if (qty < 0) colorClass = 'text-purple-700 font-extrabold';
+            else if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
             else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
             return (
               <span className={`font-mono text-sm ${colorClass}`}>
@@ -501,6 +510,13 @@ export default function StockPage() {
           align: 'center',
           render: (_, row) => {
             const qty = Number(row.current_stock ?? 0);
+            if (qty < 0) {
+              return (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300" title="Dispatched before daily production log">
+                  ⚡ Negative ({qty})
+                </span>
+              );
+            }
             if (qty === 0) {
               return (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
@@ -547,7 +563,8 @@ export default function StockPage() {
         render: (val) => {
           const qty = Number(val ?? 0);
           let colorClass = 'text-emerald-700 font-extrabold';
-          if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
+          if (qty < 0) colorClass = 'text-purple-700 font-extrabold';
+          else if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
           else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
           return (
             <span className={`font-mono text-base ${colorClass}`}>
@@ -562,6 +579,13 @@ export default function StockPage() {
         align: 'center',
         render: (_, row) => {
           const qty = Number(row.current_stock ?? 0);
+          if (qty < 0) {
+            return (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300" title="Dispatched before daily production log">
+                ⚡ Negative ({qty})
+              </span>
+            );
+          }
           if (qty === 0) {
             return (
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
