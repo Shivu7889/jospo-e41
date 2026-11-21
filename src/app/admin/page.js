@@ -160,8 +160,6 @@ export default function AdminPage() {
 
   // New Employee Form State
   const [showAddUserModal, setShowAddUserModal] = useState(false);
-  const [creationMode, setCreationMode] = useState('auto'); // 'auto' | 'manual'
-  const [newUserId, setNewUserId] = useState('');
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
@@ -304,27 +302,19 @@ export default function AdminPage() {
       return;
     }
 
+    if (!newUserPassword || newUserPassword.length < 6) {
+      showToast('Password must be at least 6 characters long.', 'warning');
+      return;
+    }
+
     const payload = {
       name: newUserName.trim(),
       email: newUserEmail.trim(),
+      password: newUserPassword,
       role: newUserRole,
       plant: newUserPlant,
       is_active: true,
     };
-
-    if (creationMode === 'auto') {
-      if (!newUserPassword || newUserPassword.length < 6) {
-        showToast('Password must be at least 6 characters long.', 'warning');
-        return;
-      }
-      payload.password = newUserPassword;
-    } else {
-      if (!newUserId.trim()) {
-        showToast('Please provide a valid Supabase Auth User ID (UUID).', 'warning');
-        return;
-      }
-      payload.id = newUserId.trim();
-    }
 
     try {
       setSubmittingUser(true);
@@ -337,66 +327,11 @@ export default function AdminPage() {
 
       const json = await res.json();
       if (!res.ok) {
-        // Fallback: If SUPABASE_SERVICE_ROLE_KEY is missing on server, create auth user directly via client-side Supabase
-        if (json.error?.includes('SUPABASE_SERVICE_ROLE_KEY') && creationMode === 'auto' && newUserPassword) {
-          const { createClient } = await import('@supabase/supabase-js');
-          const tempClient = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-            { auth: { persistSession: false, autoRefreshToken: false } }
-          );
-
-          const { data: signUpData, error: signUpErr } = await tempClient.auth.signUp({
-            email: newUserEmail.trim().toLowerCase(),
-            password: newUserPassword,
-            options: {
-              data: {
-                name: newUserName.trim(),
-                role: newUserRole,
-                plant: newUserPlant,
-              },
-            },
-          });
-
-          if (signUpErr) {
-            if (signUpErr.message?.toLowerCase().includes('rate limit')) {
-              throw new Error(
-                'Supabase Email Rate Limit Exceeded (Free tier limits public signups to ~3 per hour). Solution: 1) Switch to the "🔗 Link Existing UUID" tab above and create the user directly in Supabase Dashboard with zero rate limit, or 2) Add SUPABASE_SERVICE_ROLE_KEY to .env.local on your server.'
-              );
-            }
-            throw new Error(`Failed to create login credentials: ${signUpErr.message}`);
-          }
-
-          if (!signUpData.user?.id) {
-            throw new Error('Supabase Auth user created, but no user ID was returned.');
-          }
-
-          // Retry creating employee profile with newly created auth UUID
-          const retryRes = await fetch('/api/admin/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: signUpData.user.id,
-              name: newUserName.trim(),
-              email: newUserEmail.trim().toLowerCase(),
-              role: newUserRole,
-              plant: newUserPlant,
-              is_active: true,
-            }),
-          });
-
-          const retryJson = await retryRes.json();
-          if (!retryRes.ok) {
-            throw new Error(retryJson.error || 'Failed to save employee profile');
-          }
-        } else {
-          throw new Error(json.error || 'Failed to create employee');
-        }
+        throw new Error(json.error || 'Failed to create employee profile');
       }
 
-      showToast(json?.message || `Employee ${newUserName} saved successfully!`, 'success');
+      showToast(json?.message || `Employee "${newUserName}" created successfully!`, 'success');
       setShowAddUserModal(false);
-      setNewUserId('');
       setNewUserName('');
       setNewUserEmail('');
       setNewUserPassword('');
@@ -1049,7 +984,7 @@ export default function AdminPage() {
                           Status
                         </th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Auth User ID
+                          Employee ID
                         </th>
                         <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
                           Actions
@@ -1608,32 +1543,6 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              {/* Mode Toggle */}
-              <div className="flex rounded-lg bg-gray-100 p-1 mb-3">
-                <button
-                  type="button"
-                  onClick={() => setCreationMode('auto')}
-                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
-                    creationMode === 'auto'
-                      ? 'bg-white text-primary-700 shadow-xs'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  ⚡ One-Step Account Creation
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreationMode('manual')}
-                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold transition-all ${
-                    creationMode === 'manual'
-                      ? 'bg-white text-primary-700 shadow-xs'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  🔗 Link Existing UUID
-                </button>
-              </div>
-
               <form onSubmit={handleAddEmployee} className="space-y-4 text-xs">
                 <div>
                   <label htmlFor="newUserName" className="label text-xs">
@@ -1652,7 +1561,7 @@ export default function AdminPage() {
 
                 <div>
                   <label htmlFor="newUserEmail" className="label text-xs">
-                    Email Address <span className="text-red-500">*</span>
+                    Email Address (Login ID) <span className="text-red-500">*</span>
                   </label>
                   <input
                     id="newUserEmail"
@@ -1665,51 +1574,23 @@ export default function AdminPage() {
                   />
                 </div>
 
-                {creationMode === 'auto' ? (
-                  <div>
-                    <label htmlFor="newUserPassword" className="label text-xs">
-                      Password (min 6 characters) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="newUserPassword"
-                      type="password"
-                      required
-                      placeholder="••••••••"
-                      value={newUserPassword}
-                      onChange={(e) => setNewUserPassword(e.target.value)}
-                      className="input-field text-xs bg-white font-mono"
-                    />
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Login credentials and employee profile will be generated in Supabase Auth.
-                    </p>
-                    <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-2 text-[11px] text-blue-900">
-                      💡 <strong>Rate Limit Tip:</strong> If you see &quot;email rate limit exceeded&quot;, switch to <strong>&quot;🔗 Link Existing UUID&quot;</strong> above. It has zero rate limits!
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <label htmlFor="newUserId" className="label text-xs">
-                      Supabase Auth User ID (UUID) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="newUserId"
-                      type="text"
-                      required
-                      placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
-                      value={newUserId}
-                      onChange={(e) => setNewUserId(e.target.value)}
-                      className="input-field font-mono text-xs bg-white"
-                    />
-                    <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-[11px] text-emerald-900 space-y-1">
-                      <p className="font-bold">⚡ Zero Rate Limit Method (Fast &amp; Unlimited):</p>
-                      <ol className="list-decimal list-inside space-y-0.5 text-emerald-800">
-                        <li>Open <strong>Supabase Dashboard → Authentication → Users</strong></li>
-                        <li>Click <strong>&quot;Add User&quot; → &quot;Create user&quot;</strong> (enter email &amp; password)</li>
-                        <li>Copy the generated <strong>User UID</strong> and paste it here!</li>
-                      </ol>
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <label htmlFor="newUserPassword" className="label text-xs">
+                    Login Password (min 6 characters) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="newUserPassword"
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    className="input-field text-xs bg-white font-mono"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Employee will immediately use this email and password to log in.
+                  </p>
+                </div>
 
                 <div>
                   <label htmlFor="newUserPlant" className="label text-xs">

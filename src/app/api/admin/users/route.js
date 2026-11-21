@@ -83,7 +83,7 @@ export async function POST(request) {
         );
       }
 
-      const { data: authUser, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
+      let { data: authUser, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
         email: cleanEmail,
         password: password,
         email_confirm: true,
@@ -91,13 +91,37 @@ export async function POST(request) {
       });
 
       if (authCreateErr) {
-        return NextResponse.json(
-          { error: `Failed to create login credentials: ${authCreateErr.message}` },
-          { status: 400 }
-        );
+        // If user already registered in Auth, retrieve their ID and update credentials
+        if (
+          authCreateErr.message?.toLowerCase().includes('already') ||
+          authCreateErr.status === 422
+        ) {
+          const { data: listData } = await adminSupabase.auth.admin.listUsers({ page: 1, perPage: 100 });
+          const existingUser = listData?.users?.find(
+            (u) => u.email?.toLowerCase() === cleanEmail
+          );
+          if (existingUser) {
+            authUserId = existingUser.id;
+            await adminSupabase.auth.admin.updateUserById(authUserId, {
+              password: password,
+              user_metadata: { name: name.trim(), role, plant },
+              email_confirm: true,
+            });
+          } else {
+            return NextResponse.json(
+              { error: `Failed to create login credentials: ${authCreateErr.message}` },
+              { status: 400 }
+            );
+          }
+        } else {
+          return NextResponse.json(
+            { error: `Failed to create login credentials: ${authCreateErr.message}` },
+            { status: 400 }
+          );
+        }
+      } else {
+        authUserId = authUser?.user?.id;
       }
-
-      authUserId = authUser?.user?.id;
     }
 
     // Require ID (auth user UUID) if not created via password
