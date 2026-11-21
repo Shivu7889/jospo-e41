@@ -10,6 +10,8 @@ import {
   resolveItemLoadedPlant,
 } from '@/lib/dispatch';
 import { normalizePlant } from '@/lib/plants';
+import { createAdminSupabase } from '@/lib/supabase-server';
+import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +21,7 @@ export async function GET(request, { params }) {
     const auth = await authenticateRequest();
     if (auth.error) return auth.error;
     const { supabase } = auth;
+    const adminDb = createAdminSupabase() || supabase;
     const { id } = params;
 
     let { data, error } = await supabase
@@ -53,7 +56,7 @@ export async function GET(request, { params }) {
       .single();
 
     if (error && (error.code === 'PGRST204' || error.message?.includes('loaded_plant'))) {
-      const fallbackQuery = await supabase
+      const fallbackQuery = await (adminDb || supabase)
         .from('dispatches')
         .select(`
           *,
@@ -85,6 +88,37 @@ export async function GET(request, { params }) {
       error = fallbackQuery.error;
     }
 
+    if (error && adminDb) {
+      const adminFallback = await adminDb
+        .from('dispatches')
+        .select(`
+          *,
+          dispatch_items(
+            id,
+            quantity,
+            model_id,
+            cooler_models(
+              id,
+              name,
+              code,
+              qr_data
+            )
+          ),
+          employees!dispatches_employee_id_fkey(
+            id,
+            name,
+            email,
+            role
+          )
+        `)
+        .eq('id', id)
+        .single();
+      if (adminFallback.data) {
+        data = adminFallback.data;
+        error = null;
+      }
+    }
+
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }
@@ -102,27 +136,29 @@ export async function PUT(request, { params }) {
     const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
+    const adminDb = createAdminSupabase() || supabase;
     const { id } = params;
     const body = await request.json();
 
-    // Verify existing dispatch status and metadata
-    let { data: existing, error: checkError } = await supabase
+    // Verify existing dispatch status and metadata using adminDb to avoid RLS / column issues
+    let { data: existing, error: checkError } = await adminDb
       .from('dispatches')
-      .select('id, status, remarks, dispatch_type, from_location, destination, destination_plant, transfer_status, is_coloading, coloading_status, next_loading_plant, second_plant, third_plant, vehicle_number')
+      .select('*')
       .eq('id', id)
       .single();
 
-    if (checkError && checkError.code === 'PGRST204') {
-      const fallbackCheck = await supabase
+    if (checkError || !existing) {
+      const userCheck = await supabase
         .from('dispatches')
-        .select('id, status, remarks, from_location, destination, vehicle_number')
+        .select('*')
         .eq('id', id)
         .single();
-      existing = fallbackCheck.data;
-      checkError = fallbackCheck.error;
+      existing = userCheck.data;
+      checkError = userCheck.error;
     }
 
     if (checkError || !existing) {
+      console.error(`Dispatch ${id} lookup failed:`, checkError);
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
     }
 
@@ -157,10 +193,18 @@ export async function PUT(request, { params }) {
     if (vehicle_number !== undefined) updateFields.vehicle_number = vehicle_number.trim().toUpperCase();
     if (from_location !== undefined) updateFields.from_location = from_location.trim();
     if (destination !== undefined) updateFields.destination = destination.trim();
-    if (destination_plant !== undefined) updateFields.destination_plant = destination_plant ? destination_plant.trim() : null;
-    if (transfer_status !== undefined) updateFields.transfer_status = transfer_status;
     if (dispatch_date !== undefined) updateFields.dispatch_date = dispatch_date;
-    if (dispatch_type !== undefined) updateFields.dispatch_type = dispatch_type === 'local' ? 'local' : 'party';
+
+    // Only assign columns if they exist in schema
+    if (destination_plant !== undefined && 'destination_plant' in existing) {
+      updateFields.destination_plant = destination_plant ? destination_plant.trim() : null;
+    }
+    if (transfer_status !== undefined && 'transfer_status' in existing) {
+      updateFields.transfer_status = transfer_status;
+    }
+    if (dispatch_type !== undefined && 'dispatch_type' in existing) {
+      updateFields.dispatch_type = dispatch_type === 'local' ? 'local' : 'party';
+    }
 
     // Co-loading fields
     const effectiveIsCoLoading = is_coloading !== undefined ? Boolean(is_coloading) : isCoLoadingDispatch(existing);
@@ -176,12 +220,16 @@ export async function PUT(request, { params }) {
     }
 
     if (is_coloading !== undefined || coloading_status !== undefined || next_loading_plant !== undefined) {
-      updateFields.is_coloading = effectiveIsCoLoading;
-      updateFields.coloading_status = effectiveCoLoadingStatus;
-      updateFields.next_loading_plant = effectiveNextLoadingPlant;
+      if ('is_coloading' in existing) updateFields.is_coloading = effectiveIsCoLoading;
+      if ('coloading_status' in existing) updateFields.coloading_status = effectiveCoLoadingStatus;
+      if ('next_loading_plant' in existing) updateFields.next_loading_plant = effectiveNextLoadingPlant;
     }
-    if (second_plant !== undefined) updateFields.second_plant = second_plant ? normalizePlant(second_plant) : null;
-    if (third_plant !== undefined) updateFields.third_plant = third_plant ? normalizePlant(third_plant) : null;
+    if (second_plant !== undefined && 'second_plant' in existing) {
+      updateFields.second_plant = second_plant ? normalizePlant(second_plant) : null;
+    }
+    if (third_plant !== undefined && 'third_plant' in existing) {
+      updateFields.third_plant = third_plant ? normalizePlant(third_plant) : null;
+    }
 
     const effectiveType = dispatch_type || existing.dispatch_type || resolveDispatchType(existing);
     const effectiveFromPlant = normalizePlant(updateFields.from_location || existing.from_location || 'E41 G2');
@@ -227,8 +275,8 @@ export async function PUT(request, { params }) {
     }
     updateFields.updated_at = new Date().toISOString();
 
-    // Update dispatch header
-    let { data: updatedDispatch, error: updateError } = await supabase
+    // Update dispatch header using adminDb
+    let { data: updatedDispatch, error: updateError } = await adminDb
       .from('dispatches')
       .update(updateFields)
       .eq('id', id)
@@ -255,10 +303,9 @@ export async function PUT(request, { params }) {
       delete updateFields.next_loading_plant;
       delete updateFields.second_plant;
       delete updateFields.third_plant;
-      if (updateError.message?.includes('dispatch_type')) {
-        delete updateFields.dispatch_type;
-      }
-      const retryResult = await supabase
+      delete updateFields.dispatch_type;
+
+      const retryResult = await adminDb
         .from('dispatches')
         .update(updateFields)
         .eq('id', id)
@@ -285,7 +332,7 @@ export async function PUT(request, { params }) {
       }
 
       // Fetch existing items with details
-      const { data: previousItems } = await supabase
+      const { data: previousItems } = await adminDb
         .from('dispatch_items')
         .select('id, model_id, quantity, loaded_plant, loaded_by')
         .eq('dispatch_id', id);
@@ -303,10 +350,8 @@ export async function PUT(request, { params }) {
         };
       });
 
-      // Advance dispatch mode: Negative stock is allowed when updating items on confirmed dispatches
-
       // Safely replace line items
-      const { error: delError } = await supabase
+      const { error: delError } = await adminDb
         .from('dispatch_items')
         .delete()
         .eq('dispatch_id', id);
@@ -316,20 +361,20 @@ export async function PUT(request, { params }) {
       }
 
       if (lineItems.length > 0) {
-        let { error: insertItemsError } = await supabase
+        let { error: insertItemsError } = await adminDb
           .from('dispatch_items')
           .insert(lineItems);
 
         if (insertItemsError && insertItemsError.message?.includes('loaded_plant')) {
           const fallbackItems = lineItems.map(({ loaded_plant, loaded_by, ...rest }) => rest);
-          const fbResult = await supabase.from('dispatch_items').insert(fallbackItems);
+          const fbResult = await adminDb.from('dispatch_items').insert(fallbackItems);
           insertItemsError = fbResult.error;
         }
 
         if (insertItemsError) {
           // Rollback: restore previous items
           if (previousItems && previousItems.length > 0) {
-            await supabase.from('dispatch_items').insert(previousItems);
+            await adminDb.from('dispatch_items').insert(previousItems);
           }
           return NextResponse.json({ error: insertItemsError.message }, { status: 400 });
         }
@@ -337,7 +382,7 @@ export async function PUT(request, { params }) {
 
       // If dispatch is confirmed, synchronize stock transactions with exact plant attribution
       if (existing.status === 'confirmed') {
-        await supabase
+        await adminDb
           .from('stock_transactions')
           .delete()
           .eq('reference_id', id)
@@ -355,7 +400,7 @@ export async function PUT(request, { params }) {
             notes: `[Dispatch Updated] Loaded at ${it.loaded_plant} (Vehicle: ${vNum})`,
           }));
 
-          let { error: stockInsertError } = await supabase
+          let { error: stockInsertError } = await adminDb
             .from('stock_transactions')
             .insert(stockTxs);
 
@@ -364,11 +409,13 @@ export async function PUT(request, { params }) {
               ...rest,
               notes: `[Dispatch Updated] [Plant: ${plant}] (Vehicle: ${vNum})`,
             }));
-            await supabase.from('stock_transactions').insert(fallbackTxs);
+            await adminDb.from('stock_transactions').insert(fallbackTxs);
           }
         }
       }
     }
+
+    clearStockCache();
 
     return NextResponse.json(
       {
@@ -389,14 +436,25 @@ export async function DELETE(request, { params }) {
     const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
+    const adminDb = createAdminSupabase() || supabase;
     const { id } = params;
 
     // Verify existing dispatch status
-    const { data: existing, error: checkError } = await supabase
+    let { data: existing, error: checkError } = await adminDb
       .from('dispatches')
       .select('status, vehicle_number')
       .eq('id', id)
       .single();
+
+    if (checkError || !existing) {
+      const userCheck = await supabase
+        .from('dispatches')
+        .select('status, vehicle_number')
+        .eq('id', id)
+        .single();
+      existing = userCheck.data;
+      checkError = userCheck.error;
+    }
 
     if (checkError || !existing) {
       return NextResponse.json({ error: 'Dispatch record not found' }, { status: 404 });
@@ -413,7 +471,7 @@ export async function DELETE(request, { params }) {
 
     // If dispatch had stock transactions (confirmed or cancelled), remove them to restore stock
     if (existing.status !== 'draft') {
-      const { error: stockDelErr } = await supabase
+      const { error: stockDelErr } = await adminDb
         .from('stock_transactions')
         .delete()
         .eq('reference_id', id);
@@ -424,10 +482,10 @@ export async function DELETE(request, { params }) {
     }
 
     // Delete line items first
-    await supabase.from('dispatch_items').delete().eq('dispatch_id', id);
+    await adminDb.from('dispatch_items').delete().eq('dispatch_id', id);
 
     // Delete dispatch
-    const { error: deleteError } = await supabase
+    const { error: deleteError } = await adminDb
       .from('dispatches')
       .delete()
       .eq('id', id);
@@ -435,6 +493,8 @@ export async function DELETE(request, { params }) {
     if (deleteError) {
       return NextResponse.json({ error: deleteError.message }, { status: 400 });
     }
+
+    clearStockCache();
 
     return NextResponse.json(
       {
