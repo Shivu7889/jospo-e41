@@ -3,6 +3,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
 import { formatDispatchRemarks } from '@/lib/dispatch';
 import { normalizePlant } from '@/lib/plants';
+import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -270,6 +271,7 @@ export async function POST(request) {
       }
 
       dispatchRecord.status = 'confirmed';
+      clearStockCache();
     }
 
     // 6. Return response

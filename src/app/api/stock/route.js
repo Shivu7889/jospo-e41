@@ -11,6 +11,14 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+// Server-side in-memory cache for stock (TTL: 10s)
+const stockCache = new Map();
+const STOCK_CACHE_TTL = 10 * 1000;
+
+export function clearStockCache() {
+  stockCache.clear();
+}
+
 /**
  * GET /api/stock
  * Returns stock scoped to plant or consolidated multi-plant matrix
@@ -29,6 +37,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const modelIdFilter = searchParams.get('model_id');
     const plantParam = searchParams.get('plant');
+    const forceRefresh = searchParams.get('refresh') === 'true';
 
     const isOwner = isOwnerUser(employee);
     const isOwnerOrAdmin = isOwner || employee.role === 'admin' || employee.role === 'dispatch';
@@ -36,6 +45,16 @@ export async function GET(request) {
     const targetPlant = isOwnerOrAdmin
       ? (plantParam ? (plantParam === ALL_PLANTS_ID ? ALL_PLANTS_ID : normalizePlant(plantParam)) : (normalizePlant(employee?.plant) || ALL_PLANTS_ID))
       : normalizePlant(employee?.plant);
+
+    const cacheKey = `stock_${targetPlant}_${modelIdFilter || 'all'}`;
+    if (!forceRefresh && stockCache.has(cacheKey)) {
+      const cached = stockCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return NextResponse.json(cached.data, {
+          headers: { 'X-Cache': 'HIT' },
+        });
+      }
+    }
 
     const todayStr = getTodayIST();
 
@@ -50,10 +69,10 @@ export async function GET(request) {
       cmQuery = cmQuery.eq('id', modelIdFilter);
     }
 
-    // 2. Prepare independent queries
+    // 2. Prepare independent queries (lean select to minimize bandwidth)
     let txQuery = supabase
       .from('stock_transactions')
-      .select('model_id, quantity, plant, notes');
+      .select('model_id, quantity, plant');
 
     let prodQuery = supabase
       .from('production_entries')
@@ -191,21 +210,26 @@ export async function GET(request) {
       }
     });
 
-    return NextResponse.json(
-      {
-        success: true,
-        target_plant: targetPlant,
-        currentStock,
-        stats: {
-          totalStock: Math.max(0, totalStock),
-          todayProduction,
-          todayDispatch,
-          activeModelsCount: visibleModels.length,
-        },
-        timestamp: new Date().toISOString(),
+    const resultPayload = {
+      success: true,
+      target_plant: targetPlant,
+      currentStock,
+      stats: {
+        totalStock: Math.max(0, totalStock),
+        todayProduction,
+        todayDispatch,
+        activeModelsCount: visibleModels.length,
       },
-      { status: 200 }
-    );
+      timestamp: new Date().toISOString(),
+    };
+
+    if (stockCache.size > 50) stockCache.clear();
+    stockCache.set(cacheKey, {
+      data: resultPayload,
+      expiresAt: Date.now() + STOCK_CACHE_TTL,
+    });
+
+    return NextResponse.json(resultPayload, { status: 200 });
   } catch (err) {
     console.error('API /api/stock GET error:', err);
     return NextResponse.json({ success: false, error: err.message || 'Internal Server Error' }, { status: 500 });

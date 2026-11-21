@@ -117,9 +117,9 @@ export default function StockPage() {
   }, [stockList]);
 
   // 1. Fetch Overview & Current Stock (scoped to activePlant)
-  const fetchStockOverview = useCallback(async () => {
+  const fetchStockOverview = useCallback(async (forceRefresh = false) => {
     try {
-      const res = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`);
+      const res = await fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}${forceRefresh ? '&refresh=true' : ''}`);
       const apiData = await res.json();
       if (apiData.success) {
         setStockList(apiData.currentStock || []);
@@ -731,7 +731,7 @@ export default function StockPage() {
             <button
               type="button"
               onClick={() => {
-                fetchStockOverview();
+                fetchStockOverview(true);
                 fetchStockLedger();
               }}
               disabled={loadingOverview || loadingLedger}

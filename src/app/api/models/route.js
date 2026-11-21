@@ -12,6 +12,14 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+// Server-side in-memory cache for models (TTL: 30s)
+const modelsCache = new Map();
+const MODELS_CACHE_TTL = 30 * 1000;
+
+export function clearModelsCache() {
+  modelsCache.clear();
+}
+
 /**
  * GET /api/models
  * List cooler models with their current stock from current_stock view
@@ -30,6 +38,17 @@ export async function GET(request) {
     const activeOnly = activeOnlyParam !== 'false';
     const forPlant = searchParams.get('for_plant') || '';
     const view = searchParams.get('view') || '';
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    const cacheKey = `models_${activeOnly}_${forPlant}_${view}`;
+    if (!forceRefresh && modelsCache.has(cacheKey)) {
+      const cached = modelsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return NextResponse.json(cached.data, {
+          headers: { 'X-Cache': 'HIT' },
+        });
+      }
+    }
 
     // 1. Fetch cooler models (dual-mode: native manufacturing_plant column with fallback)
     let models = [];
@@ -62,33 +81,28 @@ export async function GET(request) {
       models = dataWithPlant || [];
     }
 
-    // 2. Fetch stock levels (plant-specific if for_plant provided, otherwise consolidated)
+    // 2. Fetch stock levels (skip entirely for production view to make dropdown load in ~50ms)
     let stockMap = {};
     const normalizedForPlant = forPlant && forPlant !== ALL_PLANTS_ID ? normalizePlant(forPlant) : null;
 
-    if (normalizedForPlant) {
+    if (view === 'production' || view === 'catalog') {
+      // Production & catalog dropdowns do not need stock balances; skip heavy queries!
+    } else if (normalizedForPlant) {
+      // Query only transactions for target plant to leverage idx_stock_transactions_plant index
       let txQuery = supabase
         .from('stock_transactions')
-        .select('model_id, quantity, plant, notes');
+        .select('model_id, quantity')
+        .eq('plant', normalizedForPlant);
 
       let { data: transactions, error: txErr } = await txQuery;
       if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
-        const fbTx = await supabase.from('stock_transactions').select('model_id, quantity, notes');
+        const fbTx = await supabase.from('stock_transactions').select('model_id, quantity');
         transactions = fbTx.data || [];
       }
 
       (transactions || []).forEach((tx) => {
-        let p = normalizePlant(tx.plant);
-        if (!tx.plant && tx.notes) {
-          const match = tx.notes.match(/\[Plant:\s*([^\]]+)\]/i);
-          if (match && match[1]) {
-            p = normalizePlant(match[1]);
-          }
-        }
-        if (p === normalizedForPlant) {
-          const mid = tx.model_id;
-          stockMap[mid] = (stockMap[mid] || 0) + (Number(tx.quantity) || 0);
-        }
+        const mid = tx.model_id;
+        stockMap[mid] = (stockMap[mid] || 0) + (Number(tx.quantity) || 0);
       });
     } else {
       const { data: stockData, error: stockError } = await supabase
@@ -131,11 +145,8 @@ export async function GET(request) {
         // Can only assemble/manufacture models assigned to this plant
         modelsWithStock = modelsWithStock.filter((m) => isModelManufacturableAtPlant(m, normalizedForPlant));
       } else if (view === 'dispatch') {
-        // When dispatching or co-loading from this plant:
-        // D4 is co-loading & secondary dispatch hub: all models are selectable, with D4 warehouse stock
-        // For C116 / E41 G2: only models belonging to that plant, or models with physical stock
         if (normalizedForPlant === 'D4') {
-          // Keep all models for D4, each with D4's own warehouse stock (stockMap[m.id] ?? 0)
+          // Keep all models for D4, each with D4's own warehouse stock
         } else {
           modelsWithStock = modelsWithStock.filter(
             (m) => m.manufacturing_plant === normalizedForPlant || (stockMap[m.id] || 0) > 0
@@ -146,7 +157,6 @@ export async function GET(request) {
           isModelVisibleInPlantStock(m, normalizedForPlant, stockMap[m.id])
         );
       } else {
-        // General query with for_plant (e.g. Models catalog)
         if (normalizedForPlant === 'D4') {
           // D4 hub shows all models with D4 stock
         } else {
@@ -157,11 +167,19 @@ export async function GET(request) {
       }
     }
 
-    return NextResponse.json({
+    const resultPayload = {
       success: true,
       models: modelsWithStock,
       total: modelsWithStock.length,
+    };
+
+    if (modelsCache.size > 100) modelsCache.clear();
+    modelsCache.set(cacheKey, {
+      data: resultPayload,
+      expiresAt: Date.now() + MODELS_CACHE_TTL,
     });
+
+    return NextResponse.json(resultPayload);
   } catch (error) {
     console.error('API /api/models GET error:', error);
     return NextResponse.json(
@@ -288,6 +306,8 @@ export async function POST(request) {
       newModel = insertRes.data;
     }
 
+    clearModelsCache();
+
     return NextResponse.json(
       {
         success: true,
@@ -412,6 +432,8 @@ export async function PATCH(request) {
     } else {
       updatedModel = updateRes.data;
     }
+
+    clearModelsCache();
 
     return NextResponse.json({
       success: true,

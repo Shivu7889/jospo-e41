@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,8 @@ export async function POST(request, { params }) {
         { status: 400 }
       );
     }
+
+    clearStockCache();
 
     return NextResponse.json(
       {

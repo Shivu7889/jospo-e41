@@ -4,6 +4,14 @@ import { normalizePlant, ALL_PLANTS_ID } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
 
+// Server-side in-memory cache for contractors (TTL: 60s)
+const contractorsCache = new Map();
+const CONTRACTORS_CACHE_TTL = 60 * 1000;
+
+export function clearContractorsCache() {
+  contractorsCache.clear();
+}
+
 const DEFAULT_E41_CONTRACTORS = [
   'Chotu',
   'Ramesh Thekedar',
@@ -26,6 +34,26 @@ export async function GET(request) {
     const rawPlant = searchParams.get('plant');
     const isAllPlants = !rawPlant || rawPlant.toUpperCase() === ALL_PLANTS_ID;
     const targetPlant = isAllPlants ? null : normalizePlant(rawPlant);
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    const cacheKey = `contractors_${targetPlant || 'ALL'}`;
+    if (!forceRefresh && contractorsCache.has(cacheKey)) {
+      const cached = contractorsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return NextResponse.json(cached.data, {
+          headers: { 'X-Cache': 'HIT' },
+        });
+      }
+    }
+
+    const respondWithCache = (payload) => {
+      if (contractorsCache.size > 50) contractorsCache.clear();
+      contractorsCache.set(cacheKey, {
+        data: payload,
+        expiresAt: Date.now() + CONTRACTORS_CACHE_TTL,
+      });
+      return NextResponse.json(payload);
+    };
 
     // 1. Try querying the dedicated contractors table (with plant column)
     try {
@@ -52,14 +80,14 @@ export async function GET(request) {
         if (!fbRes.error && fbRes.data) {
           // If viewing E41, return existing contractors; if other plant, return empty
           if (!targetPlant || targetPlant === 'E41 G2') {
-            return NextResponse.json({
+            return respondWithCache({
               success: true,
               source: 'contractors_table_legacy',
               contractors: fbRes.data.map((c) => c.name),
               data: fbRes.data.map((c) => ({ ...c, plant: 'E41 G2' })),
             });
           } else {
-            return NextResponse.json({
+            return respondWithCache({
               success: true,
               source: 'contractors_table_legacy_empty',
               contractors: [],
@@ -68,7 +96,7 @@ export async function GET(request) {
           }
         }
       } else if (!dbError && dbContractors && dbContractors.length > 0) {
-        return NextResponse.json({
+        return respondWithCache({
           success: true,
           source: 'contractors_table',
           contractors: dbContractors.map((c) => c.name),
@@ -110,7 +138,7 @@ export async function GET(request) {
 
     const list = Array.from(distinctSet).sort();
 
-    return NextResponse.json({
+    return respondWithCache({
       success: true,
       source: 'fallback_list',
       contractors: list,
@@ -172,6 +200,8 @@ export async function POST(request) {
 
     if (insertError) throw insertError;
 
+    clearContractorsCache();
+
     return NextResponse.json({
       success: true,
       message: `Thekedar "${name}" registered for ${plant} Plant.`,
@@ -218,6 +248,8 @@ export async function DELETE(request) {
 
     const { error: updateError } = await query;
     if (updateError) throw updateError;
+
+    clearContractorsCache();
 
     return NextResponse.json({
       success: true,

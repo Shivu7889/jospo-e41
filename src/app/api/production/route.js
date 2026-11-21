@@ -4,7 +4,17 @@ import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
 import { normalizePlant, resolveModelManufacturingPlant, ALL_PLANTS_ID } from '@/lib/plants';
 
+import { clearStockCache } from '@/app/api/stock/route';
+
 export const dynamic = 'force-dynamic';
+
+// Server-side in-memory cache for production entries (TTL: 10s)
+const productionCache = new Map();
+const PRODUCTION_CACHE_TTL = 10 * 1000;
+
+export function clearProductionCache() {
+  productionCache.clear();
+}
 
 /**
  * Helper to determine if an entry was created / logged "today"
@@ -95,10 +105,21 @@ export async function GET(request) {
     const contractorParam = searchParams.get('contractor_name') || searchParams.get('thekedar');
     const modelIdParam = searchParams.get('model_id');
     const plantParam = searchParams.get('plant');
+    const forceRefresh = searchParams.get('refresh') === 'true';
 
     // Default to today unless specified or 'all' or date range given
     const todayStr = getTodayIST();
     const filterDate = startDateParam || endDateParam ? null : dateParam === null ? todayStr : dateParam === 'all' ? null : dateParam;
+
+    const cacheKey = `prod_${filterDate || 'all'}_${startDateParam || ''}_${endDateParam || ''}_${plantParam || 'all'}_${contractorParam || 'all'}_${modelIdParam || 'all'}`;
+    if (!forceRefresh && productionCache.has(cacheKey)) {
+      const cached = productionCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return NextResponse.json(cached.data, {
+          headers: { 'X-Cache': 'HIT' },
+        });
+      }
+    }
 
     const selectQuery = `
       id,
@@ -213,13 +234,21 @@ export async function GET(request) {
       );
     }
 
-    return NextResponse.json({
+    const resultPayload = {
       success: true,
       entries: normalizedEntries,
       count: normalizedEntries.length,
       contractors: Array.from(uniqueThekedarsSet).sort(),
       date: filterDate || (startDateParam && endDateParam ? `${startDateParam} to ${endDateParam}` : 'all'),
+    };
+
+    if (productionCache.size > 50) productionCache.clear();
+    productionCache.set(cacheKey, {
+      data: resultPayload,
+      expiresAt: Date.now() + PRODUCTION_CACHE_TTL,
     });
+
+    return NextResponse.json(resultPayload);
   } catch (error) {
     console.error('API /api/production GET error:', error);
     return NextResponse.json(
@@ -510,6 +539,9 @@ export async function POST(request) {
         employee_name: prodEntry.employees?.name || employee.name,
       });
     }
+
+    clearProductionCache();
+    clearStockCache();
 
     return NextResponse.json(
       {
@@ -831,6 +863,9 @@ export async function PATCH(request) {
         });
     }
 
+    clearProductionCache();
+    clearStockCache();
+
     return NextResponse.json({
       success: true,
       message: `Production entry updated successfully (+${newQuantity} units).`,
@@ -983,6 +1018,9 @@ export async function DELETE(request) {
     if (delErr) {
       throw new Error(delErr.message || 'Failed to delete production entry');
     }
+
+    clearProductionCache();
+    clearStockCache();
 
     const modelLabel = targetEntry.cooler_models?.code || 'Cooler';
     return NextResponse.json({

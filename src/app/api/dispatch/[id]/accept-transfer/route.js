@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
+import { clearStockCache } from '@/app/api/stock/route';
 import { resolveDispatchType, cleanDispatchRemarks } from '@/lib/dispatch';
 import {
   normalizePlant,
@@ -169,6 +170,8 @@ export async function POST(request, { params }) {
     }
 
     const totalQty = items.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
+
+    clearStockCache();
 
     return NextResponse.json(
       {
