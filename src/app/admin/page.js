@@ -20,6 +20,9 @@ export default function AdminPage() {
   const { employee, user } = useAuth();
   const { showToast } = useToast();
   const { activePlant, isOwner } = usePlant();
+  const isEnterpriseOwner = Boolean(
+    employee?.role === 'owner' || employee?.is_owner === true
+  );
   const supabase = getSupabase();
 
   // Active section tab: 'thekedars' | 'users' | 'adjustments' | 'system'
@@ -163,6 +166,14 @@ export default function AdminPage() {
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState('production');
+  const [employeeToDelete, setEmployeeToDelete] = useState(null);
+  const [deletingEmployee, setDeletingEmployee] = useState(false);
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [purgingEmployees, setPurgingEmployees] = useState(false);
+
+  const nonOwnerEmployeesCount = useMemo(() => {
+    return employees.filter((e) => e.id !== employee?.id && e.role !== 'owner').length;
+  }, [employees, employee]);
 
   // Stock Adjustment Form State
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -483,6 +494,49 @@ export default function AdminPage() {
       showToast(err.message || 'Failed to update plant assignment', 'error');
     } finally {
       setActionInProgress(null);
+    }
+  };
+
+  // Handle Delete Single Employee Profile (Owner only)
+  const handleConfirmDeleteEmployee = async () => {
+    if (!employeeToDelete) return;
+    try {
+      setDeletingEmployee(true);
+      const res = await fetch(`/api/admin/users?id=${encodeURIComponent(employeeToDelete.id)}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to delete employee profile');
+
+      showToast(json.message || `Deleted employee "${employeeToDelete.name}"`, 'success');
+      setEmployeeToDelete(null);
+      await fetchEmployees();
+    } catch (err) {
+      console.error('Error deleting employee:', err);
+      showToast(err.message || 'Error deleting employee', 'error');
+    } finally {
+      setDeletingEmployee(false);
+    }
+  };
+
+  // Handle Purge All Non-Owner Employees (Owner only)
+  const handleConfirmPurgeAll = async () => {
+    try {
+      setPurgingEmployees(true);
+      const res = await fetch('/api/admin/users?action=purge_all', {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to purge employees');
+
+      showToast(json.message || 'All non-owner employees successfully purged', 'success');
+      setShowPurgeModal(false);
+      await fetchEmployees();
+    } catch (err) {
+      console.error('Error purging employees:', err);
+      showToast(err.message || 'Error purging employees', 'error');
+    } finally {
+      setPurgingEmployees(false);
     }
   };
 
@@ -883,35 +937,82 @@ export default function AdminPage() {
         {/* SECTION 1: EMPLOYEE MANAGEMENT */}
         {activeSection === 'users' && (
           <div className="space-y-5 animate-fadeIn">
-            {/* Header & Add User Button */}
+            {/* Header & Add User / Purge Controls */}
             <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h3 className="text-sm font-bold text-gray-900">Registered Staff & Role Permissions</h3>
-                <p className="text-xs text-gray-500">
-                  Control who has access to production logging, dispatch loading, and system administrative tools.
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-sm font-bold text-gray-900">Registered Staff & Role Permissions</h3>
+                  {isEnterpriseOwner ? (
+                    <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full inline-flex items-center space-x-1">
+                      <span>👑</span>
+                      <span>Owner Only Access</span>
+                    </span>
+                  ) : (
+                    <span className="bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center space-x-1">
+                      <span>🔒</span>
+                      <span>Read Only Mode</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {isEnterpriseOwner
+                    ? 'Only you as the Enterprise Owner can create new staff, change roles, assign plants, or delete profiles.'
+                    : 'Employee account creation and modifications are strictly restricted to the Enterprise Owner.'}
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowAddUserModal(true)}
-                className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
-              >
-                <span>+</span>
-                <span>Add Employee Profile</span>
-              </button>
+              {isEnterpriseOwner ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {nonOwnerEmployeesCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowPurgeModal(true)}
+                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 text-xs py-2 px-3 rounded-lg inline-flex items-center space-x-1.5 shadow-xs font-bold transition-colors"
+                      title="Delete all non-owner employee accounts"
+                    >
+                      <span>🗑️</span>
+                      <span>Purge Non-Owners ({nonOwnerEmployeesCount})</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowAddUserModal(true)}
+                    className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm font-bold"
+                  >
+                    <span>+</span>
+                    <span>Add Employee Profile</span>
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg font-semibold inline-flex items-center space-x-1">
+                  <span>🔒</span>
+                  <span>Modifications restricted to Owner</span>
+                </span>
+              )}
             </div>
 
-            {/* Instruction Notice */}
-            <div className="bg-primary-50/60 border border-primary-200 rounded-xl p-3.5 text-xs text-primary-900 flex items-start space-x-3">
-              <span className="text-lg">ℹ️</span>
-              <div className="space-y-1">
-                <p className="font-semibold">How Employee Authentication Works:</p>
-                <p className="text-primary-800 leading-relaxed">
-                  In Jospo E41, login authentication is securely powered by Supabase Auth. When staff sign up or are invited via the Supabase dashboard, an Auth User ID (UUID) is generated. Adding their profile here links their name and role (<em>admin</em>, <em>production</em>, or <em>dispatch</em>) to their login.
-                </p>
+            {/* Instruction / Security Notice */}
+            {isEnterpriseOwner ? (
+              <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-3.5 text-xs text-purple-900 flex items-start space-x-3">
+                <span className="text-lg">👑</span>
+                <div className="space-y-1">
+                  <p className="font-semibold">Enterprise Owner Staff Authority:</p>
+                  <p className="text-purple-800 leading-relaxed">
+                    You have sole authority to manage system accounts. When you delete an employee, all their past production entries, dispatches, and ledger transactions are <strong>automatically reassigned to you</strong> so no historical audit logs are ever lost.
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-amber-50 border-l-4 border-amber-500 rounded-r-xl p-3.5 text-xs text-amber-900 flex items-start space-x-3">
+                <span className="text-xl">🔒</span>
+                <div className="space-y-1">
+                  <p className="font-bold">Staff Management is Locked to Enterprise Owner</p>
+                  <p className="text-amber-800 leading-relaxed">
+                    You are viewing the staff directory in read-only mode. Only the Enterprise Owner (<code>admin@jospo.com</code>) has administrative rights to create, edit, activate, or delete employee accounts.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Employees Table */}
             <div className="card p-0 overflow-hidden border border-gray-200">
@@ -953,12 +1054,15 @@ export default function AdminPage() {
                     <tbody className="divide-y divide-gray-100 bg-white">
                       {employees.map((emp) => {
                         const isSelf = emp.id === employee?.id;
+                        const isEmpOwner = emp.role === 'owner' || emp.is_owner === true;
                         return (
                           <tr key={emp.id} className="hover:bg-gray-50">
                             <td className="px-4 py-3">
                               <div className="flex items-center space-x-3">
-                                <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-xs">
-                                  {emp.name.charAt(0).toUpperCase()}
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                                  isEmpOwner ? 'bg-amber-100 text-amber-800' : 'bg-primary-100 text-primary-700'
+                                }`}>
+                                  {isEmpOwner ? '👑' : emp.name.charAt(0).toUpperCase()}
                                 </div>
                                 <div>
                                   <div className="font-semibold text-gray-900 flex items-center gap-1.5">
@@ -966,6 +1070,11 @@ export default function AdminPage() {
                                     {isSelf && (
                                       <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-1.5 py-0.5 rounded">
                                         You
+                                      </span>
+                                    )}
+                                    {isEmpOwner && !isSelf && (
+                                      <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded border border-amber-300">
+                                        Owner
                                       </span>
                                     )}
                                   </div>
@@ -976,11 +1085,11 @@ export default function AdminPage() {
 
                             {/* Assigned Plant selector / badge */}
                             <td className="px-4 py-3">
-                              {emp.role === 'owner' ? (
+                              {isEmpOwner ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300">
                                   <span>👑</span> All Plants (Owner)
                                 </span>
-                              ) : (
+                              ) : isEnterpriseOwner ? (
                                 <select
                                   value={emp.plant || DEFAULT_PLANT_ID}
                                   onChange={(e) => handleChangePlant(emp, e.target.value)}
@@ -994,30 +1103,50 @@ export default function AdminPage() {
                                   ))}
                                   <option value="ALL">🌐 ALL (All Plants)</option>
                                 </select>
+                              ) : (
+                                <span className="text-xs font-semibold px-2 py-1 bg-gray-100 text-gray-700 rounded-lg">
+                                  🏭 {emp.plant || DEFAULT_PLANT_ID}
+                                </span>
                               )}
                             </td>
 
-                            {/* Role selector dropdown */}
+                            {/* Role selector dropdown / badge */}
                             <td className="px-4 py-3">
-                              <select
-                                value={emp.role}
-                                onChange={(e) => handleChangeRole(emp, e.target.value)}
-                                disabled={actionInProgress === emp.id}
-                                className={`text-xs font-semibold rounded-lg px-2 py-1 border border-gray-300 focus:ring-1 focus:ring-primary-500 ${
-                                  emp.role === 'owner'
-                                    ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold'
-                                    : emp.role === 'admin'
-                                    ? 'bg-purple-50 text-purple-800 border-purple-200'
-                                    : emp.role === 'production'
-                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                }`}
-                              >
-                                <option value="production">Production</option>
-                                <option value="dispatch">Dispatch</option>
-                                <option value="admin">Admin</option>
-                                <option value="owner">👑 Owner</option>
-                              </select>
+                              {isEnterpriseOwner ? (
+                                <select
+                                  value={emp.role}
+                                  onChange={(e) => handleChangeRole(emp, e.target.value)}
+                                  disabled={actionInProgress === emp.id || isSelf}
+                                  className={`text-xs font-semibold rounded-lg px-2 py-1 border border-gray-300 focus:ring-1 focus:ring-primary-500 ${
+                                    emp.role === 'owner'
+                                      ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold'
+                                      : emp.role === 'admin'
+                                      ? 'bg-purple-50 text-purple-800 border-purple-200'
+                                      : emp.role === 'production'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                      : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  }`}
+                                >
+                                  <option value="production">Production</option>
+                                  <option value="dispatch">Dispatch</option>
+                                  <option value="admin">Admin</option>
+                                  <option value="owner">👑 Owner</option>
+                                </select>
+                              ) : (
+                                <span
+                                  className={`inline-block text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                                    emp.role === 'owner'
+                                      ? 'bg-amber-100 text-amber-900 border border-amber-300 font-bold'
+                                      : emp.role === 'admin'
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : emp.role === 'production'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-emerald-100 text-emerald-800'
+                                  }`}
+                                >
+                                  {emp.role === 'owner' ? '👑 Owner' : emp.role?.toUpperCase()}
+                                </span>
+                              )}
                             </td>
 
                             {/* Active/Inactive Badge */}
@@ -1036,21 +1165,42 @@ export default function AdminPage() {
                               </span>
                             </td>
 
-                            {/* Toggle Button */}
+                            {/* Actions Column */}
                             <td className="px-4 py-3 text-right">
-                              <button
-                                type="button"
-                                onClick={() => handleToggleActive(emp)}
-                                disabled={actionInProgress === emp.id || isSelf}
-                                className={`text-xs px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                                  emp.is_active
-                                    ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                                } ${isSelf ? 'opacity-40 cursor-not-allowed' : ''}`}
-                                title={isSelf ? 'Cannot deactivate self' : 'Toggle active state'}
-                              >
-                                {emp.is_active ? 'Deactivate' : 'Activate'}
-                              </button>
+                              {isEnterpriseOwner ? (
+                                <div className="flex items-center justify-end space-x-2">
+                                  {/* Toggle Active Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleActive(emp)}
+                                    disabled={actionInProgress === emp.id || isSelf}
+                                    className={`text-xs px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                                      emp.is_active
+                                        ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                    } ${isSelf ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                    title={isSelf ? 'Cannot deactivate self' : 'Toggle active state'}
+                                  >
+                                    {emp.is_active ? 'Deactivate' : 'Activate'}
+                                  </button>
+
+                                  {/* Delete Button (Owner only, cannot delete self or other owner) */}
+                                  {!isSelf && !isEmpOwner && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEmployeeToDelete(emp)}
+                                      disabled={actionInProgress === emp.id}
+                                      className="text-xs px-2.5 py-1 rounded-md font-bold text-red-600 hover:text-red-800 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors inline-flex items-center space-x-1"
+                                      title={`Delete ${emp.name}`}
+                                    >
+                                      <span>🗑️</span>
+                                      <span>Delete</span>
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-gray-400 font-medium">View Only</span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -1666,6 +1816,119 @@ export default function AdminPage() {
                   className="btn-danger text-xs py-2 px-4 shadow-sm"
                 >
                   {submittingAdjustment ? 'Applying...' : 'Confirm Adjustment'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CONFIRM SINGLE EMPLOYEE DELETION */}
+        {employeeToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
+            <div className="card max-w-md w-full p-6 shadow-2xl animate-scaleUp">
+              <div className="flex items-center space-x-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xl">
+                  🗑️
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">Delete Employee Profile</h3>
+                  <p className="text-xs text-red-600 font-semibold">Irreversible Account Removal</p>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 mb-4 text-xs space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Employee Name:</span>
+                  <span className="font-bold text-gray-900">{employeeToDelete.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Email Address:</span>
+                  <span className="font-mono text-gray-700">{employeeToDelete.email}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Role & Plant:</span>
+                  <span className="font-semibold text-gray-900 uppercase">
+                    {employeeToDelete.role} • {employeeToDelete.plant || 'E41 G2'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-900 mb-5 flex items-start space-x-2">
+                <span>🛡️</span>
+                <div>
+                  <p className="font-semibold">Audit Trail Safe Reassignment:</p>
+                  <p className="text-emerald-800 text-[11px] mt-0.5">
+                    Any past production entries, dispatch loading logs, and stock transactions created by this employee will be safely reassigned to your Owner account so zero data is lost.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setEmployeeToDelete(null)}
+                  disabled={deletingEmployee}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteEmployee}
+                  disabled={deletingEmployee}
+                  className="btn-danger text-xs py-2 px-4 shadow-sm font-bold bg-red-600 hover:bg-red-700 text-white"
+                >
+                  {deletingEmployee ? 'Deleting...' : 'Yes, Delete Employee'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: PURGE ALL NON-OWNER EMPLOYEES */}
+        {showPurgeModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
+            <div className="card max-w-lg w-full p-6 shadow-2xl animate-scaleUp">
+              <div className="flex items-center space-x-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xl">
+                  ⚠️
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">Purge All Non-Owner Staff</h3>
+                  <p className="text-xs text-red-600 font-semibold">Bulk Account Removal</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-700 mb-3 leading-relaxed">
+                Are you sure you want to remove all <strong>{nonOwnerEmployeesCount}</strong> employee profile(s) from the system?
+              </p>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs space-y-2">
+                <p className="font-bold text-amber-900">What happens when you confirm:</p>
+                <ul className="list-disc list-inside space-y-1 text-amber-800 text-[11px]">
+                  <li>All non-owner employee accounts will be permanently deleted from the database.</li>
+                  <li>Their Supabase Auth credentials will be revoked (they will not be able to log in).</li>
+                  <li>All historical production entries, dispatches, and ledger transactions will be reassigned to your Owner account.</li>
+                  <li>Only your Owner profile (<code>{employee?.email}</code>) will remain active.</li>
+                </ul>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setShowPurgeModal(false)}
+                  disabled={purgingEmployees}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmPurgeAll}
+                  disabled={purgingEmployees}
+                  className="btn-danger text-xs py-2 px-4 shadow-sm font-bold bg-red-600 hover:bg-red-700 text-white"
+                >
+                  {purgingEmployees ? 'Purging All Employees...' : `Yes, Purge ${nonOwnerEmployeesCount} Staff`}
                 </button>
               </div>
             </div>

@@ -27,12 +27,21 @@ export async function GET(request) {
   }
 }
 
-// POST: Add or link employee profile (supports 1-step creation or manual UUID, with upsert protection)
+// POST: Add or link employee profile (strictly restricted to Enterprise Owner)
 export async function POST(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner'] });
     if (auth.error) return auth.error;
-    const { supabase } = auth;
+    const { supabase, employee } = auth;
+
+    const isOwner = employee?.role === 'owner' || employee?.is_owner === true;
+    if (!isOwner) {
+      return NextResponse.json(
+        { error: 'Access denied: Only the Enterprise Owner can create new employee profiles.' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
 
     const { id, name, email, role, plant = 'E41 G2', password, is_active = true } = body;
@@ -223,17 +232,40 @@ export async function POST(request) {
   }
 }
 
-// PATCH: Toggle active status or update role/name/plant
+// PATCH: Toggle active status or update role/name/plant (strictly restricted to Enterprise Owner)
 export async function PATCH(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner'] });
     if (auth.error) return auth.error;
-    const { supabase } = auth;
+    const { supabase, employee } = auth;
+
+    const isOwner = employee?.role === 'owner' || employee?.is_owner === true;
+    if (!isOwner) {
+      return NextResponse.json(
+        { error: 'Access denied: Only the Enterprise Owner can modify employee profiles.' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const { id, is_active, role, name, plant } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'Employee ID is required' }, { status: 400 });
+    }
+
+    // Protect active Owner account from accidental lockout
+    if (id === employee.id && is_active === false) {
+      return NextResponse.json(
+        { error: 'Cannot deactivate the active Enterprise Owner account.' },
+        { status: 400 }
+      );
+    }
+    if (id === employee.id && role && role !== 'owner') {
+      return NextResponse.json(
+        { error: 'Cannot change the Enterprise Owner role from your own account.' },
+        { status: 400 }
+      );
     }
 
     const updateFields = { updated_at: new Date().toISOString() };
@@ -274,5 +306,223 @@ export async function PATCH(request) {
   } catch (err) {
     console.error('API /admin/users PATCH error:', err);
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+// DELETE: Delete a single employee profile or purge all non-owner employees (Owner only)
+export async function DELETE(request) {
+  try {
+    const auth = await authenticateRequest({ allowedRoles: ['owner'] });
+    if (auth.error) return auth.error;
+    const { supabase, employee } = auth;
+
+    const isOwner = employee?.role === 'owner' || employee?.is_owner === true;
+    if (!isOwner) {
+      return NextResponse.json(
+        { error: 'Access denied: Only the Enterprise Owner can delete employee profiles.' },
+        { status: 403 }
+      );
+    }
+
+    const ownerId = employee.id;
+    const adminSupabase = createAdminSupabase();
+    const db = adminSupabase || supabase;
+
+    const { searchParams } = new URL(request.url);
+    let action = searchParams.get('action');
+    let targetId = searchParams.get('id');
+
+    if (!targetId && !action) {
+      try {
+        const body = await request.json();
+        if (body?.id) targetId = body.id;
+        if (body?.action) action = body.action;
+      } catch (e) {
+        // Request body might be empty
+      }
+    }
+
+    // ACTION 1: PURGE ALL NON-OWNER EMPLOYEES
+    if (action === 'purge_all' || action === 'purge_non_owners') {
+      const { data: nonOwners, error: listErr } = await db
+        .from('employees')
+        .select('id, name, email, role')
+        .neq('id', ownerId)
+        .neq('role', 'owner');
+
+      if (listErr) {
+        return NextResponse.json({ error: listErr.message }, { status: 400 });
+      }
+
+      const nonOwnerIds = (nonOwners || []).map((e) => e.id);
+
+      if (nonOwnerIds.length === 0) {
+        return NextResponse.json({
+          success: true,
+          message: 'No non-owner employees found to purge. Only the Enterprise Owner currently exists.',
+          purgedCount: 0,
+        });
+      }
+
+      // 1. Reassign historical foreign key records to Owner to preserve ledger audit trail
+      await db
+        .from('production_entries')
+        .update({ employee_id: ownerId })
+        .in('employee_id', nonOwnerIds);
+
+      await db
+        .from('dispatches')
+        .update({ employee_id: ownerId })
+        .in('employee_id', nonOwnerIds);
+
+      await db
+        .from('dispatches')
+        .update({ cancelled_by: ownerId })
+        .in('cancelled_by', nonOwnerIds);
+
+      try {
+        await db
+          .from('dispatches')
+          .update({ received_by: ownerId })
+          .in('received_by', nonOwnerIds);
+      } catch (e) {
+        // Column might not exist in older migrations
+      }
+
+      await db
+        .from('stock_transactions')
+        .update({ employee_id: ownerId })
+        .in('employee_id', nonOwnerIds);
+
+      // 2. Delete non-owner profiles from public.employees
+      const { error: delErr } = await db
+        .from('employees')
+        .delete()
+        .in('id', nonOwnerIds);
+
+      if (delErr) {
+        return NextResponse.json({ error: delErr.message }, { status: 400 });
+      }
+
+      // 3. Delete auth logins via Admin client if available
+      let deletedAuthCount = 0;
+      if (adminSupabase) {
+        for (const uid of nonOwnerIds) {
+          try {
+            await adminSupabase.auth.admin.deleteUser(uid);
+            deletedAuthCount++;
+          } catch (authDelErr) {
+            console.warn(`Could not delete auth user ${uid}:`, authDelErr.message);
+          }
+        }
+      }
+
+      clearAuthCache();
+
+      return NextResponse.json({
+        success: true,
+        message: `Successfully purged ${nonOwnerIds.length} employee account(s). All historical production & dispatch records preserved and reassigned to Owner.`,
+        purgedCount: nonOwnerIds.length,
+        deletedAuthCount,
+      });
+    }
+
+    // ACTION 2: DELETE INDIVIDUAL EMPLOYEE
+    if (!targetId) {
+      return NextResponse.json(
+        { error: 'Employee ID or action=purge_all is required for deletion.' },
+        { status: 400 }
+      );
+    }
+
+    if (targetId === ownerId) {
+      return NextResponse.json(
+        { error: 'You cannot delete your own Owner account.' },
+        { status: 400 }
+      );
+    }
+
+    const { data: targetEmp, error: fetchErr } = await db
+      .from('employees')
+      .select('id, name, email, role')
+      .eq('id', targetId)
+      .maybeSingle();
+
+    if (fetchErr) {
+      return NextResponse.json({ error: fetchErr.message }, { status: 400 });
+    }
+
+    if (!targetEmp) {
+      return NextResponse.json({ error: 'Employee profile not found.' }, { status: 404 });
+    }
+
+    if (targetEmp.role === 'owner') {
+      return NextResponse.json(
+        { error: 'Cannot delete an Enterprise Owner profile.' },
+        { status: 400 }
+      );
+    }
+
+    // 1. Reassign FK records to Owner
+    await db
+      .from('production_entries')
+      .update({ employee_id: ownerId })
+      .eq('employee_id', targetId);
+
+    await db
+      .from('dispatches')
+      .update({ employee_id: ownerId })
+      .eq('employee_id', targetId);
+
+    await db
+      .from('dispatches')
+      .update({ cancelled_by: ownerId })
+      .eq('cancelled_by', targetId);
+
+    try {
+      await db
+        .from('dispatches')
+        .update({ received_by: ownerId })
+        .eq('received_by', targetId);
+    } catch (e) {
+      // Column might not exist in older migrations
+    }
+
+    await db
+      .from('stock_transactions')
+      .update({ employee_id: ownerId })
+      .eq('employee_id', targetId);
+
+    // 2. Delete from public.employees
+    const { error: delErr } = await db
+      .from('employees')
+      .delete()
+      .eq('id', targetId);
+
+    if (delErr) {
+      return NextResponse.json({ error: delErr.message }, { status: 400 });
+    }
+
+    // 3. Delete from Supabase Auth
+    if (adminSupabase) {
+      try {
+        await adminSupabase.auth.admin.deleteUser(targetId);
+      } catch (authDelErr) {
+        console.warn(`Could not delete auth user ${targetId}:`, authDelErr.message);
+      }
+    }
+
+    clearAuthCache(targetId);
+
+    return NextResponse.json({
+      success: true,
+      message: `Employee "${targetEmp.name}" (${targetEmp.email}) has been permanently deleted. Historical entries reassigned to Owner.`,
+    });
+  } catch (err) {
+    console.error('API /admin/users DELETE error:', err);
+    return NextResponse.json(
+      { error: err.message || 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
