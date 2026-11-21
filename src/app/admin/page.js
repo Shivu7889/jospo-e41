@@ -359,6 +359,11 @@ export default function AdminPage() {
           });
 
           if (signUpErr) {
+            if (signUpErr.message?.toLowerCase().includes('rate limit')) {
+              throw new Error(
+                'Supabase Email Rate Limit Exceeded (Free tier limits public signups to ~3 per hour). Solution: 1) Switch to the "🔗 Link Existing UUID" tab above and create the user directly in Supabase Dashboard with zero rate limit, or 2) Add SUPABASE_SERVICE_ROLE_KEY to .env.local on your server.'
+              );
+            }
             throw new Error(`Failed to create login credentials: ${signUpErr.message}`);
           }
 
@@ -1675,8 +1680,11 @@ export default function AdminPage() {
                       className="input-field text-xs bg-white font-mono"
                     />
                     <p className="text-[11px] text-gray-500 mt-1">
-                      Login credentials and employee profile will be generated instantly in Supabase Auth.
+                      Login credentials and employee profile will be generated in Supabase Auth.
                     </p>
+                    <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-2 text-[11px] text-blue-900">
+                      💡 <strong>Rate Limit Tip:</strong> If you see &quot;email rate limit exceeded&quot;, switch to <strong>&quot;🔗 Link Existing UUID&quot;</strong> above. It has zero rate limits!
+                    </div>
                   </div>
                 ) : (
                   <div>
@@ -1692,9 +1700,14 @@ export default function AdminPage() {
                       onChange={(e) => setNewUserId(e.target.value)}
                       className="input-field font-mono text-xs bg-white"
                     />
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Copy the UUID from Supabase Auth dashboard after user registers or is invited.
-                    </p>
+                    <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-[11px] text-emerald-900 space-y-1">
+                      <p className="font-bold">⚡ Zero Rate Limit Method (Fast &amp; Unlimited):</p>
+                      <ol className="list-decimal list-inside space-y-0.5 text-emerald-800">
+                        <li>Open <strong>Supabase Dashboard → Authentication → Users</strong></li>
+                        <li>Click <strong>&quot;Add User&quot; → &quot;Create user&quot;</strong> (enter email &amp; password)</li>
+                        <li>Copy the generated <strong>User UID</strong> and paste it here!</li>
+                      </ol>
+                    </div>
                   </div>
                 )}
 
