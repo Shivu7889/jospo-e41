@@ -378,7 +378,7 @@ export default function AdminPage() {
         }
       }
 
-      showToast(`Employee ${newUserName} added successfully!`, 'success');
+      showToast(json?.message || `Employee ${newUserName} saved successfully!`, 'success');
       setShowAddUserModal(false);
       setNewUserId('');
       setNewUserName('');

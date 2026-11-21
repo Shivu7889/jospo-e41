@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequest, clearAuthCache } from '@/lib/auth';
 import { createAdminSupabase } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
@@ -27,7 +27,7 @@ export async function GET(request) {
   }
 }
 
-// POST: Add new employee profile (supports 1-step creation with password or manual UUID)
+// POST: Add or link employee profile (supports 1-step creation or manual UUID, with upsert protection)
 export async function POST(request) {
   try {
     const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
@@ -51,6 +51,7 @@ export async function POST(request) {
       );
     }
 
+    const cleanEmail = email.trim().toLowerCase();
     let authUserId = id ? id.trim() : null;
 
     // 1-Step Creation: If password is provided, create the login user via Admin API
@@ -74,7 +75,7 @@ export async function POST(request) {
       }
 
       const { data: authUser, error: authCreateErr } = await adminSupabase.auth.admin.createUser({
-        email: email.trim().toLowerCase(),
+        email: cleanEmail,
         password: password,
         email_confirm: true,
         user_metadata: { name: name.trim(), role, plant },
@@ -87,7 +88,7 @@ export async function POST(request) {
         );
       }
 
-      authUserId = authUser.user.id;
+      authUserId = authUser?.user?.id;
     }
 
     // Require ID (auth user UUID) if not created via password
@@ -101,21 +102,90 @@ export async function POST(request) {
       );
     }
 
-    // Insert into employees table
+    // 1. Check if employee profile already exists with this ID (Prevents "employees_pkey" duplicate key error)
+    const { data: existingById } = await supabase
+      .from('employees')
+      .select('id, name, email, role, plant, is_active')
+      .eq('id', authUserId)
+      .maybeSingle();
+
+    if (existingById) {
+      // Profile already exists for this auth user: update details and ensure is_active
+      const updateData = {
+        name: name.trim(),
+        email: cleanEmail,
+        role,
+        plant: role === 'owner' ? 'ALL' : plant,
+        is_active: is_active !== undefined ? is_active : true,
+        updated_at: new Date().toISOString(),
+      };
+
+      let { data: updated, error: updateErr } = await supabase
+        .from('employees')
+        .update(updateData)
+        .eq('id', authUserId)
+        .select()
+        .single();
+
+      if (updateErr && (updateErr.message?.includes('plant') || updateErr.code === 'PGRST204')) {
+        delete updateData.plant;
+        const retryUpdate = await supabase
+          .from('employees')
+          .update(updateData)
+          .eq('id', authUserId)
+          .select()
+          .single();
+        updated = retryUpdate.data;
+        updateErr = retryUpdate.error;
+      }
+
+      if (updateErr) {
+        return NextResponse.json({ error: updateErr.message }, { status: 400 });
+      }
+
+      clearAuthCache(authUserId);
+
+      return NextResponse.json(
+        {
+          success: true,
+          message: `Employee profile for "${name.trim()}" already existed and was updated successfully.`,
+          data: updated,
+        },
+        { status: 200 }
+      );
+    }
+
+    // 2. Check if another employee already has this email
+    const { data: existingByEmail } = await supabase
+      .from('employees')
+      .select('id, name, email, role, plant, is_active')
+      .ilike('email', cleanEmail)
+      .maybeSingle();
+
+    if (existingByEmail && existingByEmail.id !== authUserId) {
+      return NextResponse.json(
+        {
+          error: `An employee profile with email "${cleanEmail}" already exists (Name: "${existingByEmail.name}", Role: "${existingByEmail.role}"). Please edit the existing employee profile or use a different email.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 3. Insert or Upsert into employees table
     const insertPayload = {
       id: authUserId,
       name: name.trim(),
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       role,
       plant: role === 'owner' ? 'ALL' : plant,
-      is_active,
+      is_active: is_active !== undefined ? is_active : true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
     let { data, error } = await supabase
       .from('employees')
-      .insert(insertPayload)
+      .upsert(insertPayload, { onConflict: 'id' })
       .select()
       .single();
 
@@ -124,7 +194,7 @@ export async function POST(request) {
       delete insertPayload.plant;
       const retryResult = await supabase
         .from('employees')
-        .insert(insertPayload)
+        .upsert(insertPayload, { onConflict: 'id' })
         .select()
         .single();
       data = retryResult.data;
@@ -132,8 +202,16 @@ export async function POST(request) {
     }
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      let friendlyError = error.message;
+      if (error.code === '23505' || error.message?.includes('employees_pkey')) {
+        friendlyError = `An employee profile with User ID "${authUserId}" already exists.`;
+      } else if (error.message?.includes('employees_email_key')) {
+        friendlyError = `An employee profile with email "${cleanEmail}" already exists.`;
+      }
+      return NextResponse.json({ error: friendlyError }, { status: 400 });
     }
+
+    clearAuthCache(authUserId);
 
     return NextResponse.json(
       { success: true, message: 'Employee profile created successfully', data },
@@ -186,6 +264,8 @@ export async function PATCH(request) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
+
+    clearAuthCache(id);
 
     return NextResponse.json(
       { success: true, message: 'Employee updated successfully', data },
