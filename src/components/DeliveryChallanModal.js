@@ -34,7 +34,8 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
     byPlantSummary[p] = (byPlantSummary[p] || 0) + (Number(item.quantity) || 0);
   });
 
-  const challanNo = `JSP-DC-${(dispatch.id || '').slice(0, 8).toUpperCase()}`;
+  const plantName = dispatch.from_location || 'E41 G2';
+  const challanNo = `MSA-DC-${(dispatch.id || '').slice(0, 8).toUpperCase()}`;
 
   const handlePrint = () => {
     window.print();
@@ -93,13 +94,22 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
         <div className="border-2 border-gray-900 p-6 rounded-lg text-gray-900 text-xs font-sans print:border-2 print:border-black print:p-6 print:rounded-none">
           {/* Header */}
           <div className="text-center border-b-2 border-gray-900 pb-3 mb-4">
-            <h1 className="text-xl font-extrabold uppercase tracking-wide">
-              JOSPO APPLIANCES PRIVATE LIMITED
+            <h1 className="text-2xl font-black uppercase tracking-wider text-gray-950">
+              MS APPLIANCES
             </h1>
-            <p className="text-[11px] text-gray-600 font-medium">
-              E41 • D4 • C116 Manufacturing Facilities • Customer Care: support@jospo.com
+            <p className="text-xs text-gray-800 font-semibold mt-1">
+              Plot no - {plantName}, salarpur kharithal tijara rajasthan 301018
             </p>
-            <div className="mt-2 inline-block px-4 py-1 bg-gray-900 text-white font-bold text-xs uppercase tracking-wider rounded print:bg-black print:text-white">
+            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-800 font-medium mt-1">
+              <span>
+                <strong>Mobile number:</strong> 9755314500, 9784646313
+              </span>
+              <span>•</span>
+              <span>
+                <strong>GSTIN:</strong> <span className="font-mono font-bold tracking-wider">08AJRPG3529Q1ZG</span>
+              </span>
+            </div>
+            <div className="mt-2.5 inline-block px-4 py-1 bg-gray-900 text-white font-bold text-xs uppercase tracking-wider rounded print:bg-black print:text-white">
               {typeMeta.type === 'local'
                 ? 'INTER-PLANT STOCK TRANSFER CHALLAN / VEHICLE GATE PASS'
                 : isCoLoad
@@ -126,7 +136,7 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               <p className="text-[11px] text-gray-600 mt-1.5">Dispatch Date:</p>
               <p className="font-bold text-gray-900">{dispatch.dispatch_date || 'N/A'}</p>
               <p className="text-[11px] text-gray-600 mt-1.5">Origin Factory:</p>
-              <p className="font-semibold text-gray-900">{dispatch.from_location || 'Jospo Factory'}</p>
+              <p className="font-semibold text-gray-900">{plantName} (MS Appliances)</p>
             </div>
             <div>
               <p className="text-[11px] text-gray-600">Vehicle / Truck No:</p>
@@ -231,7 +241,7 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
 
           {/* Official Undertaking */}
           <div className="text-[10px] text-gray-500 border-t border-gray-200 pt-2 mb-6">
-            Certified that the above mentioned items have been thoroughly inspected, tested, and dispatched in sound condition in sealed export cartons. Driver must verify total count before leaving factory premises.
+            Certified that the above mentioned items have been thoroughly inspected, tested, and dispatched in sound condition in sealed export cartons from MS Appliances. Driver must verify total count before leaving factory premises.
           </div>
 
           {/* Signature Blocks */}
@@ -252,7 +262,10 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
                 </div>
                 <div className="flex-1 min-w-[90px]">
                   <div className="h-10"></div>
-                  <div className="border-t border-gray-700 pt-1 font-semibold">Security Gate Pass</div>
+                  <div className="border-t border-gray-700 pt-1 font-semibold">
+                    For MS APPLIANCES<br />
+                    <span className="text-[9px] text-gray-500 font-normal">(Authorized Signatory)</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -264,7 +277,10 @@ export default function DeliveryChallanModal({ dispatch, onClose }) {
               </div>
               <div>
                 <div className="h-10"></div>
-                <div className="border-t border-gray-700 pt-1 font-semibold">Authorized Signatory</div>
+                <div className="border-t border-gray-700 pt-1 font-semibold">
+                  For MS APPLIANCES<br />
+                  <span className="text-[9px] text-gray-500 font-normal">(Authorized Signatory)</span>
+                </div>
               </div>
               <div>
                 <div className="h-10"></div>
