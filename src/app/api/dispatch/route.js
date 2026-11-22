@@ -91,6 +91,7 @@ export async function POST(request) {
       next_loading_plant = null,
       items = [],
       auto_confirm = false,
+      plan_id = null,
     } = body;
 
     const normalizedType = dispatch_type === 'local' ? 'local' : 'party';
@@ -175,6 +176,7 @@ export async function POST(request) {
       is_coloading: isCoLoad,
       next_loading_plant: nextPlant,
       coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
+      ...(plan_id ? { plan_id } : {}),
     };
 
     let { data: dispatchRecord, error: dispatchError } = await supabase
@@ -183,16 +185,18 @@ export async function POST(request) {
       .select()
       .single();
 
-    // Fallback if destination_plant, is_coloading, etc. column does not exist yet in Supabase schema cache
+    // Fallback if destination_plant, plan_id, is_coloading, etc. column does not exist yet in Supabase schema cache
     if (
       dispatchError &&
       (dispatchError.message?.includes('destination_plant') ||
+        dispatchError.message?.includes('plan_id') ||
         dispatchError.message?.includes('transfer_status') ||
         dispatchError.message?.includes('is_coloading') ||
         dispatchError.message?.includes('next_loading_plant') ||
         dispatchError.message?.includes('coloading_status') ||
         dispatchError.code === 'PGRST204')
     ) {
+      delete insertPayload.plan_id;
       delete insertPayload.destination_plant;
       delete insertPayload.transfer_status;
       delete insertPayload.is_coloading;
@@ -284,6 +288,23 @@ export async function POST(request) {
 
       dispatchRecord.status = 'confirmed';
       clearStockCache();
+    }
+
+    // 5.5 If linked to a dispatch plan, mark plan completed and link dispatch
+    if (plan_id) {
+      try {
+        const adminDb = createAdminSupabase() || supabase;
+        await adminDb
+          .from('dispatch_plans')
+          .update({
+            status: 'completed',
+            linked_dispatch_id: dispatchRecord.id,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', plan_id);
+      } catch (planErr) {
+        console.warn('Could not update dispatch_plans for plan_id:', plan_id, planErr);
+      }
     }
 
     // 6. Return response

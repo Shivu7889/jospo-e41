@@ -27,6 +27,12 @@ const NAV_ITEMS = [
     roles: ['owner', 'admin', 'dispatch'],
   },
   {
+    label: 'Planning',
+    href: '/planning',
+    icon: '🗓️',
+    roles: ['owner', 'admin', 'dispatch'],
+  },
+  {
     label: 'Stock',
     href: '/stock',
     icon: '📋',

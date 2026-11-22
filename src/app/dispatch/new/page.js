@@ -147,6 +147,74 @@ function NewDispatchContent() {
   const [dispatchDate, setDispatchDate] = useState(todayStr);
   const [remarks, setRemarks] = useState('');
 
+  // Owner Planning Integration State
+  const planIdParam = searchParams.get('plan_id');
+  const vehicleParam = searchParams.get('vehicle');
+  const destParam = searchParams.get('destination');
+  const plantParam = searchParams.get('plant');
+  const typeParam = searchParams.get('type');
+
+  const [linkedPlanId, setLinkedPlanId] = useState(planIdParam || null);
+  const [activePlanData, setActivePlanData] = useState(null);
+  const [todayPlans, setTodayPlans] = useState([]);
+  const [loadingTodayPlans, setLoadingTodayPlans] = useState(false);
+
+  // 1. Fetch today's pending plans for active plant
+  useEffect(() => {
+    async function loadTodayPlans() {
+      if (editId) return;
+      try {
+        setLoadingTodayPlans(true);
+        const pParam = activePlant === ALL_PLANTS_ID ? 'ALL' : encodeURIComponent(activePlant);
+        const res = await fetch(`/api/planning?date=${todayStr}&plant=${pParam}&status=pending`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.plans)) {
+          setTodayPlans(data.plans);
+        }
+      } catch (err) {
+        console.warn('Could not load today plans:', err);
+      } finally {
+        setLoadingTodayPlans(false);
+      }
+    }
+    loadTodayPlans();
+  }, [todayStr, activePlant, editId]);
+
+  // 2. If plan_id or URL parameters are passed, apply them immediately
+  useEffect(() => {
+    if (planIdParam) {
+      setLinkedPlanId(planIdParam);
+      if (vehicleParam) setVehicleNumber(decodeURIComponent(vehicleParam).toUpperCase());
+      if (destParam) setDestination(decodeURIComponent(destParam));
+      if (plantParam) setFromLocation(normalizePlant(decodeURIComponent(plantParam)));
+      if (typeParam) setDispatchType(decodeURIComponent(typeParam));
+
+      fetch('/api/planning?date=ALL&status=all')
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success && Array.isArray(data.plans)) {
+            const match = data.plans.find((p) => p.id === planIdParam);
+            if (match) setActivePlanData(match);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [planIdParam, vehicleParam, destParam, plantParam, typeParam]);
+
+  // Handler to select a plan from today's plans list
+  const handleSelectPlan = (plan) => {
+    setLinkedPlanId(plan.id);
+    setActivePlanData(plan);
+    setVehicleNumber(plan.vehicle_number || '');
+    setDestination(plan.destination || '');
+    setFromLocation(normalizePlant(plan.plant || 'E41 G2'));
+    setDispatchType(plan.dispatch_type || 'party');
+    if (plan.notes) {
+      setRemarks((prev) => (prev ? `${prev} | Plan: ${plan.notes}` : `Plan: ${plan.notes}`));
+    }
+    showToast(`Loaded plan for vehicle ${plan.vehicle_number}!`, 'success');
+  };
+
   // Multi-Plant Co-Loading State (Shared Vehicle)
   const [isCoLoading, setIsCoLoading] = useState(false);
   const [nextLoadingPlant, setNextLoadingPlant] = useState(
@@ -1470,6 +1538,7 @@ function NewDispatchContent() {
           remarks: getCompiledRemarks(),
           status: 'draft',
           employee_id: employee.id,
+          ...(linkedPlanId ? { plan_id: linkedPlanId } : {}),
         };
 
         let { data: newDispatch, error: insertError } = await supabase
@@ -1481,6 +1550,7 @@ function NewDispatchContent() {
         if (
           insertError &&
           (insertError.message?.includes('destination_plant') ||
+            insertError.message?.includes('plan_id') ||
             insertError.message?.includes('transfer_status') ||
             insertError.message?.includes('dispatch_type') ||
             insertError.message?.includes('is_coloading') ||
@@ -1488,6 +1558,7 @@ function NewDispatchContent() {
             insertError.message?.includes('coloading_status') ||
             insertError.code === 'PGRST204')
         ) {
+          delete insertPayload.plan_id;
           delete insertPayload.destination_plant;
           delete insertPayload.transfer_status;
           delete insertPayload.dispatch_type;
@@ -1548,6 +1619,23 @@ function NewDispatchContent() {
           localStorage.removeItem(DISPATCH_DRAFT_KEY);
         }
       } catch (e) {}
+
+      // Sync linked plan status to completed
+      if (linkedPlanId) {
+        try {
+          await fetch('/api/planning', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: linkedPlanId,
+              status: 'completed',
+              linked_dispatch_id: targetDispatchId,
+            }),
+          });
+        } catch (planSyncErr) {
+          console.warn('Could not sync plan status to completed:', planSyncErr);
+        }
+      }
 
       // Success screen
       setSubmissionSuccess({
@@ -1793,6 +1881,92 @@ function NewDispatchContent() {
       {/* STEP 1: VEHICLE DETAILS */}
       {currentStep === 1 && (
         <div className="card space-y-5 animate-fadeIn">
+          {/* Today's Owner Dispatch Plans Banner */}
+          {todayPlans.length > 0 && !editId && (
+            <div className="bg-gradient-to-r from-indigo-50/80 to-blue-50/80 border-2 border-indigo-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">📋</span>
+                  <div>
+                    <h3 className="font-extrabold text-xs sm:text-sm text-indigo-950">
+                      Owner Planned Dispatches for Today ({todayPlans.length} Available)
+                    </h3>
+                    <p className="text-[11px] text-indigo-700">
+                      Click any vehicle plan to auto-fill route details &amp; track model checklist:
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/planning"
+                  className="text-xs text-indigo-700 hover:text-indigo-900 font-bold underline whitespace-nowrap pl-2"
+                >
+                  Manage Plans →
+                </Link>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {todayPlans.map((plan) => {
+                  const isSelected = linkedPlanId === plan.id;
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => handleSelectPlan(plan)}
+                      className={`p-3 rounded-xl border text-left transition-all relative ${
+                        isSelected
+                          ? 'bg-white border-indigo-600 ring-2 ring-indigo-500 shadow-sm'
+                          : 'bg-white border-indigo-100 hover:border-indigo-300 hover:shadow-xs'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-extrabold text-xs sm:text-sm text-gray-900">
+                          {plan.vehicle_number}
+                        </span>
+                        {plan.priority === 'urgent' && (
+                          <span className="text-[9px] font-extrabold bg-rose-600 text-white px-1.5 py-0.5 rounded">
+                            URGENT
+                          </span>
+                        )}
+                        {isSelected && (
+                          <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                            ✓ ACTIVE
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-800 font-bold truncate mt-1">
+                        {plan.destination}
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-gray-500 mt-2 pt-2 border-t border-gray-100">
+                        <span>🏭 {plan.plant}</span>
+                        <span className="font-extrabold text-indigo-700">
+                          {plan.total_planned_quantity} units
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {linkedPlanId && (
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-indigo-200/60">
+                  <span className="text-emerald-800 font-semibold">
+                    ✓ Route &amp; model checklist synced with plan <strong>{vehicleNumber}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkedPlanId(null);
+                      setActivePlanData(null);
+                    }}
+                    className="text-gray-500 hover:text-rose-600 text-[11px] underline"
+                  >
+                    Unlink Plan (Manual Entry)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="border-b border-gray-100 pb-3 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Step 1: Vehicle & Route Information</h2>
@@ -2162,6 +2336,95 @@ function NewDispatchContent() {
               </button>
             </div>
           </div>
+
+          {/* OWNER DISPATCH PLAN CHECKLIST (Plan vs Actual Progress) */}
+          {activePlanData && Array.isArray(activePlanData.dispatch_plan_items) && activePlanData.dispatch_plan_items.length > 0 && (
+            <div className="bg-white border-2 border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-gray-100 pb-2.5">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">🎯</span>
+                  <div>
+                    <h3 className="font-extrabold text-sm sm:text-base text-gray-900">
+                      Owner Planned Checklist: {activePlanData.vehicle_number}
+                    </h3>
+                    <p className="text-[11px] text-gray-500">
+                      Target cooler model quantities scheduled for this vehicle
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 self-start sm:self-auto">
+                  <span className="text-xs font-bold text-gray-600">Total Loaded:</span>
+                  <span className="text-sm font-extrabold text-indigo-700 bg-indigo-50 px-2.5 py-0.5 rounded-lg border border-indigo-200">
+                    {totalQuantity} / {activePlanData.total_planned_quantity || activePlanData.dispatch_plan_items.reduce((acc, it) => acc + Number(it.planned_quantity || 0), 0)} pcs
+                  </span>
+                </div>
+              </div>
+
+              {/* Model Progress Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {activePlanData.dispatch_plan_items.map((planItem) => {
+                  const targetQty = Number(planItem.planned_quantity || 0);
+                  const currentItem = items.find((i) => i.model_id === planItem.model_id);
+                  const loadedQty = currentItem ? Number(currentItem.quantity || 0) : 0;
+                  const isDone = loadedQty >= targetQty;
+                  const isOver = loadedQty > targetQty;
+                  const percent = targetQty > 0 ? Math.min(100, Math.round((loadedQty / targetQty) * 100)) : 0;
+
+                  return (
+                    <div
+                      key={planItem.id}
+                      className={`p-3 rounded-xl border transition-all ${
+                        isOver
+                          ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-300'
+                          : isDone
+                          ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-300'
+                          : loadedQty > 0
+                          ? 'bg-blue-50/50 border-blue-200'
+                          : 'bg-gray-50/80 border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-bold text-xs text-gray-900 bg-white px-1.5 py-0.5 rounded border border-gray-200">
+                          {planItem.cooler_models?.code || 'MODEL'}
+                        </span>
+                        <span
+                          className={`text-xs font-extrabold ${
+                            isDone ? 'text-emerald-700' : 'text-gray-800'
+                          }`}
+                        >
+                          {loadedQty} / {targetQty} pcs
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-700 font-semibold truncate mt-1">
+                        {planItem.cooler_models?.name || 'Cooler Model'}
+                      </div>
+                      {/* Progress Bar */}
+                      <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden mt-2">
+                        <div
+                          className={`h-2 rounded-full transition-all duration-300 ${
+                            isDone ? 'bg-emerald-500' : 'bg-indigo-600'
+                          }`}
+                          style={{ width: `${percent}%` }}
+                        />
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                        {isOver ? (
+                          <span className="text-amber-700 font-bold">⚠️ +{loadedQty - targetQty} extra!</span>
+                        ) : isDone ? (
+                          <span className="text-emerald-700 font-bold">✅ Target Met!</span>
+                        ) : loadedQty > 0 ? (
+                          <span className="text-blue-700 font-semibold">Need {targetQty - loadedQty} more</span>
+                        ) : (
+                          <span className="text-gray-500 font-medium">Pending load</span>
+                        )}
+                        <span className="text-gray-400 font-bold">{percent}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* OPTION SELECTOR: Scan Box vs Manual Entry (Shown when no mode is selected) */}
           {entryMode === null && (
