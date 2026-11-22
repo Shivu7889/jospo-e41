@@ -51,6 +51,11 @@ export default function ModelsPage() {
   const [editManufacturingPlant, setEditManufacturingPlant] = useState('E41 G2');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Delete Model Modal State
+  const [deletingModel, setDeletingModel] = useState(null);
+  const [deleteConfirmInfo, setDeleteConfirmInfo] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Helper to generate code from name
   const generateCodeFromName = (modelName) => {
     if (!modelName) return '';
@@ -192,49 +197,50 @@ export default function ModelsPage() {
     }
   };
 
-  // Toggle active status
-  const handleToggleActive = async (model) => {
-    const nextStatus = !model.is_active;
-    const actionName = nextStatus ? 'activate' : 'deactivate';
+  // Open Delete Confirmation Modal
+  const handleOpenDelete = (model) => {
+    setDeletingModel(model);
+    setDeleteConfirmInfo(null);
+  };
 
-    if (
-      !confirm(
-        `Are you sure you want to ${actionName} model "${model.name} (${model.code})"?`
-      )
-    ) {
-      return;
-    }
+  // Confirm Model Deletion (supports force delete for linked records)
+  const handleConfirmDelete = async (force = false) => {
+    if (!deletingModel) return;
 
     try {
-      setActionLoadingId(model.id);
+      setIsDeleting(true);
       const res = await fetch('/api/models', {
-        method: 'PATCH',
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: model.id,
-          is_active: nextStatus,
+          id: deletingModel.id,
+          force,
         }),
       });
 
       const result = await res.json();
-      if (!res.ok || !result.success) {
-        throw new Error(result.error || `Failed to ${actionName} model`);
+      if (!res.ok) {
+        if (res.status === 409 && result.hasRecords) {
+          setDeleteConfirmInfo(result);
+          return;
+        }
+        throw new Error(result.error || 'Failed to delete model');
       }
 
-      showToast(
-        `Model ${model.code} ${nextStatus ? 'activated' : 'deactivated'} successfully.`,
-        'success'
-      );
+      showToast(`Model "${deletingModel.code}" deleted successfully.`, 'success');
 
-      // Optimistic update
-      setModels((prev) =>
-        prev.map((m) => (m.id === model.id ? { ...m, is_active: nextStatus } : m))
-      );
+      // Optimistically remove model immediately from the list
+      setModels((prev) => prev.filter((m) => m.id !== deletingModel.id));
+      setDeletingModel(null);
+      setDeleteConfirmInfo(null);
+
+      // Silently refresh models to sync state
+      fetchModels(true);
     } catch (err) {
-      console.error('Toggle status error:', err);
-      showToast(err.message || 'Failed to update status', 'error');
+      console.error('Delete model error:', err);
+      showToast(err.message || 'Failed to delete model', 'error');
     } finally {
-      setActionLoadingId(null);
+      setIsDeleting(false);
     }
   };
 
@@ -462,22 +468,14 @@ export default function ModelsPage() {
               <span>✏️ Edit</span>
             </button>
 
-            {/* Toggle Active Button */}
+            {/* Delete Model Button */}
             <button
               type="button"
-              onClick={() => handleToggleActive(row)}
-              disabled={actionLoadingId === row.id}
-              className={`text-xs py-1.5 px-3 rounded-lg font-medium transition-colors border ${
-                row.is_active
-                  ? 'border-gray-300 text-gray-700 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200'
-                  : 'border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
-              }`}
+              onClick={() => handleOpenDelete(row)}
+              className="btn-secondary text-xs py-1.5 px-2.5 inline-flex items-center space-x-1 shadow-none text-rose-700 hover:text-rose-900 hover:bg-rose-50 border-rose-200"
+              title="Delete cooler model"
             >
-              {actionLoadingId === row.id
-                ? 'Saving...'
-                : row.is_active
-                ? 'Deactivate'
-                : 'Activate'}
+              <span>🗑️ Delete</span>
             </button>
           </div>
         ),
@@ -485,7 +483,7 @@ export default function ModelsPage() {
     );
 
     return cols;
-  }, [isOwnerConsolidated, actionLoadingId]);
+  }, [isOwnerConsolidated]);
 
   return (
     <AppShell allowedRoles={['admin', 'production']}>
@@ -1059,6 +1057,132 @@ export default function ModelsPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Delete Confirmation */}
+        {deletingModel && (
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-model-title"
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full p-6 sm:p-7 relative space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center space-x-3 text-rose-600">
+                <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center text-xl flex-shrink-0">
+                  🗑️
+                </div>
+                <div>
+                  <h3 id="delete-model-title" className="text-lg font-bold text-gray-900">
+                    Delete Cooler Model
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Remove model from production and dispatch catalog
+                  </p>
+                </div>
+              </div>
+
+              {/* Model Info Card */}
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-200 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">Model Code:</span>
+                  <span className="font-mono font-bold text-gray-900 bg-white px-2 py-0.5 rounded border border-gray-300">
+                    {deletingModel.code}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">Model Name:</span>
+                  <span className="font-semibold text-gray-800 text-right truncate max-w-[200px]">
+                    {deletingModel.name}
+                  </span>
+                </div>
+                {deletingModel.manufacturing_plant && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">Facility:</span>
+                    <span className="font-semibold text-gray-700">
+                      🏭 {deletingModel.manufacturing_plant}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">Current Stock:</span>
+                  <span className="font-bold text-gray-800">
+                    {Number(deletingModel.current_stock ?? 0).toLocaleString()} units
+                  </span>
+                </div>
+              </div>
+
+              {/* Warning / Linked Records Info */}
+              {deleteConfirmInfo ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 space-y-2">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                    <span>⚠️</span>
+                    <span>Historical Records Detected!</span>
+                  </div>
+                  <p className="leading-relaxed">
+                    This model is linked to existing production or dispatch transactions:
+                  </p>
+                  <ul className="list-disc list-inside space-y-0.5 font-semibold text-amber-950 pl-1">
+                    {deleteConfirmInfo.counts?.production > 0 && (
+                      <li>{deleteConfirmInfo.counts.production} Production Entries</li>
+                    )}
+                    {deleteConfirmInfo.counts?.dispatch > 0 && (
+                      <li>{deleteConfirmInfo.counts.dispatch} Dispatch Line Items</li>
+                    )}
+                    {deleteConfirmInfo.counts?.stock > 0 && (
+                      <li>{deleteConfirmInfo.counts.stock} Stock Ledger Transactions</li>
+                    )}
+                  </ul>
+                  <p className="text-[11px] text-amber-700 pt-1">
+                    Proceeding will permanently delete this model and all its historical records.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  Are you sure you want to delete model <strong>{deletingModel.name} ({deletingModel.code})</strong>? This action cannot be undone.
+                </p>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeletingModel(null);
+                    setDeleteConfirmInfo(null);
+                  }}
+                  disabled={isDeleting}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleConfirmDelete(!!deleteConfirmInfo)}
+                  disabled={isDeleting}
+                  className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 bg-rose-600 hover:bg-rose-700 text-white shadow-md border-rose-600 focus:ring-rose-500"
+                >
+                  {isDeleting ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-1.5 h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      </svg>
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{deleteConfirmInfo ? '⚠️ Yes, Force Delete' : '🗑️ Delete Model'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}

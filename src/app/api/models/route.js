@@ -9,6 +9,8 @@ import {
   DEFAULT_PLANT_ID,
   ALL_PLANTS_ID,
 } from '@/lib/plants';
+import { createAdminSupabase } from '@/lib/supabase-server';
+import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -450,3 +452,143 @@ export async function PATCH(request) {
     );
   }
 }
+
+/**
+ * DELETE /api/models
+ * Permanently delete a cooler model
+ * Body or query params: { id, force }
+ * Required role: admin, owner, or production
+ */
+export async function DELETE(request) {
+  try {
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'owner', 'production'] });
+    if (auth.error) return auth.error;
+    const { supabase } = auth;
+    const adminDb = createAdminSupabase() || supabase;
+
+    let id = null;
+    let force = false;
+
+    try {
+      const body = await request.json();
+      if (body) {
+        id = body.id;
+        force = !!body.force;
+      }
+    } catch {
+      // Body empty or not JSON, check URL search params
+    }
+
+    if (!id) {
+      const { searchParams } = new URL(request.url);
+      id = searchParams.get('id');
+      force = searchParams.get('force') === 'true' || force;
+    }
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: 'Model id is required' },
+        { status: 400 }
+      );
+    }
+
+    // 1. Fetch the model to delete
+    const { data: model, error: fetchErr } = await adminDb
+      .from('cooler_models')
+      .select('id, name, code')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) {
+      throw fetchErr;
+    }
+
+    if (!model) {
+      return NextResponse.json(
+        { success: false, error: 'Cooler model not found or already deleted.' },
+        { status: 404 }
+      );
+    }
+
+    // 2. Check for referencing foreign key records
+    const [prodRes, dispRes, stockRes] = await Promise.all([
+      adminDb.from('production_entries').select('id', { count: 'exact', head: true }).eq('model_id', id),
+      adminDb.from('dispatch_items').select('id', { count: 'exact', head: true }).eq('model_id', id),
+      adminDb.from('stock_transactions').select('id', { count: 'exact', head: true }).eq('model_id', id),
+    ]);
+
+    const prodCount = prodRes.count || 0;
+    const dispCount = dispRes.count || 0;
+    const stockCount = stockRes.count || 0;
+    const totalRecords = prodCount + dispCount + stockCount;
+
+    if (totalRecords > 0 && !force) {
+      return NextResponse.json(
+        {
+          success: false,
+          hasRecords: true,
+          error: `Model "${model.code}" has ${totalRecords} linked record(s) (${prodCount} production, ${dispCount} dispatch, ${stockCount} stock ledger). Confirm deletion to permanently remove.`,
+          counts: {
+            production: prodCount,
+            dispatch: dispCount,
+            stock: stockCount,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // 3. If force is true and records exist, delete dependent records in reverse dependency order
+    if (totalRecords > 0 && force) {
+      if (stockCount > 0) {
+        const { error: stockDelErr } = await adminDb
+          .from('stock_transactions')
+          .delete()
+          .eq('model_id', id);
+        if (stockDelErr) throw stockDelErr;
+      }
+
+      if (dispCount > 0) {
+        const { error: dispDelErr } = await adminDb
+          .from('dispatch_items')
+          .delete()
+          .eq('model_id', id);
+        if (dispDelErr) throw dispDelErr;
+      }
+
+      if (prodCount > 0) {
+        const { error: prodDelErr } = await adminDb
+          .from('production_entries')
+          .delete()
+          .eq('model_id', id);
+        if (prodDelErr) throw prodDelErr;
+      }
+    }
+
+    // 4. Delete the cooler model
+    const { error: delErr } = await adminDb
+      .from('cooler_models')
+      .delete()
+      .eq('id', id);
+
+    if (delErr) {
+      throw delErr;
+    }
+
+    clearModelsCache();
+    clearStockCache();
+
+    return NextResponse.json({
+      success: true,
+      message: `Model "${model.code}" (${model.name}) deleted successfully.`,
+      deletedId: id,
+    });
+  } catch (error) {
+    console.error('API /api/models DELETE error:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to delete cooler model' },
+      { status: 500 }
+    );
+  }
+}
+
