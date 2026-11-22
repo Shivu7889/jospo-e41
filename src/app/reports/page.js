@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import * as XLSX from 'xlsx';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -612,9 +613,19 @@ export default function ReportsPage() {
                     Individual assembly records matching selected Thekedar and date range.
                   </p>
                 </div>
-                <span className="text-xs font-bold text-gray-700 bg-white px-3 py-1 rounded-lg border border-gray-200 shadow-sm">
-                  Showing {reportData?.data?.length || 0} entries
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-gray-700 bg-white px-3 py-1 rounded-lg border border-gray-200 shadow-sm">
+                    Showing {reportData?.data?.length || 0} entries
+                  </span>
+                  <Link
+                    href={`/production?date=${encodeURIComponent(thekedarEndDate || todayStr)}&thekedar=${selectedThekedar !== 'all' ? encodeURIComponent(selectedThekedar) : ''}`}
+                    className="inline-flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-colors active:scale-95"
+                    title="Open Production screen to add any missed models"
+                  >
+                    <span>➕</span>
+                    <span>Add Missed Model</span>
+                  </Link>
+                </div>
               </div>
 
               {loading ? (
@@ -827,26 +838,37 @@ export default function ReportsPage() {
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const exportRows = (reportData?.data || []).map((r) => ({
-                    'Date': r.production_date,
-                    'Model Code': r.model_code,
-                    'Model Name': r.model_name,
-                    'Quantity': r.quantity,
-                    'Logged By': r.employee_name,
-                    'Remarks': r.remarks,
-                    'Timestamp': r.created_at,
-                  }));
-                  handleExportToExcel(exportRows, `Jospo_Daily_Production_${productionDate}`);
-                }}
-                disabled={loading || !reportData?.data?.length}
-                className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
-              >
-                <span>📥</span>
-                <span>Export to Excel (.xlsx)</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/production?date=${encodeURIComponent(productionDate)}`}
+                  className="btn-primary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm font-bold"
+                  title={`Open Production to add missed models for ${productionDate}`}
+                >
+                  <span>➕</span>
+                  <span>Add Missed Model for {productionDate}</span>
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const exportRows = (reportData?.data || []).map((r) => ({
+                      'Date': r.production_date,
+                      'Model Code': r.model_code,
+                      'Model Name': r.model_name,
+                      'Quantity': r.quantity,
+                      'Logged By': r.employee_name,
+                      'Remarks': r.remarks,
+                      'Timestamp': r.created_at,
+                    }));
+                    handleExportToExcel(exportRows, `Jospo_Daily_Production_${productionDate}`);
+                  }}
+                  disabled={loading || !reportData?.data?.length}
+                  className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
+                >
+                  <span>📥</span>
+                  <span>Export to Excel (.xlsx)</span>
+                </button>
+              </div>
             </div>
 
             {/* Quick Stat Card */}
