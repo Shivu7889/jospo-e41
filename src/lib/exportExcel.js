@@ -1,15 +1,15 @@
-import * as XLSX from 'xlsx';
-
 /**
  * Export data array to an Excel (.xlsx) file with styled column widths.
+ * Dynamically imports xlsx on-demand to save ~350KB from initial bundle.
  *
  * @param {Array<Object>} data - Array of row objects to export
  * @param {string} fileName - Base name of the file (e.g. 'Jospo_Dispatches_2026-11-18')
  * @param {string} [sheetName='Report'] - Name of the worksheet
  */
-export function exportToExcel(data, fileName, sheetName = 'Report') {
+export async function exportToExcel(data, fileName, sheetName = 'Report') {
   if (!data || !data.length) return;
 
+  const XLSX = await import('xlsx');
   const ws = XLSX.utils.json_to_sheet(data);
 
   // Auto-calculate column widths

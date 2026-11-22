@@ -11,7 +11,9 @@ import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import { exportToExcel } from '@/lib/exportExcel';
 import { usePlant } from '@/contexts/PlantContext';
-import PrintStockModal from '@/components/PrintStockModal';
+import dynamic from 'next/dynamic';
+
+const PrintStockModal = dynamic(() => import('@/components/PrintStockModal'), { ssr: false });
 import {
   PLANTS,
   ALL_PLANTS_ID,

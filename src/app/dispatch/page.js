@@ -10,9 +10,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
-import DeliveryChallanModal from '@/components/DeliveryChallanModal';
-import CoLoadingModal from '@/components/CoLoadingModal';
+import dynamic from 'next/dynamic';
 import { exportToExcel } from '@/lib/exportExcel';
+
+const DeliveryChallanModal = dynamic(() => import('@/components/DeliveryChallanModal'), { ssr: false });
+const CoLoadingModal = dynamic(() => import('@/components/CoLoadingModal'), { ssr: false });
 import {
   resolveDispatchType,
   getDispatchTypeMeta,

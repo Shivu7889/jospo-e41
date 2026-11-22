@@ -4,14 +4,19 @@ import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import AppShell from '@/components/AppShell';
+import dynamic from 'next/dynamic';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import QRScanner from '@/components/QRScanner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { getSupabase } from '@/lib/supabase';
 import { getTodayIST } from '@/lib/date';
 import SearchableSelect from '@/components/SearchableSelect';
-import DeliveryChallanModal from '@/components/DeliveryChallanModal';
+
+const QRScanner = dynamic(() => import('@/components/QRScanner'), {
+  ssr: false,
+  loading: () => <LoadingSpinner message="Starting camera scanner..." size="md" />,
+});
+const DeliveryChallanModal = dynamic(() => import('@/components/DeliveryChallanModal'), { ssr: false });
 import { resolveDispatchType, formatDispatchRemarks, cleanDispatchRemarks } from '@/lib/dispatch';
 import { usePlant } from '@/contexts/PlantContext';
 import {

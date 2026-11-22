@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import * as XLSX from 'xlsx';
+import { exportToExcel } from '@/lib/exportExcel';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import StatsCard from '@/components/StatsCard';
@@ -102,16 +102,13 @@ export default function ReportsPage() {
   };
 
   // Export to Excel helper
-  const handleExportToExcel = (data, filename) => {
+  const handleExportToExcel = async (data, filename) => {
     try {
       if (!data || data.length === 0) {
         showToast('No data available to export.', 'warning');
         return;
       }
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Report');
-      XLSX.writeFile(wb, `${filename}.xlsx`);
+      await exportToExcel(data, filename, 'Report');
       showToast(`Exported ${filename}.xlsx successfully!`, 'success');
     } catch (err) {
       console.error('Error exporting to Excel:', err);

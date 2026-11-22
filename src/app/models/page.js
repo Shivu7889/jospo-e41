@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useId, useMemo } from 'react';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import DataTable from '@/components/DataTable';
-import QRGenerator from '@/components/QRGenerator';
+import dynamic from 'next/dynamic';
+
+const QRGenerator = dynamic(() => import('@/components/QRGenerator'), { ssr: false });
 import { useToast } from '@/components/Toast';
 import { usePlant } from '@/contexts/PlantContext';
 import { ALL_PLANTS_ID, getPlantMeta } from '@/lib/plants';
