@@ -565,6 +565,265 @@ export async function POST(request) {
 }
 
 /**
+ * PUT /api/production
+ * Edit an entire Thekedar production sheet (add missed models, change quantities, remove models, update manpower/remarks)
+ */
+export async function PUT(request) {
+  try {
+    const userSupabase = await createServerSupabase();
+    const adminSupabase = createAdminSupabase();
+    const db = adminSupabase || userSupabase;
+
+    // 1. Authenticate user
+    const {
+      data: { user },
+      error: authErr,
+    } = await userSupabase.auth.getUser();
+
+    if (authErr || !user) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+
+    // 2. Fetch employee details
+    const { data: employee, error: empErr } = await db
+      .from('employees')
+      .select('id, name, role, is_active')
+      .eq('id', user.id)
+      .single();
+
+    if (empErr || !employee) {
+      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
+    }
+
+    const isAdmin = employee.role === 'admin' || employee.role === 'owner';
+    const isProduction = employee.role === 'production';
+
+    if (!isAdmin && !isProduction) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden. Only Production or Admin staff may edit production sheets.' },
+        { status: 403 }
+      );
+    }
+
+    const body = await request.json();
+    const {
+      contractor_name,
+      production_date,
+      plant,
+      manpower,
+      remarks,
+      entries = [],
+      deleted_ids = [],
+    } = body;
+
+    const thekedarName = (contractor_name || 'General Assembly').trim();
+    const targetPlant = normalizePlant(plant || employee.plant || 'E41 G2');
+    const targetDate = production_date || getTodayIST();
+    const cleanManpower = manpower !== undefined && manpower !== '' && !isNaN(Number(manpower))
+      ? parseInt(manpower, 10)
+      : null;
+
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Production sheet must have at least one cooler model entry.' },
+        { status: 400 }
+      );
+    }
+
+    // Validate entries
+    for (let i = 0; i < entries.length; i++) {
+      const item = entries[i];
+      if (!item.model_id) {
+        return NextResponse.json(
+          { success: false, error: `Row #${i + 1}: Cooler model is required.` },
+          { status: 400 }
+        );
+      }
+      const q = Number(item.quantity);
+      if (!Number.isInteger(q) || q <= 0) {
+        return NextResponse.json(
+          { success: false, error: `Row #${i + 1}: Quantity must be a positive whole number greater than 0.` },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Prepare remarks with tags
+    let cleanRemarks = (remarks || '').trim();
+    cleanRemarks = cleanRemarks
+      .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
+      .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
+      .replace(/\[Plant:\s*[^\]]+\]/gi, '')
+      .trim();
+
+    let combinedRemarks = cleanRemarks;
+    if (thekedarName && thekedarName !== 'General Assembly') {
+      combinedRemarks = combinedRemarks ? `[Thekedar: ${thekedarName}] ${combinedRemarks}` : `[Thekedar: ${thekedarName}]`;
+    }
+    if (cleanManpower && cleanManpower > 0) {
+      combinedRemarks = combinedRemarks ? `[Manpower: ${cleanManpower}] ${combinedRemarks}` : `[Manpower: ${cleanManpower}]`;
+    }
+    if (targetPlant) {
+      combinedRemarks = `[Plant: ${targetPlant}] ${combinedRemarks}`.trim();
+    }
+
+    // Fetch models for stock transaction notes
+    const allModelIds = [...new Set(entries.map((e) => e.model_id))];
+    const { data: modelsData } = await db
+      .from('cooler_models')
+      .select('id, name, code')
+      .in('id', allModelIds);
+    const modelsMap = Object.fromEntries((modelsData || []).map((m) => [m.id, m]));
+
+    // 1. Handle deleted rows
+    if (Array.isArray(deleted_ids) && deleted_ids.length > 0) {
+      await db
+        .from('stock_transactions')
+        .delete()
+        .in('reference_id', deleted_ids)
+        .eq('transaction_type', 'production');
+
+      await db
+        .from('production_entries')
+        .delete()
+        .in('id', deleted_ids);
+    }
+
+    // 2. Handle updates & inserts for entries
+    for (const item of entries) {
+      const q = Number(item.quantity);
+      const model = modelsMap[item.model_id] || { code: 'Units' };
+      const stockNote = `Production: +${q} units of ${model.code} at ${targetPlant} (Thekedar: ${thekedarName}${cleanManpower ? `, Manpower: ${cleanManpower}` : ''})`;
+
+      if (item.id) {
+        // UPDATE existing entry
+        const updatePayload = {
+          model_id: item.model_id,
+          quantity: q,
+          remarks: combinedRemarks || null,
+          contractor_name: thekedarName,
+          plant: targetPlant,
+          manpower: cleanManpower,
+        };
+
+        let { error: updateErr } = await db
+          .from('production_entries')
+          .update(updatePayload)
+          .eq('id', item.id);
+
+        if (updateErr && (updateErr.message?.includes('contractor_name') || updateErr.message?.includes('manpower') || updateErr.message?.includes('plant') || updateErr.code === 'PGRST204')) {
+          delete updatePayload.contractor_name;
+          delete updatePayload.manpower;
+          delete updatePayload.plant;
+          await db.from('production_entries').update(updatePayload).eq('id', item.id);
+        }
+
+        // Sync stock transaction for existing entry
+        const { data: existingTx } = await db
+          .from('stock_transactions')
+          .select('id')
+          .eq('reference_id', item.id)
+          .eq('transaction_type', 'production')
+          .maybeSingle();
+
+        if (existingTx) {
+          let txUpdate = {
+            model_id: item.model_id,
+            quantity: q,
+            plant: targetPlant,
+            notes: stockNote,
+          };
+          let { error: txErr } = await db.from('stock_transactions').update(txUpdate).eq('id', existingTx.id);
+          if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
+            delete txUpdate.plant;
+            txUpdate.notes = `[Plant: ${targetPlant}] ${stockNote}`;
+            await db.from('stock_transactions').update(txUpdate).eq('id', existingTx.id);
+          }
+        } else {
+          let txInsert = {
+            model_id: item.model_id,
+            transaction_type: 'production',
+            quantity: q,
+            reference_id: item.id,
+            employee_id: employee.id,
+            plant: targetPlant,
+            notes: stockNote,
+          };
+          let { error: txErr } = await db.from('stock_transactions').insert(txInsert);
+          if (txErr && (txErr.message?.includes('plant') || txErr.code === 'PGRST204')) {
+            delete txInsert.plant;
+            txInsert.notes = `[Plant: ${targetPlant}] ${stockNote}`;
+            await db.from('stock_transactions').insert(txInsert);
+          }
+        }
+      } else {
+        // INSERT new entry (e.g. missed model added to sheet)
+        const insertPayload = {
+          model_id: item.model_id,
+          quantity: q,
+          production_date: targetDate,
+          remarks: combinedRemarks || null,
+          employee_id: employee.id,
+          contractor_name: thekedarName,
+          plant: targetPlant,
+          manpower: cleanManpower,
+        };
+
+        let { data: newEntry, error: insertErr } = await db
+          .from('production_entries')
+          .insert(insertPayload)
+          .select('id')
+          .single();
+
+        if (insertErr && (insertErr.message?.includes('contractor_name') || insertErr.message?.includes('manpower') || insertErr.message?.includes('plant') || insertErr.code === 'PGRST204')) {
+          delete insertPayload.contractor_name;
+          delete insertPayload.manpower;
+          delete insertPayload.plant;
+          const retry = await db.from('production_entries').insert(insertPayload).select('id').single();
+          newEntry = retry.data;
+          insertErr = retry.error;
+        }
+
+        if (insertErr || !newEntry) {
+          throw new Error(insertErr?.message || 'Failed to insert missed model entry');
+        }
+
+        let stockPayload = {
+          model_id: item.model_id,
+          transaction_type: 'production',
+          quantity: q,
+          reference_id: newEntry.id,
+          employee_id: employee.id,
+          plant: targetPlant,
+          notes: stockNote,
+        };
+
+        let { error: stockErr } = await db.from('stock_transactions').insert(stockPayload);
+        if (stockErr && (stockErr.message?.includes('plant') || stockErr.code === 'PGRST204')) {
+          delete stockPayload.plant;
+          stockPayload.notes = `[Plant: ${targetPlant}] ${stockNote}`;
+          await db.from('stock_transactions').insert(stockPayload);
+        }
+      }
+    }
+
+    clearProductionCache();
+    clearStockCache();
+
+    return NextResponse.json({
+      success: true,
+      message: `Production sheet for "${thekedarName}" updated successfully!`,
+    });
+  } catch (error) {
+    console.error('API /api/production PUT error:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Error updating production sheet' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
  * PATCH /api/production
  * Edit production entry (Quantity, Model, Thekedar, Remarks) or Batch Thekedar reassign.
  * Permissions:

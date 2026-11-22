@@ -94,14 +94,9 @@ export default function ProductionPage() {
   const [editRemarks, setEditRemarks] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Add Missed Model to Production Sheet Modal State
-  const [addMissedModalData, setAddMissedModalData] = useState(null);
-  const [missedModelId, setMissedModelId] = useState('');
-  const [missedModelQty, setMissedModelQty] = useState('');
-  const [missedModelThekedar, setMissedModelThekedar] = useState('');
-  const [missedModelManpower, setMissedModelManpower] = useState('');
-  const [missedModelRemarks, setMissedModelRemarks] = useState('');
-  const [savingMissedModel, setSavingMissedModel] = useState(false);
+  // Thekedar Full Production Sheet Edit Modal State
+  const [thekedarSheetEdit, setThekedarSheetEdit] = useState(null);
+  const [savingSheetEdit, setSavingSheetEdit] = useState(false);
 
   const [deletingEntry, setDeletingEntry] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -405,67 +400,120 @@ export default function ProductionPage() {
     }
   };
 
-  // Open Add Missed Model Modal for a Thekedar or sheet
-  const handleOpenAddMissedModal = (thekedar = '', manpower = '', plant = '') => {
-    const targetTh = thekedar || selectedThekedar || (thekedars[0] || 'General Assembly');
-    const targetPl = plant || entryPlant;
-    setAddMissedModalData({
-      thekedar: targetTh,
-      plant: targetPl,
-      manpower: manpower || '',
+  // Open Thekedar Production Sheet Edit Modal
+  const handleOpenThekedarBatchEdit = (category) => {
+    const rows = (category.entries || []).map((entry) => ({
+      id: entry.id, // existing DB id
+      tempId: `row-${entry.id}-${Math.random().toString(36).substring(2, 6)}`,
+      model_id: entry.model_id,
+      quantity: entry.quantity,
+    }));
+
+    setThekedarSheetEdit({
+      thekedar: category.thekedar,
+      plant: category.plant || entryPlant,
+      manpower: category.manpower !== null && category.manpower !== undefined ? category.manpower : '',
+      remarks: category.entries[0]?.display_remarks || category.entries[0]?.remarks || '',
       date: productionDate,
+      rows: rows.length > 0 ? rows : [{ id: null, tempId: `new-${Date.now()}`, model_id: '', quantity: '' }],
+      deletedIds: [],
     });
-    setMissedModelThekedar(targetTh);
-    setMissedModelManpower(manpower || '');
-    setMissedModelId('');
-    setMissedModelQty('');
-    setMissedModelRemarks('');
   };
 
-  // Submit Missed Model to Production Sheet
-  const handleSaveMissedModel = async (e) => {
-    if (e) e.preventDefault();
-    if (!addMissedModalData) return;
+  // Add another model row inside Thekedar Sheet Edit Modal (just like when adding freshly)
+  const handleAddSheetRow = () => {
+    if (!thekedarSheetEdit) return;
+    setThekedarSheetEdit((prev) => ({
+      ...prev,
+      rows: [
+        ...prev.rows,
+        {
+          id: null,
+          tempId: `new-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          model_id: '',
+          quantity: '',
+        },
+      ],
+    }));
+  };
 
-    const qty = parseInt(missedModelQty, 10);
-    if (isNaN(qty) || qty <= 0) {
-      showToast('Quantity must be a positive number greater than 0', 'warning');
+  // Remove row inside Thekedar Sheet Edit Modal
+  const handleRemoveSheetRow = (tempId, existingDbId) => {
+    if (!thekedarSheetEdit) return;
+    if (thekedarSheetEdit.rows.length <= 1) {
+      showToast('Sheet must have at least one cooler model.', 'warning');
       return;
     }
-    if (!missedModelId) {
-      showToast('Please select a cooler model', 'warning');
-      return;
+    setThekedarSheetEdit((prev) => ({
+      ...prev,
+      rows: prev.rows.filter((r) => r.tempId !== tempId),
+      deletedIds: existingDbId ? [...prev.deletedIds, existingDbId] : prev.deletedIds,
+    }));
+  };
+
+  // Change row field (model_id or quantity) inside Thekedar Sheet Edit Modal
+  const handleSheetRowChange = (tempId, field, value) => {
+    if (!thekedarSheetEdit) return;
+    setThekedarSheetEdit((prev) => ({
+      ...prev,
+      rows: prev.rows.map((r) => (r.tempId === tempId ? { ...r, [field]: value } : r)),
+    }));
+  };
+
+  // Save changes to Thekedar Production Sheet
+  const handleSaveThekedarSheet = async (e) => {
+    if (e) e.preventDefault();
+    if (!thekedarSheetEdit) return;
+
+    // Validate rows
+    for (let i = 0; i < thekedarSheetEdit.rows.length; i++) {
+      const row = thekedarSheetEdit.rows[i];
+      if (!row.model_id) {
+        showToast(`Row #${i + 1}: Please select a cooler model`, 'warning');
+        return;
+      }
+      const q = parseInt(row.quantity, 10);
+      if (isNaN(q) || q <= 0) {
+        showToast(`Row #${i + 1}: Quantity must be greater than 0`, 'warning');
+        return;
+      }
     }
 
     try {
-      setSavingMissedModel(true);
+      setSavingSheetEdit(true);
       const res = await fetch('/api/production', {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model_id: missedModelId,
-          quantity: qty,
-          production_date: addMissedModalData.date || productionDate,
-          contractor_name: (missedModelThekedar || addMissedModalData.thekedar || '').trim(),
-          plant: addMissedModalData.plant || entryPlant,
-          manpower: missedModelManpower !== '' && !isNaN(Number(missedModelManpower)) ? parseInt(missedModelManpower, 10) : null,
-          remarks: (missedModelRemarks || '').trim() || null,
+          contractor_name: thekedarSheetEdit.thekedar,
+          production_date: thekedarSheetEdit.date || productionDate,
+          plant: thekedarSheetEdit.plant || entryPlant,
+          manpower: thekedarSheetEdit.manpower !== '' && !isNaN(Number(thekedarSheetEdit.manpower))
+            ? parseInt(thekedarSheetEdit.manpower, 10)
+            : null,
+          remarks: (thekedarSheetEdit.remarks || '').trim() || null,
+          entries: thekedarSheetEdit.rows.map((r) => ({
+            id: r.id || undefined,
+            model_id: r.model_id,
+            quantity: parseInt(r.quantity, 10),
+          })),
+          deleted_ids: thekedarSheetEdit.deletedIds,
         }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to add production entry');
+        throw new Error(data.error || 'Failed to update production sheet');
       }
 
-      showToast(data.message || 'Missed model added to production sheet successfully!', 'success');
-      setAddMissedModalData(null);
+      showToast(data.message || `Production sheet for ${thekedarSheetEdit.thekedar} updated successfully!`, 'success');
+      setThekedarSheetEdit(null);
       await fetchTodayLog(productionDate);
     } catch (err) {
-      console.error('Error adding missed model:', err);
-      showToast(err.message || 'Failed to add model to production sheet', 'error');
+      console.error('Error saving Thekedar production sheet:', err);
+      showToast(err.message || 'Failed to update production sheet', 'error');
     } finally {
-      setSavingMissedModel(false);
+      setSavingSheetEdit(false);
     }
   };
 
@@ -1156,16 +1204,6 @@ export default function ProductionPage() {
 
                 <button
                   type="button"
-                  onClick={() => handleOpenAddMissedModal(logThekedarFilter !== 'all' ? logThekedarFilter : (thekedars[0] || ''))}
-                  className="inline-flex items-center space-x-1 text-xs py-1.5 px-3 rounded-lg font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-colors active:scale-95"
-                  title="Add a model that was missed in today's production sheet"
-                >
-                  <span>➕</span>
-                  <span>Add Missed Model</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => fetchTodayLog(productionDate)}
                   disabled={loadingLog}
                   className="btn-secondary text-xs py-1.5 px-2.5 inline-flex items-center space-x-1"
@@ -1222,12 +1260,25 @@ export default function ProductionPage() {
                           👷
                         </div>
                         <div>
-                          <h3 className="text-sm font-extrabold text-amber-950 flex items-center space-x-2">
-                            <span>{category.thekedar}</span>
-                            <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-full border border-amber-300">
-                              {category.entries.length} {category.entries.length === 1 ? 'batch' : 'batches'}
-                            </span>
-                          </h3>
+                          <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+                            <h3 className="text-sm font-extrabold text-amber-950 flex items-center space-x-2">
+                              <span>{category.thekedar}</span>
+                              <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                                {category.entries.length} {category.entries.length === 1 ? 'model' : 'models'}
+                              </span>
+                            </h3>
+
+                            {/* The ONE Edit button at the name of each Thekedar */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenThekedarBatchEdit(category)}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-colors border border-amber-700/20 active:scale-95"
+                              title={`Edit production sheet for ${category.thekedar} (change quantities, remove or add models)`}
+                            >
+                              <span>✏️</span>
+                              <span>Edit Sheet</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -1240,15 +1291,6 @@ export default function ProductionPage() {
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-sm">
                           +{category.totalUnits.toLocaleString()} units
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAddMissedModal(category.thekedar, category.manpower, category.plant)}
-                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-colors border border-amber-700/20 active:scale-95"
-                          title={`Add missed cooler model for ${category.thekedar}`}
-                        >
-                          <span>➕</span>
-                          <span>Add Missed Model</span>
-                        </button>
                       </div>
                     </div>
 
@@ -1332,16 +1374,7 @@ export default function ProductionPage() {
                                 {/* Actions (Always visible without scrolling) */}
                                 <td className="px-3 py-2.5 text-right whitespace-nowrap">
                                   {canModify ? (
-                                    <div className="flex items-center justify-end space-x-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenEditModal(row)}
-                                        className="px-2 py-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors text-xs font-bold flex items-center space-x-0.5 border border-blue-200 shadow-sm"
-                                        title="Edit quantity, model, Thekedar, or manpower"
-                                      >
-                                        <span>✏️</span>
-                                        <span>Edit</span>
-                                      </button>
+                                    <div className="flex items-center justify-end">
                                       <button
                                         type="button"
                                         onClick={() => setDeletingEntry(row)}
@@ -1420,22 +1453,15 @@ export default function ProductionPage() {
                                 </span>
 
                                 {canModify ? (
-                                  <div className="flex items-center space-x-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenEditModal(row)}
-                                      className="px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded border border-blue-200 text-xs font-bold"
-                                    >
-                                      ✏️ Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setDeletingEntry(row)}
-                                      className="px-2 py-0.5 text-red-600 hover:bg-red-50 rounded border border-red-200 text-xs font-bold"
-                                    >
-                                      🗑️
-                                    </button>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeletingEntry(row)}
+                                    className="px-2 py-0.5 text-red-600 hover:bg-red-50 rounded border border-red-200 text-xs font-bold flex items-center space-x-0.5"
+                                    title="Delete entry"
+                                  >
+                                    <span>🗑️</span>
+                                    <span>Del</span>
+                                  </button>
                                 ) : (
                                   <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded border">
                                     🔒 Locked
@@ -1977,97 +2003,37 @@ export default function ProductionPage() {
           </div>
         )}
 
-        {/* ADD MISSED MODEL MODAL */}
-        {addMissedModalData && (
-          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
-              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+        {/* EDIT THEKEDAR FULL PRODUCTION SHEET MODAL */}
+        {thekedarSheetEdit && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl space-y-4 animate-scaleUp my-8 max-h-[90vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3 flex-shrink-0">
                 <div className="flex items-center space-x-2">
-                  <span className="text-xl">➕</span>
+                  <span className="text-2xl">📋</span>
                   <div>
-                    <h3 className="text-base font-bold text-gray-900">
-                      Add Missed Model to Production Sheet
+                    <h3 className="text-base sm:text-lg font-bold text-gray-900 flex items-center space-x-2">
+                      <span>Edit Production Sheet: {thekedarSheetEdit.thekedar}</span>
                     </h3>
                     <p className="text-xs text-gray-500">
-                      Sheet Date: {addMissedModalData.date} • Plant: {addMissedModalData.plant}
+                      Date: {thekedarSheetEdit.date} • Plant: {thekedarSheetEdit.plant}
                     </p>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setAddMissedModalData(null)}
-                  disabled={savingMissedModel}
-                  className="text-gray-400 hover:text-gray-600 p-1 text-base font-bold"
+                  onClick={() => setThekedarSheetEdit(null)}
+                  disabled={savingSheetEdit}
+                  className="text-gray-400 hover:text-gray-600 p-1 text-lg font-bold"
                 >
                   ✕
                 </button>
               </div>
 
-              <form onSubmit={handleSaveMissedModel} className="space-y-4">
-                {/* Thekedar (Contractor) */}
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    Thekedar (Assembly Contractor) <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={missedModelThekedar}
-                    onChange={(e) => setMissedModelThekedar(e.target.value)}
-                    className="input-field text-xs bg-white font-semibold text-gray-900"
-                    required
-                  >
-                    {thekedars.map((t) => (
-                      <option key={t} value={t}>
-                        👷 {t}
-                      </option>
-                    ))}
-                    {!thekedars.includes(missedModelThekedar) && missedModelThekedar && (
-                      <option value={missedModelThekedar}>👷 {missedModelThekedar}</option>
-                    )}
-                  </select>
-                </div>
-
-                {/* Cooler Model Selection */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-bold text-gray-700">
-                      Missed Cooler Model <span className="text-red-500">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAddModelModal(null, '', (newId) => setMissedModelId(newId))}
-                      className="text-[11px] text-primary-700 font-bold hover:underline"
-                    >
-                      ➕ Create New Model
-                    </button>
-                  </div>
-                  <SearchableSelect
-                    options={models.filter((m) => isModelManufacturableAtPlant(m, addMissedModalData.plant || targetPlantForModels))}
-                    value={missedModelId}
-                    onChange={(val) => setMissedModelId(val)}
-                    onAddNew={(search) => handleOpenAddModelModal(null, search, (newId) => setMissedModelId(newId))}
-                    addNewLabel="Add New Model"
-                    placeholder="-- Select or Search Missed Model --"
-                    required
-                  />
-                </div>
-
-                {/* Quantity & Manpower */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 block mb-1">
-                      Quantity (Units) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={missedModelQty}
-                      onChange={(e) => setMissedModelQty(e.target.value)}
-                      className="input-field text-sm font-bold font-mono bg-white"
-                      placeholder="e.g. 25"
-                      required
-                    />
-                  </div>
+              {/* Scrollable Form Content */}
+              <form onSubmit={handleSaveThekedarSheet} className="space-y-4 overflow-y-auto pr-1 flex-1">
+                {/* Meta details: Manpower & Shift Remarks */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-amber-50/50 rounded-xl border border-amber-200/70">
                   <div>
                     <label className="text-xs font-bold text-gray-700 block mb-1">
                       👥 Manpower (Workers)
@@ -2076,54 +2042,170 @@ export default function ProductionPage() {
                       type="number"
                       min="1"
                       step="1"
-                      value={missedModelManpower}
-                      onChange={(e) => setMissedModelManpower(e.target.value)}
-                      className="input-field text-sm font-bold font-mono bg-white"
-                      placeholder="e.g. 6"
+                      value={thekedarSheetEdit.manpower}
+                      onChange={(e) =>
+                        setThekedarSheetEdit((prev) => ({ ...prev, manpower: e.target.value }))
+                      }
+                      placeholder="e.g. 8"
+                      className="input-field text-xs bg-white font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">
+                      Shift Notes / Remarks
+                    </label>
+                    <input
+                      type="text"
+                      value={thekedarSheetEdit.remarks}
+                      onChange={(e) =>
+                        setThekedarSheetEdit((prev) => ({ ...prev, remarks: e.target.value }))
+                      }
+                      placeholder="Optional shift notes"
+                      className="input-field text-xs bg-white"
                     />
                   </div>
                 </div>
 
-                {/* Remarks */}
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">
-                    Remarks / Reason (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={missedModelRemarks}
-                    onChange={(e) => setMissedModelRemarks(e.target.value)}
-                    placeholder="e.g. Missed in morning sheet, added in evening"
-                    className="input-field text-xs bg-white"
-                  />
-                </div>
+                {/* Models List Header */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                        Models & Quantities ({thekedarSheetEdit.rows.length})
+                      </h4>
+                      <p className="text-[11px] text-gray-500">
+                        Change quantity, switch models, or add missed models below.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenAddModelModal()}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary-700 bg-primary-50 border border-primary-200 px-2 py-1 rounded-lg hover:bg-primary-100 transition shadow-sm"
+                    >
+                      <span>➕</span>
+                      <span>New Model to Catalog</span>
+                    </button>
+                  </div>
 
-                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-gray-100">
+                  {/* List of Models (Dynamic rows, just like fresh entry) */}
+                  <div className="space-y-2.5">
+                    {thekedarSheetEdit.rows.map((row, index) => (
+                      <div
+                        key={row.tempId}
+                        className="flex items-center gap-2 p-2.5 sm:p-3 bg-gray-50 rounded-xl border border-gray-200 hover:border-gray-300 transition-colors"
+                      >
+                        <span className="text-xs font-mono font-bold text-gray-400 w-5 text-center flex-shrink-0">
+                          #{index + 1}
+                        </span>
+
+                        {/* Searchable Model Dropdown */}
+                        <div className="flex-1 min-w-0">
+                          <SearchableSelect
+                            options={models.filter((m) =>
+                              isModelManufacturableAtPlant(m, thekedarSheetEdit.plant || targetPlantForModels)
+                            )}
+                            value={row.model_id}
+                            onChange={(val) => handleSheetRowChange(row.tempId, 'model_id', val)}
+                            onAddNew={(search) =>
+                              handleOpenAddModelModal(null, search, (newId) =>
+                                handleSheetRowChange(row.tempId, 'model_id', newId)
+                              )
+                            }
+                            addNewLabel="Add New Model"
+                            placeholder="-- Select Cooler Model --"
+                            required
+                          />
+                        </div>
+
+                        {/* Quantity input */}
+                        <div className="w-24 sm:w-28 flex-shrink-0">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            placeholder="Qty"
+                            value={row.quantity}
+                            onChange={(e) => handleSheetRowChange(row.tempId, 'quantity', e.target.value)}
+                            className="input-field text-xs text-center font-bold font-mono bg-white"
+                            required
+                          />
+                        </div>
+
+                        {/* Remove / Delete Row Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSheetRow(row.tempId, row.id)}
+                          disabled={thekedarSheetEdit.rows.length <= 1}
+                          className={`p-2 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors ${
+                            thekedarSheetEdit.rows.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''
+                          }`}
+                          title="Remove this model row from sheet"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="2"
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Add Another Model Button (just like fresh entry!) */}
                   <button
                     type="button"
-                    onClick={() => setAddMissedModalData(null)}
-                    disabled={savingMissedModel}
-                    className="btn-secondary text-xs py-2 px-3"
+                    onClick={handleAddSheetRow}
+                    className="w-full py-2.5 px-3 border border-dashed border-primary-300 bg-primary-50/40 rounded-xl text-xs font-bold text-primary-700 hover:bg-primary-100/60 hover:border-primary-400 transition-colors flex items-center justify-center space-x-1.5"
                   >
-                    Cancel
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span>➕ Add Another Model (Missed Model)</span>
                   </button>
-                  <button
-                    type="submit"
-                    disabled={savingMissedModel || !missedModelQty || parseInt(missedModelQty, 10) <= 0 || !missedModelId}
-                    className="btn-primary text-xs py-2 px-4 shadow-sm font-bold inline-flex items-center space-x-1.5"
-                  >
-                    {savingMissedModel ? (
-                      <>
-                        <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                        </svg>
-                        <span>Adding to Sheet...</span>
-                      </>
-                    ) : (
-                      <span>➕ Add to Production Sheet</span>
-                    )}
-                  </button>
+                </div>
+
+                {/* Footer Total & Actions */}
+                <div className="pt-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-500 font-semibold">Total Sheet Production:</span>
+                    <span className="text-sm font-mono font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-lg border border-emerald-200">
+                      {thekedarSheetEdit.rows
+                        .reduce((sum, r) => sum + (parseInt(r.quantity, 10) || 0), 0)
+                        .toLocaleString()}{' '}
+                      units
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-end space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setThekedarSheetEdit(null)}
+                      disabled={savingSheetEdit}
+                      className="btn-secondary text-xs py-2 px-3"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingSheetEdit}
+                      className="btn-primary text-xs py-2 px-4 shadow-sm font-bold inline-flex items-center space-x-1.5"
+                    >
+                      {savingSheetEdit ? (
+                        <>
+                          <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                          </svg>
+                          <span>Saving Sheet...</span>
+                        </>
+                      ) : (
+                        <span>💾 Save Production Sheet</span>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
