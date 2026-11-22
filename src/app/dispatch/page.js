@@ -751,7 +751,7 @@ export default function DispatchListPage() {
               className="btn-primary text-sm inline-flex items-center space-x-2 shadow-sm"
             >
               <span className="text-base">📦</span>
-              <span>+ New Dispatch (Scan QR)</span>
+              <span>+ New Dispatch</span>
             </Link>
           </div>
         </div>

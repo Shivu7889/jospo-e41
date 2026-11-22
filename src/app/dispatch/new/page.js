@@ -116,8 +116,9 @@ function NewDispatchContent() {
   const supabase = getSupabase();
   const { activePlant, isOwner, userPlant } = usePlant();
 
-  // Multi-step navigation: 1 = Vehicle Details, 2 = QR Scanning & Items, 3 = Review & Confirm
+  // Multi-step navigation: 1 = Vehicle Details, 2 = Box Entry & Loading, 3 = Review & Confirm
   const [currentStep, setCurrentStep] = useState(1);
+  const [entryMode, setEntryMode] = useState(null); // null (choose option) | 'scan' | 'manual'
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(null); // { dispatchId, vehicleNumber, totalQty, status }
@@ -986,6 +987,7 @@ function NewDispatchContent() {
     if (e) e.preventDefault();
     const val = barcodeInput.trim();
     if (!val) return;
+    setEntryMode('scan');
     handleScan(val);
     setBarcodeInput('');
   };
@@ -1007,6 +1009,7 @@ function NewDispatchContent() {
           e.preventDefault();
           const scannedCode = barcodeBufferRef.current.trim();
           barcodeBufferRef.current = '';
+          setEntryMode('scan');
           handleScan(scannedCode);
         }
       } else if (e.key.length === 1) {
@@ -1764,7 +1767,7 @@ function NewDispatchContent() {
               : 'text-gray-400 cursor-not-allowed opacity-60'
           }`}
         >
-          2. QR Scanning ({totalQuantity})
+          2. Box Entry ({totalQuantity})
         </button>
         <button
           type="button"
@@ -2108,7 +2111,7 @@ function NewDispatchContent() {
               onClick={() => setCurrentStep(2)}
               className="btn-primary text-sm py-2.5 px-6 inline-flex items-center space-x-2"
             >
-              <span>Proceed to Scanning</span>
+              <span>Proceed to Load Items</span>
               <span>→</span>
             </button>
           </div>
@@ -2155,73 +2158,259 @@ function NewDispatchContent() {
             </div>
           </div>
 
-          {/* QR Scanner Component & Hardware Barcode Gun Input */}
-          <div className="space-y-3">
-            <QRScanner
-              isActive={currentStep === 2}
-              onScan={handleScan}
-              suppressAudio={true}
-              onError={(err) => console.warn('QR Scanner reported:', err)}
-            />
-
-            {/* Hardware Barcode Gun & Quick Manual Serial Input */}
-            <div className="bg-white border border-gray-200 rounded-xl p-3 shadow-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-gray-800 flex items-center space-x-1.5">
-                  <span>🔫</span>
-                  <span>Barcode Gun / Quick Serial Scan</span>
-                </span>
-                <span className="text-[11px] text-gray-500 hidden sm:inline">
-                  Supports USB / Bluetooth wireless scanners
-                </span>
+          {/* OPTION SELECTOR: Scan Box vs Manual Entry (Shown when no mode is selected) */}
+          {entryMode === null && (
+            <div className="card p-5 sm:p-6 bg-white border border-gray-200 shadow-sm space-y-4">
+              <div className="text-center sm:text-left">
+                <h3 className="text-base font-bold text-gray-900">
+                  Choose How to Load Coolers
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Select an option below to start adding cooler boxes into this dispatch:
+                </p>
               </div>
-              <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
-                <div className="relative flex-1">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                    🏷️
-                  </span>
-                  <input
-                    type="text"
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    placeholder="Scan with barcode gun or type serial (e.g. #000001)..."
-                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono shadow-sm"
-                  />
-                </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                {/* Option 1: Scan Box */}
                 <button
-                  type="submit"
-                  disabled={!barcodeInput.trim()}
-                  className="btn-primary text-xs py-2 px-4 shadow-xs whitespace-nowrap"
+                  type="button"
+                  onClick={() => setEntryMode('scan')}
+                  className="p-5 rounded-2xl border-2 border-primary-200 bg-gradient-to-br from-white to-primary-50/40 hover:border-primary-500 hover:from-primary-50/60 hover:to-primary-100/40 text-left transition-all shadow-xs hover:shadow-md group flex items-start space-x-4 cursor-pointer"
                 >
-                  Scan Box
+                  <div className="w-12 h-12 rounded-xl bg-primary-100 text-primary-700 flex items-center justify-center text-2xl flex-shrink-0 group-hover:scale-110 group-hover:bg-primary-600 group-hover:text-white transition-all shadow-xs">
+                    📷
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <h4 className="font-extrabold text-base text-gray-900 group-hover:text-primary-700">
+                        Scan Box
+                      </h4>
+                      <span className="text-[10px] font-extrabold text-primary-700 bg-primary-100 px-2 py-0.5 rounded-full border border-primary-200">
+                        QR / Barcode
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                      Camera QR scanner open karein ya USB / Bluetooth barcode gun se carton scan karein.
+                    </p>
+                    <div className="mt-3 inline-flex items-center space-x-1.5 text-xs font-bold text-primary-700 group-hover:translate-x-1 transition-transform">
+                      <span>Open Scan System</span>
+                      <span>→</span>
+                    </div>
+                  </div>
                 </button>
-              </form>
-            </div>
-          </div>
 
-          {/* Quick Undo Button (One-tap fix for accidental double scans) */}
-          {lastScannedModel && (
-            <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 flex items-center justify-between shadow-sm animate-fadeIn">
-              <div className="flex items-center space-x-2.5 min-w-0 pr-2">
-                <span className="text-xl flex-shrink-0">↩️</span>
-                <div className="text-xs text-amber-950 truncate">
-                  <span>Scanned </span>
-                  <strong className="font-mono bg-amber-200/80 px-1.5 py-0.5 rounded font-bold">
-                    {lastScannedModel.model_code}
-                  </strong>
-                  <span className="text-amber-800 ml-1 hidden sm:inline truncate">
-                    ({lastScannedModel.model_name})
-                  </span>
+                {/* Option 2: Manual Entry */}
+                <button
+                  type="button"
+                  onClick={() => setEntryMode('manual')}
+                  className="p-5 rounded-2xl border-2 border-indigo-200 bg-gradient-to-br from-white to-indigo-50/40 hover:border-indigo-500 hover:from-indigo-50/60 hover:to-indigo-100/40 text-left transition-all shadow-xs hover:shadow-md group flex items-start space-x-4 cursor-pointer"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center text-2xl flex-shrink-0 group-hover:scale-110 group-hover:bg-indigo-600 group-hover:text-white transition-all shadow-xs">
+                    ✍️
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <h4 className="font-extrabold text-base text-gray-900 group-hover:text-indigo-700">
+                        Manual Entry
+                      </h4>
+                      <span className="text-[10px] font-extrabold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full border border-indigo-200">
+                        Without QR
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                      Cooler model dropdown list se select karein aur quantity direct type karke add karein.
+                    </p>
+                    <div className="mt-3 inline-flex items-center space-x-1.5 text-xs font-bold text-indigo-700 group-hover:translate-x-1 transition-transform">
+                      <span>Open Manual Entry</span>
+                      <span>→</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ACTIVE MODE SWITCHER (Shown when a mode is active) */}
+          {entryMode !== null && (
+            <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 bg-white rounded-xl border border-gray-200 shadow-xs">
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-gray-500 pl-1">Active Mode:</span>
+                <div className="inline-flex p-1 bg-gray-100 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setEntryMode('scan')}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                      entryMode === 'scan'
+                        ? 'bg-primary-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'
+                    }`}
+                  >
+                    <span>📷</span>
+                    <span>Scan Box</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEntryMode('manual')}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                      entryMode === 'manual'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'
+                    }`}
+                  >
+                    <span>✍️</span>
+                    <span>Manual Entry</span>
+                  </button>
                 </div>
               </div>
+
               <button
                 type="button"
-                onClick={handleUndoLastScan}
-                className="btn-danger text-xs py-1.5 px-3.5 flex-shrink-0 font-bold shadow-xs active:scale-95 inline-flex items-center space-x-1"
-                title="Remove 1 unit of the last scanned cooler"
+                onClick={() => setEntryMode(null)}
+                className="text-xs text-gray-500 hover:text-gray-800 px-2.5 py-1 rounded-md hover:bg-gray-100 font-medium transition-colors"
+                title="Close active mode and choose again"
               >
-                <span>Undo (-1)</span>
+                ✕ Change Mode
               </button>
+            </div>
+          )}
+
+          {/* MODE 1: QR Scanner Component & Hardware Barcode Gun Input (Only when Scan Box is selected) */}
+          {entryMode === 'scan' && (
+            <div className="space-y-3 animate-fadeIn">
+              <QRScanner
+                isActive={currentStep === 2 && entryMode === 'scan'}
+                onScan={handleScan}
+                suppressAudio={true}
+                onError={(err) => console.warn('QR Scanner reported:', err)}
+              />
+
+              {/* Hardware Barcode Gun & Quick Manual Serial Input */}
+              <div className="bg-white border border-gray-200 rounded-xl p-3 shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-gray-800 flex items-center space-x-1.5">
+                    <span>🔫</span>
+                    <span>Barcode Gun / Quick Serial Scan</span>
+                  </span>
+                  <span className="text-[11px] text-gray-500 hidden sm:inline">
+                    Supports USB / Bluetooth wireless scanners
+                  </span>
+                </div>
+                <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
+                  <div className="relative flex-1">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      🏷️
+                    </span>
+                    <input
+                      type="text"
+                      value={barcodeInput}
+                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      placeholder="Scan with barcode gun or type serial (e.g. #000001)..."
+                      className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono shadow-sm"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!barcodeInput.trim()}
+                    className="btn-primary text-xs py-2 px-4 shadow-xs whitespace-nowrap"
+                  >
+                    Scan Box
+                  </button>
+                </form>
+              </div>
+
+              {/* Quick Undo Button (One-tap fix for accidental double scans) */}
+              {lastScannedModel && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 flex items-center justify-between shadow-sm animate-fadeIn">
+                  <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                    <span className="text-xl flex-shrink-0">↩️</span>
+                    <div className="text-xs text-amber-950 truncate">
+                      <span>Scanned </span>
+                      <strong className="font-mono bg-amber-200/80 px-1.5 py-0.5 rounded font-bold">
+                        {lastScannedModel.model_code}
+                      </strong>
+                      <span className="text-amber-800 ml-1 hidden sm:inline truncate">
+                        ({lastScannedModel.model_name})
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleUndoLastScan}
+                    className="btn-danger text-xs py-1.5 px-3.5 flex-shrink-0 font-bold shadow-xs active:scale-95 inline-flex items-center space-x-1"
+                    title="Remove 1 unit of the last scanned cooler"
+                  >
+                    <span>Undo (-1)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* MODE 2: Manual Model Addition Card (Only when Manual Entry is selected) */}
+          {entryMode === 'manual' && (
+            <div className="card p-4 sm:p-5 bg-white border border-indigo-200 shadow-xs space-y-3 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <span className="text-base">✍️</span>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                    Manual Item Entry (Select Model & Quantity)
+                  </h4>
+                </div>
+                <span className="text-[11px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded font-semibold border border-indigo-100">
+                  Camera Off
+                </span>
+              </div>
+              <form onSubmit={handleManualAdd} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                <div className="sm:col-span-7">
+                  <label className="label text-xs">
+                    Cooler Model <span className="text-red-500">*</span>
+                  </label>
+                  <SearchableSelect
+                    options={modelsCatalog.map((m) => ({
+                      id: m.id,
+                      code: m.code,
+                      name: `${m.name} (${normalizePlant(fromLocation)} Stock: ${stockMap[m.id] ?? 0})`,
+                    }))}
+                    value={manualModelId}
+                    onChange={(val) => setManualModelId(val)}
+                    placeholder={
+                      modelsCatalog.length > 0
+                        ? `-- Select Cooler Model (${normalizePlant(fromLocation)}) --`
+                        : `-- No Models Configured for ${normalizePlant(fromLocation)} Plant --`
+                    }
+                    disabled={modelsCatalog.length === 0}
+                  />
+                  {modelsCatalog.length === 0 && (
+                    <p className="text-[11px] text-amber-700 mt-1 font-medium">
+                      ℹ️ No cooler models are currently configured for {normalizePlant(fromLocation)} Plant.
+                    </p>
+                  )}
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label htmlFor="manualQty" className="label text-xs">
+                    Quantity (Boxes) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="manualQty"
+                    type="number"
+                    min="1"
+                    value={manualQuantity}
+                    onChange={(e) => setManualQuantity(e.target.value)}
+                    className="input-field text-xs py-2 text-center font-bold"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={!manualModelId}
+                    className="btn-primary text-xs w-full py-2 bg-indigo-600 hover:bg-indigo-700 border-indigo-600 text-white shadow-xs disabled:opacity-50"
+                  >
+                    + Add Model
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
@@ -2258,22 +2447,46 @@ function NewDispatchContent() {
 
           {/* Scanned Items Table & Running Total */}
           <div className="card p-0 overflow-hidden border border-gray-200">
-            <div className="p-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+            <div className="p-4 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h3 className="text-sm font-bold text-gray-900">Loaded Coolers</h3>
-                <p className="text-xs text-gray-500">Scan QR codes or manually adjust counts</p>
+                <h3 className="text-sm font-bold text-gray-900">Loaded Cooler Boxes</h3>
+                <p className="text-xs text-gray-500">
+                  {items.length === 0
+                    ? 'No boxes added yet — choose an option above'
+                    : `${items.length} unique model${items.length === 1 ? '' : 's'} in vehicle`}
+                </p>
               </div>
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-primary-100 text-primary-800">
-                Total: {totalQuantity} units
-              </span>
+              <div className="flex items-center space-x-2">
+                {entryMode === 'scan' && (
+                  <button
+                    type="button"
+                    onClick={() => setEntryMode('manual')}
+                    className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 font-bold py-1 px-2.5 rounded-lg transition-colors"
+                  >
+                    + Add Manually
+                  </button>
+                )}
+                {entryMode === 'manual' && (
+                  <button
+                    type="button"
+                    onClick={() => setEntryMode('scan')}
+                    className="text-xs text-primary-700 bg-primary-50 border border-primary-200 hover:bg-primary-100 font-bold py-1 px-2.5 rounded-lg transition-colors"
+                  >
+                    📷 Open Scanner
+                  </button>
+                )}
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-primary-100 text-primary-800">
+                  Total: {totalQuantity} units
+                </span>
+              </div>
             </div>
 
             {items.length === 0 ? (
               <div className="p-8 text-center text-xs text-gray-500">
-                <div className="text-3xl mb-2">📷</div>
-                <p className="font-semibold text-gray-700">No items scanned yet.</p>
+                <div className="text-3xl mb-2">📦</div>
+                <p className="font-semibold text-gray-700">No coolers loaded in this vehicle yet.</p>
                 <p className="mt-1">
-                  Point the camera at a BarTender QR code or use the barcode gun input above.
+                  Choose &quot;Scan Box&quot; to scan QR codes with camera or &quot;Manual Entry&quot; to pick models from list.
                 </p>
               </div>
             ) : (
@@ -2406,66 +2619,41 @@ function NewDispatchContent() {
             )}
           </div>
 
-          {/* Manual Model Addition Card */}
-          <div className="card p-4 bg-gray-50/50 border border-dashed border-gray-300 space-y-3">
-            <div className="flex items-center space-x-2">
-              <span className="text-sm">✍️</span>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                Manual Item Entry (Without QR)
-              </h4>
+          {/* Quick toggle banner if in Scan Mode */}
+          {entryMode === 'scan' && (
+            <div className="text-center py-2.5 px-4 bg-indigo-50/60 rounded-xl border border-indigo-100 flex flex-wrap items-center justify-center gap-2">
+              <span className="text-xs text-gray-600">Need to add a model manually without scanning?</span>
+              <button
+                type="button"
+                onClick={() => setEntryMode('manual')}
+                className="text-xs text-indigo-700 hover:text-indigo-900 font-bold underline"
+              >
+                Switch to Manual Entry
+              </button>
             </div>
-            <form onSubmit={handleManualAdd} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-              <div className="sm:col-span-7">
-                <label className="label text-xs">
-                  Cooler Model
-                </label>
-                <SearchableSelect
-                  options={modelsCatalog.map((m) => ({
-                    id: m.id,
-                    code: m.code,
-                    name: `${m.name} (${normalizePlant(fromLocation)} Stock: ${stockMap[m.id] ?? 0})`,
-                  }))}
-                  value={manualModelId}
-                  onChange={(val) => setManualModelId(val)}
-                  placeholder={
-                    modelsCatalog.length > 0
-                      ? `-- Select Cooler Model (${normalizePlant(fromLocation)}) --`
-                      : `-- No Models Configured for ${normalizePlant(fromLocation)} Plant --`
-                  }
-                  disabled={modelsCatalog.length === 0}
-                />
-                {modelsCatalog.length === 0 && (
-                  <p className="text-[11px] text-amber-700 mt-1 font-medium">
-                    ℹ️ No cooler models are currently configured for {normalizePlant(fromLocation)} Plant.
-                  </p>
-                )}
-              </div>
+          )}
 
-              <div className="sm:col-span-3">
-                <label htmlFor="manualQty" className="label text-xs">
-                  Qty
-                </label>
-                <input
-                  id="manualQty"
-                  type="number"
-                  min="1"
-                  value={manualQuantity}
-                  onChange={(e) => setManualQuantity(e.target.value)}
-                  className="input-field text-xs py-2 text-center"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <button
-                  type="submit"
-                  disabled={!manualModelId}
-                  className="btn-secondary text-xs w-full py-2 disabled:opacity-50"
-                >
-                  + Add
-                </button>
-              </div>
-            </form>
-          </div>
+          {/* Quick toggle banner if no mode selected but items exist */}
+          {entryMode === null && items.length > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-3 py-2.5 px-4 bg-gray-50 rounded-xl border border-gray-200 text-xs">
+              <span className="text-gray-600 font-medium">Add more coolers to this vehicle:</span>
+              <button
+                type="button"
+                onClick={() => setEntryMode('scan')}
+                className="text-primary-700 hover:text-primary-900 font-bold hover:underline inline-flex items-center space-x-1"
+              >
+                <span>📷 Scan Box (QR)</span>
+              </button>
+              <span className="text-gray-300">•</span>
+              <button
+                type="button"
+                onClick={() => setEntryMode('manual')}
+                className="text-indigo-700 hover:text-indigo-900 font-bold hover:underline inline-flex items-center space-x-1"
+              >
+                <span>✍️ Manual Entry</span>
+              </button>
+            </div>
+          )}
 
           {/* Step 2 Bottom Controls */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-gray-200">
