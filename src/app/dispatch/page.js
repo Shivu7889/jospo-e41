@@ -116,6 +116,11 @@ export default function DispatchListPage() {
   const [coLoadingModalData, setCoLoadingModalData] = useState(null);
   const [coLoadingTargetPlant, setCoLoadingTargetPlant] = useState(null);
 
+  // Route Confirmed Party Dispatch to Next Plant (Multi-Part Co-Loading)
+  const [sendToNextPlantModal, setSendToNextPlantModal] = useState(null);
+  const [nextPlantSelected, setNextPlantSelected] = useState('D4');
+  const [routingToNextPlant, setRoutingToNextPlant] = useState(false);
+
   // Edit Dispatch Modal state (Admin & Dispatch can edit dispatch items & co-loading status)
   const [editDispatchModal, setEditDispatchModal] = useState(null);
   const [editDispatchType, setEditDispatchType] = useState('party');
@@ -647,6 +652,51 @@ export default function DispatchListPage() {
       showToast(err.message || 'Error updating dispatch', 'error');
     } finally {
       setSavingDispatchEdit(false);
+    }
+  };
+
+  // Handle Routing Confirmed Party Dispatch to Next Plant (Multi-Part Co-Loading)
+  const handleRouteToNextPlant = async () => {
+    if (!sendToNextPlantModal) return;
+    try {
+      setRoutingToNextPlant(true);
+      const targetPlant = normalizePlant(nextPlantSelected);
+      const res = await fetch(`/api/dispatch/${sendToNextPlantModal.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          is_coloading: true,
+          coloading_status: 'part_loaded',
+          next_loading_plant: targetPlant,
+          second_plant: targetPlant,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to route vehicle to next plant');
+      showToast(`Vehicle ${sendToNextPlantModal.vehicle_number} routed to ${targetPlant} Plant!`, 'success');
+
+      const updatedDispatch = {
+        ...sendToNextPlantModal,
+        is_coloading: true,
+        coloading_status: 'part_loaded',
+        next_loading_plant: targetPlant,
+        second_plant: targetPlant,
+      };
+
+      setSendToNextPlantModal(null);
+      await fetchDispatches(true);
+
+      // If user is at target plant or admin, open CoLoadingModal immediately
+      if (activePlant === ALL_PLANTS_ID || activePlant === targetPlant || employee?.role === 'admin') {
+        setCoLoadingTargetPlant(targetPlant);
+        setCoLoadingModalData(updatedDispatch);
+      }
+    } catch (err) {
+      console.error('Route to next plant error:', err);
+      showToast(err.message || 'Error routing vehicle to next plant', 'error');
+    } finally {
+      setRoutingToNextPlant(false);
     }
   };
 
@@ -1293,6 +1343,25 @@ export default function DispatchListPage() {
                                       <span>✏️ Edit {activePlant !== ALL_PLANTS_ID ? activePlant : 'Stop'} Load</span>
                                     </button>
                                   )
+                                )}
+
+                              {/* Multi-Part Routing for Confirmed Party Dispatch */}
+                              {dispatch.status === 'confirmed' &&
+                                resolveDispatchType(dispatch) === 'party' &&
+                                !isCoLoadingDispatch(dispatch) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const origin = normalizePlant(dispatch.from_location);
+                                      const defaultNext = origin === 'E41 G2' ? 'D4' : 'E41 G2';
+                                      setNextPlantSelected(defaultNext);
+                                      setSendToNextPlantModal(dispatch);
+                                    }}
+                                    className="px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
+                                    title="Send truck to another plant (D4 / C116) to load missing models"
+                                  >
+                                    <span>🚚 Route to Next Plant</span>
+                                  </button>
                                 )}
 
                               {/* Inbound Transfer Action: If this shipment arrives at this plant */}
@@ -2517,6 +2586,37 @@ export default function DispatchListPage() {
                 </div>
               )}
 
+              {/* Option to convert confirmed party dispatch to multi-part co-loading */}
+              {viewDetailsModal.status === 'confirmed' &&
+                resolveDispatchType(viewDetailsModal) === 'party' &&
+                !isCoLoadingDispatch(viewDetailsModal) && (
+                  <div className="mb-4 bg-indigo-50/90 border border-indigo-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <span className="font-bold text-indigo-950 flex items-center space-x-1.5 text-xs">
+                        <span>🚚 Multi-Part Loading: Send Truck to Next Plant</span>
+                        <span className="text-[10px] bg-indigo-200 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded uppercase">Part Load</span>
+                      </span>
+                      <p className="text-[11px] text-gray-600 mt-0.5">
+                        Agar kuch model yahan available nahi the, to is gaadi ko D4 ya C116 plant bhejein taaki wahan baaki model load kiye ja sakein.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const origin = normalizePlant(viewDetailsModal.from_location);
+                        const defaultNext = origin === 'E41 G2' ? 'D4' : 'E41 G2';
+                        setNextPlantSelected(defaultNext);
+                        const d = viewDetailsModal;
+                        setViewDetailsModal(null);
+                        setSendToNextPlantModal(d);
+                      }}
+                      className="btn-primary text-xs py-2 px-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold whitespace-nowrap inline-flex items-center space-x-1 shadow-sm"
+                    >
+                      <span>🚚 Send to Next Plant →</span>
+                    </button>
+                  </div>
+                )}
+
               <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-2">
                 Items ({viewDetailsModal.dispatch_items?.length || 0})
               </h4>
@@ -2758,6 +2858,115 @@ export default function DispatchListPage() {
               await fetchDispatches(true);
             }}
           />
+        )}
+
+        {/* Modal: Route Confirmed Party Dispatch to Next Plant (Multi-Part Co-Loading) */}
+        {sendToNextPlantModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full p-6 space-y-4 animate-scaleUp">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-xl font-bold">
+                    🚚
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Send to Next Plant (Multi-Part)
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Route vehicle to load remaining models from another plant
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSendToNextPlantModal(null)}
+                  disabled={routingToNextPlant}
+                  className="text-gray-400 hover:text-gray-600 p-1 rounded-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Vehicle & Order Details */}
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-200 space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Vehicle Number:</span>
+                  <span className="font-mono font-bold text-gray-900">{sendToNextPlantModal.vehicle_number}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Party Destination:</span>
+                  <span className="font-semibold text-gray-900">{sendToNextPlantModal.destination}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">First Stop (Origin):</span>
+                  <span className="font-medium text-gray-800">{sendToNextPlantModal.from_location}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Already Loaded at Origin:</span>
+                  <span className="font-bold text-emerald-700">
+                    {calculateTotalQty(sendToNextPlantModal.dispatch_items)} coolers
+                  </span>
+                </div>
+              </div>
+
+              {/* Plant Selector */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-2">
+                  Select Next Loading Plant (Stop 2): <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {PLANTS.filter((p) => p.id !== normalizePlant(sendToNextPlantModal.from_location)).map((plant) => (
+                    <button
+                      key={plant.id}
+                      type="button"
+                      onClick={() => setNextPlantSelected(plant.id)}
+                      className={`p-3 rounded-xl border text-left transition-all flex items-center space-x-2.5 ${
+                        nextPlantSelected === plant.id
+                          ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-200 shadow-xs'
+                          : 'bg-white border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-xl">{plant.icon}</span>
+                      <div>
+                        <div className="font-bold text-xs text-gray-900">{plant.name}</div>
+                        <div className="text-[10px] text-gray-500">{plant.shortName} Plant</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 leading-relaxed">
+                💡 <strong>Notice:</strong> As soon as this vehicle is routed, workers at <strong>{nextPlantSelected} Plant</strong> will see the <strong>&quot;➕ Load Models&quot;</strong> button to load their coolers onto this truck.
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setSendToNextPlantModal(null)}
+                  disabled={routingToNextPlant}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRouteToNextPlant}
+                  disabled={routingToNextPlant}
+                  className="btn-primary text-xs py-2 px-5 font-bold shadow-md inline-flex items-center space-x-1.5"
+                >
+                  {routingToNextPlant ? (
+                    <span>Routing Vehicle...</span>
+                  ) : (
+                    <span>Route to {nextPlantSelected} Plant →</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </AppShell>

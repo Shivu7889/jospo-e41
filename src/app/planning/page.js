@@ -1037,16 +1037,11 @@ export default function PlanningPage() {
                       ))}
                     </div>
 
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-indigo-200/60 text-xs">
-                      <span className="font-bold text-indigo-900">Dispatch Logistics Strategy:</span>
-                      <select
-                        value={formDispatchMode}
-                        onChange={(e) => setFormDispatchMode(e.target.value)}
-                        className="input-field text-xs py-1 px-2.5 w-auto bg-white font-semibold"
-                      >
-                        <option value="coloading">🔄 Co-Loading (Single truck visits both plants)</option>
-                        <option value="split">📦 Split (Separate trucks from each plant)</option>
-                      </select>
+                    <div className="pt-2 border-t border-indigo-200/60 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-indigo-950 font-medium">
+                      <span>💡 <strong>Multi-Plant Order:</strong> Coolers are manufactured across {Object.keys(formPlantSummary).length} plants. Dock workers can route the vehicle to the other plant via Multi-Part Co-Loading.</span>
+                      <span className="text-[10px] bg-purple-100 text-purple-900 font-extrabold px-2 py-0.5 rounded-full uppercase flex-shrink-0">
+                        🔄 Multi-Part Eligible
+                      </span>
                     </div>
                   </div>
                 )}

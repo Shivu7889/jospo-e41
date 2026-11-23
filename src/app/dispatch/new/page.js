@@ -1478,6 +1478,8 @@ function NewDispatchContent() {
       const transferStatus = dispatchType === 'local' ? 'in_transit' : 'completed';
 
       let targetDispatchId = editId;
+      const isCoLoad = dispatchType === 'party' && Boolean(isCoLoading);
+      const nextPlant = isCoLoad ? normalizePlant(nextLoadingPlant) : null;
 
       if (editId) {
         // Update existing header
@@ -1489,6 +1491,9 @@ function NewDispatchContent() {
           transfer_status: transferStatus,
           dispatch_date: dispatchDate,
           dispatch_type: dispatchType,
+          is_coloading: isCoLoad,
+          next_loading_plant: nextPlant,
+          coloading_status: isCoLoad ? 'part_loaded' : 'not_applicable',
           remarks: getCompiledRemarks(),
           updated_at: new Date().toISOString(),
         };
@@ -1503,11 +1508,17 @@ function NewDispatchContent() {
           (updateError.message?.includes('destination_plant') ||
             updateError.message?.includes('transfer_status') ||
             updateError.message?.includes('dispatch_type') ||
+            updateError.message?.includes('is_coloading') ||
+            updateError.message?.includes('next_loading_plant') ||
+            updateError.message?.includes('coloading_status') ||
             updateError.code === 'PGRST204')
         ) {
           delete updatePayload.destination_plant;
           delete updatePayload.transfer_status;
           delete updatePayload.dispatch_type;
+          delete updatePayload.is_coloading;
+          delete updatePayload.next_loading_plant;
+          delete updatePayload.coloading_status;
           const retryUpdate = await supabase
             .from('dispatches')
             .update(updatePayload)
@@ -1645,9 +1656,16 @@ function NewDispatchContent() {
         totalQty: totalQuantity,
         itemsCount: items.length,
         dispatchType,
+        isCoLoading: isCoLoad,
+        nextLoadingPlant: nextPlant,
       });
 
-      showToast('Dispatch confirmed and stock deducted successfully!', 'success');
+      showToast(
+        isCoLoad
+          ? `Part-load confirmed! Vehicle routed to ${nextPlant} Plant for remaining models.`
+          : 'Dispatch confirmed and stock deducted successfully!',
+        'success'
+      );
     } catch (err) {
       console.error('Error confirming dispatch:', err);
       showToast(err.message || 'Failed to confirm dispatch', 'error');
@@ -1664,9 +1682,13 @@ function NewDispatchContent() {
           <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-3xl mx-auto mb-4 animate-bounce">
             ✓
           </div>
-          <h2 className="text-2xl font-extrabold text-gray-900 mb-1">Dispatch Confirmed!</h2>
+          <h2 className="text-2xl font-extrabold text-gray-900 mb-1">
+            {submissionSuccess.isCoLoading ? 'Part-Load Dispatched & Routed!' : 'Dispatch Confirmed!'}
+          </h2>
           <p className="text-sm text-gray-600 mb-6">
-            Stock ledger has been atomically updated and vehicle record is locked.
+            {submissionSuccess.isCoLoading
+              ? `Origin stock deducted. Vehicle is now routed to ${submissionSuccess.nextLoadingPlant} Plant to load remaining models.`
+              : 'Stock ledger has been atomically updated and vehicle record is locked.'}
           </p>
 
           <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 text-left text-sm space-y-2.5 mb-6">
@@ -1694,6 +1716,19 @@ function NewDispatchContent() {
               <span className="text-gray-500">Models Loaded:</span>
               <span className="font-semibold text-gray-800">{submissionSuccess.itemsCount} model types</span>
             </div>
+            {submissionSuccess.isCoLoading && (
+              <div className="pt-2 border-t border-gray-200">
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center space-x-2">
+                  <span className="text-lg">🚚</span>
+                  <div>
+                    <span className="font-bold block">Next Stop: {submissionSuccess.nextLoadingPlant} Plant</span>
+                    <span className="text-[11px] text-amber-800">
+                      Gaadi abhi {submissionSuccess.nextLoadingPlant} plant par jayegi aur baaki cooler models wahan load honge.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <p className="text-xs text-gray-500 mb-6">
@@ -2194,56 +2229,6 @@ function NewDispatchContent() {
                 </div>
               )}
             </div>
-
-            {/* Multi-Plant Co-Loading Option for Party Dispatch */}
-            {dispatchType === 'party' && (
-              <div className="p-3.5 bg-gradient-to-r from-blue-50/70 to-indigo-50/70 rounded-xl border border-blue-200/90 space-y-3">
-                <label className="flex items-start space-x-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isCoLoading}
-                    onChange={(e) => setIsCoLoading(e.target.checked)}
-                    className="mt-0.5 rounded text-primary-600 focus:ring-primary-500 w-4 h-4 cursor-pointer"
-                  />
-                  <div>
-                    <span className="text-xs font-bold text-gray-900 flex items-center space-x-1.5">
-                      <span>🚚 Multi-Plant Co-Loading (गाड़ी आगे अन्य प्लांट पर भी लोड होगी)</span>
-                      <span className="text-[10px] bg-blue-200 text-blue-900 font-extrabold px-1.5 py-0.5 rounded uppercase">
-                        Part Load
-                      </span>
-                    </span>
-                    <span className="text-[11px] text-gray-600 block mt-0.5">
-                      गाड़ी <strong>{normalizePlant(fromLocation)}</strong> से आंशिक लोड (Part Load) होकर दूसरे प्लांट पर जाएगी और वहां से बाकी मॉडल लोड करके पार्टी को रवाना होगी।
-                    </span>
-                  </div>
-                </label>
-
-                {isCoLoading && (
-                  <div className="pt-2.5 border-t border-blue-200/60 flex flex-col sm:flex-row sm:items-center gap-2">
-                    <label className="text-xs font-bold text-gray-800 whitespace-nowrap">
-                      अगला लोडिंग प्लांट (Next Stop): <span className="text-red-500">*</span>
-                    </label>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {PLANTS.filter((p) => p.id !== normalizePlant(fromLocation)).map((otherPlant) => (
-                        <button
-                          key={otherPlant.id}
-                          type="button"
-                          onClick={() => setNextLoadingPlant(otherPlant.id)}
-                          className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all flex items-center space-x-1 ${
-                            nextLoadingPlant === otherPlant.id
-                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                          }`}
-                        >
-                          <span>{otherPlant.icon}</span>
-                          <span>{otherPlant.shortName} Plant</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Dispatch Date */}
             <div>
@@ -2934,6 +2919,69 @@ function NewDispatchContent() {
             </div>
           )}
 
+          {/* Multi-Plant Co-Loading / Part Load Option (Shown after models are loaded at this plant) */}
+          {dispatchType === 'party' && items.length > 0 && (
+            <div className={`p-4 rounded-xl border transition-all ${
+              isCoLoading
+                ? 'bg-gradient-to-r from-amber-50/90 via-indigo-50/80 to-blue-50/90 border-indigo-300 shadow-sm'
+                : 'bg-gray-50/80 hover:bg-indigo-50/30 border-gray-200'
+            }`}>
+              <label className="flex items-start space-x-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isCoLoading}
+                  onChange={(e) => setIsCoLoading(e.target.checked)}
+                  className="mt-1 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                />
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-gray-900">
+                      🚚 Kuch Model Yahan Available Nahi Hain? Gaadi Agle Plant Bhejna Hai (Multi-Part / Co-Loading)
+                    </span>
+                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase ${
+                      isCoLoading ? 'bg-amber-500 text-white shadow-xs' : 'bg-gray-200 text-gray-700'
+                    }`}>
+                      {isCoLoading ? 'Part-Load Active' : 'Direct Dispatch'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                    Agar is party ke kuch model <strong>{normalizePlant(fromLocation)}</strong> par available nahi hain ya doosre plant par bante hain, to tick karein taaki gaadi aadhi load hokar doosre plant jayegi aur baaki model load karegi.
+                  </p>
+                </div>
+              </label>
+
+              {isCoLoading && (
+                <div className="mt-3 pt-3 border-t border-indigo-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/80 p-3 rounded-lg border border-indigo-100">
+                  <div>
+                    <span className="text-xs font-bold text-gray-800 block">
+                      Agle kis plant par gaadi ko bhej rahe hain? (Next Stop): <span className="text-red-500">*</span>
+                    </span>
+                    <span className="text-[11px] text-gray-500">
+                      Gaadi wahan pahunchte hi unke dock par <strong>&quot;➕ Load Models&quot;</strong> ka option show hoga.
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {PLANTS.filter((p) => p.id !== normalizePlant(fromLocation)).map((otherPlant) => (
+                      <button
+                        key={otherPlant.id}
+                        type="button"
+                        onClick={() => setNextLoadingPlant(otherPlant.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center space-x-1.5 ${
+                          nextLoadingPlant === otherPlant.id
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm ring-2 ring-indigo-300'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span>{otherPlant.icon}</span>
+                        <span>{otherPlant.shortName} Plant</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Step 2 Bottom Controls */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-gray-200">
             <button
@@ -3130,11 +3178,19 @@ function NewDispatchContent() {
                 type="button"
                 onClick={handleConfirmDispatch}
                 disabled={submitting}
-                className="btn-success text-xs py-2.5 px-6 shadow-sm w-full sm:w-auto font-bold"
+                className={`text-xs py-2.5 px-6 shadow-sm w-full sm:w-auto font-bold rounded-lg transition-all ${
+                  isCoLoading && dispatchType === 'party'
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white ring-2 ring-indigo-300'
+                    : 'btn-success'
+                }`}
               >
                 {submitting
                   ? (existingDispatchStatus === 'confirmed' ? 'Updating Stock...' : 'Confirming Dispatch...')
-                  : (existingDispatchStatus === 'confirmed' ? '💾 Save Updates & Adjust Stock' : 'Confirm & Deduct Stock ✓')}
+                  : (existingDispatchStatus === 'confirmed'
+                      ? '💾 Save Updates & Adjust Stock'
+                      : (isCoLoading && dispatchType === 'party'
+                          ? `🚚 Confirm Part-Load & Route to ${nextLoadingPlant} Plant →`
+                          : 'Confirm & Deduct Stock ✓'))}
               </button>
             </div>
           </div>
