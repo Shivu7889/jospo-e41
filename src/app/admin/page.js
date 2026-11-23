@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import StatsCard from '@/components/StatsCard';
@@ -25,8 +24,8 @@ export default function AdminPage() {
   );
   const supabase = getSupabase();
 
-  // Active section tab: 'thekedars' | 'users' | 'adjustments' | 'system'
-  const [activeSection, setActiveSection] = useState('thekedars');
+  // Active section tab: 'users' | 'adjustments'
+  const [activeSection, setActiveSection] = useState('users');
 
   // Loading states
   const [loadingUsers, setLoadingUsers] = useState(true);
@@ -40,117 +39,16 @@ export default function AdminPage() {
   const [newUserPlant, setNewUserPlant] = useState(DEFAULT_PLANT_ID);
   const [adjustmentPlant, setAdjustmentPlant] = useState(DEFAULT_PLANT_ID);
 
-  // Thekedar (Contractor) Management State
-  const [thekedarsList, setThekedarsList] = useState([]);
-  const [loadingThekedars, setLoadingThekedars] = useState(true);
-  const [newThekedarName, setNewThekedarName] = useState('');
-  const [thekedarPlantFilter, setThekedarPlantFilter] = useState(
-    activePlant && activePlant !== ALL_PLANTS_ID ? activePlant : 'ALL'
-  );
-  const [newThekedarPlant, setNewThekedarPlant] = useState(
-    activePlant && activePlant !== ALL_PLANTS_ID ? activePlant : DEFAULT_PLANT_ID
-  );
-  const [submittingThekedar, setSubmittingThekedar] = useState(false);
-
-  useEffect(() => {
-    if (activePlant && activePlant !== ALL_PLANTS_ID) {
-      setThekedarPlantFilter(activePlant);
-      setNewThekedarPlant(activePlant);
-    }
-  }, [activePlant]);
-
-  // Read URL query parameters on initial mount (e.g. /admin?section=thekedars)
+  // Read URL query parameters on initial mount (e.g. /admin?section=users)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const sec = params.get('section');
-      if (sec === 'thekedars' || sec === 'users' || sec === 'adjustments' || sec === 'system') {
+      if (sec === 'users' || sec === 'adjustments') {
         setActiveSection(sec);
       }
     }
   }, []);
-
-  // Fetch Thekedars list
-  const fetchThekedars = useCallback(async () => {
-    try {
-      setLoadingThekedars(true);
-      const queryPlant = thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : '';
-      const plantParam = queryPlant ? `?plant=${encodeURIComponent(queryPlant)}` : '';
-      const res = await fetch(`/api/contractors${plantParam}`);
-      const data = await res.json();
-      if (res.ok && data.data && Array.isArray(data.data)) {
-        setThekedarsList(data.data);
-      } else if (res.ok && data.contractors) {
-        setThekedarsList(data.contractors.map((name) => ({ name, plant: queryPlant || 'E41 G2' })));
-      }
-    } catch (err) {
-      console.error('Error fetching contractors:', err);
-    } finally {
-      setLoadingThekedars(false);
-    }
-  }, [thekedarPlantFilter]);
-
-  useEffect(() => {
-    fetchThekedars();
-  }, [fetchThekedars]);
-
-  // Admin add Thekedar
-  const handleAddThekedar = async (e) => {
-    if (e) e.preventDefault();
-    const clean = newThekedarName.trim();
-    if (!clean) {
-      showToast('Please enter a contractor / Thekedar name', 'warning');
-      return;
-    }
-    const targetPlant = newThekedarPlant || DEFAULT_PLANT_ID;
-    try {
-      setSubmittingThekedar(true);
-      const res = await fetch('/api/contractors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: clean, plant: targetPlant }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to add Thekedar');
-
-      showToast(`Added Thekedar for ${targetPlant}: ${clean}`, 'success');
-      setNewThekedarName('');
-      fetchThekedars();
-    } catch (err) {
-      console.error('Error adding contractor:', err);
-      showToast(err.message || 'Error adding contractor', 'error');
-    } finally {
-      setSubmittingThekedar(false);
-    }
-  };
-
-  // Admin remove Thekedar
-  const handleRemoveThekedar = async (thekedar) => {
-    const nameToRemove = typeof thekedar === 'string' ? thekedar : thekedar.name;
-    const plantTarget = typeof thekedar === 'string'
-      ? (thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : DEFAULT_PLANT_ID)
-      : (thekedar.plant || DEFAULT_PLANT_ID);
-
-    if (!window.confirm(`Are you sure you want to remove "${nameToRemove}" (${plantTarget}) from active Thekedars? Operators will no longer be able to select this contractor for new production.`)) {
-      return;
-    }
-    try {
-      setSubmittingThekedar(true);
-      const res = await fetch(`/api/contractors?name=${encodeURIComponent(nameToRemove)}&plant=${encodeURIComponent(plantTarget)}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to remove Thekedar');
-
-      showToast(`Removed Thekedar: ${nameToRemove} (${plantTarget})`, 'success');
-      fetchThekedars();
-    } catch (err) {
-      console.error('Error removing contractor:', err);
-      showToast(err.message || 'Error removing contractor', 'error');
-    } finally {
-      setSubmittingThekedar(false);
-    }
-  };
 
   // Data states
   const [employees, setEmployees] = useState([]);
@@ -181,10 +79,6 @@ export default function AdminPage() {
 
   // Confirmation Modal for Adjustment
   const [showConfirmAdjustmentModal, setShowConfirmAdjustmentModal] = useState(false);
-
-  // System Diagnostics State
-  const [dbStatus, setDbStatus] = useState('checking'); // 'checking' | 'connected' | 'error'
-  const [dbLatency, setDbLatency] = useState(null);
 
   // 1. Fetch Employees
   const fetchEmployees = useCallback(async () => {
@@ -270,29 +164,11 @@ export default function AdminPage() {
     }
   }, [supabase]);
 
-  // 4. Test Database Connection & Latency
-  const checkDatabaseHealth = useCallback(async () => {
-    try {
-      setDbStatus('checking');
-      const start = performance.now();
-      const { error } = await supabase.from('cooler_models').select('id').limit(1);
-      const elapsed = Math.round(performance.now() - start);
-
-      if (error) throw error;
-      setDbStatus('connected');
-      setDbLatency(elapsed);
-    } catch (err) {
-      setDbStatus('error');
-      setDbLatency(null);
-    }
-  }, [supabase]);
-
   useEffect(() => {
     fetchEmployees();
     fetchModelsAndStock();
     fetchRecentAdjustments();
-    checkDatabaseHealth();
-  }, [fetchEmployees, fetchModelsAndStock, fetchRecentAdjustments, checkDatabaseHealth]);
+  }, [fetchEmployees, fetchModelsAndStock, fetchRecentAdjustments]);
 
   // Handle Add Employee Submit
   const handleAddEmployee = async (e) => {
@@ -583,7 +459,7 @@ export default function AdminPage() {
               System Administration
             </h1>
             <p className="mt-1 text-sm text-gray-600">
-              Manage workforce permissions, perform audited emergency stock corrections, and monitor system health.
+              Manage workforce permissions and perform audited emergency stock corrections.
             </p>
           </div>
           <div className="flex items-center space-x-2">
@@ -592,7 +468,7 @@ export default function AdminPage() {
         </div>
 
         {/* Top Stats Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           <StatsCard
             title="Total Employees"
             value={stats.totalEmps}
@@ -614,23 +490,14 @@ export default function AdminPage() {
             color="amber"
             subtitle="Audited ledger entries"
           />
-          <StatsCard
-            title="Database Status"
-            value={dbStatus === 'connected' ? 'Online' : 'Checking'}
-            icon="🟢"
-            color={dbStatus === 'connected' ? 'green' : 'red'}
-            subtitle={dbLatency ? `${dbLatency}ms latency` : 'Verifying connection'}
-          />
         </div>
 
         {/* Section Tabs */}
         <div className="border-b border-gray-200">
           <nav className="-mb-px flex space-x-2 sm:space-x-4 overflow-x-auto" aria-label="Admin tabs">
             {[
-              { id: 'thekedars', label: 'Manage Thekedars', icon: '👷' },
               { id: 'users', label: 'Employee Management', icon: '👥' },
               { id: 'adjustments', label: 'Stock Adjustment (Audited)', icon: '⚖️' },
-              { id: 'system', label: 'System Info & Diagnostics', icon: '🖥️' },
             ].map((tab) => {
               const active = activeSection === tab.id;
               return (
@@ -651,228 +518,6 @@ export default function AdminPage() {
             })}
           </nav>
         </div>
-
-        {/* SECTION 0: THEKEDAR (CONTRACTOR) MANAGEMENT */}
-        {activeSection === 'thekedars' && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* Header & Add Thekedar Bar */}
-            <div className="card p-5 border border-gray-200 shadow-sm space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
-                    <span>👷 Assembly Thekedars (Contractors)</span>
-                    <span className="text-xs bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full uppercase">
-                      Admin Access
-                    </span>
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Only Admins have permission to add or remove Thekedars. Factory operators can only select from this approved list.
-                  </p>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <Link
-                    href="/reports?tab=production"
-                    className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm"
-                  >
-                    <span>📊</span>
-                    <span>View Production Reports →</span>
-                  </Link>
-                </div>
-              </div>
-
-              {/* Form to Add New Thekedar */}
-              <form onSubmit={handleAddThekedar} className="pt-3 border-t border-gray-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    value={newThekedarName}
-                    onChange={(e) => setNewThekedarName(e.target.value)}
-                    placeholder="Enter new contractor name (e.g. Ramesh Thekedar)"
-                    className="input-field text-xs sm:text-sm bg-gray-50/70 font-medium"
-                    disabled={submittingThekedar}
-                  />
-                </div>
-                <div className="w-full sm:w-48">
-                  <select
-                    value={newThekedarPlant}
-                    onChange={(e) => setNewThekedarPlant(e.target.value)}
-                    className="input-field text-xs sm:text-sm bg-gray-50/70 font-semibold"
-                    disabled={submittingThekedar || (activePlant && activePlant !== ALL_PLANTS_ID)}
-                  >
-                    {PLANTS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.icon} {p.shortName} Plant
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="submit"
-                  disabled={submittingThekedar || !newThekedarName.trim()}
-                  className="btn-primary text-xs sm:text-sm py-2 px-5 inline-flex items-center justify-center space-x-1.5 shadow-sm font-bold whitespace-nowrap"
-                >
-                  <span>+</span>
-                  <span>Add Thekedar</span>
-                </button>
-              </form>
-            </div>
-
-            {/* Quick KPI stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <StatsCard
-                title="Active Thekedars"
-                value={thekedarsList.length}
-                icon="👷"
-                color="indigo"
-                subtitle="Approved assembly contractors"
-              />
-              <StatsCard
-                title="Permission Level"
-                value="Admin Only"
-                icon="🔒"
-                color="purple"
-                subtitle="Non-admins can only select"
-              />
-              <StatsCard
-                title="Production Logging"
-                value="Active"
-                icon="⚡"
-                color="emerald"
-                subtitle="Real-time piece rate tracking"
-              />
-            </div>
-
-            {/* Thekedars Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200 shadow-sm">
-              <div className="p-4 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-bold text-gray-900">Approved Contractor Roster</h4>
-                  <p className="text-xs text-gray-500">
-                    These Thekedars appear in the production entry dropdown for their assigned plant.
-                  </p>
-                </div>
-                <div className="flex items-center space-x-2">
-                  {isOwner && (
-                    <div className="flex items-center bg-white p-1 rounded-lg border border-gray-200 shadow-xs space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => setThekedarPlantFilter('ALL')}
-                        className={`px-2 py-0.5 text-xs font-bold rounded-md transition-colors ${
-                          thekedarPlantFilter === 'ALL'
-                            ? 'bg-purple-600 text-white'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        All Plants
-                      </button>
-                      {PLANTS.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => setThekedarPlantFilter(p.id)}
-                          className={`px-2 py-0.5 text-xs font-bold rounded-md transition-colors ${
-                            thekedarPlantFilter === p.id
-                              ? 'bg-primary-600 text-white'
-                              : 'text-gray-600 hover:text-gray-900'
-                          }`}
-                        >
-                          {p.shortName}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <span className="text-xs font-bold text-gray-700 bg-white px-2.5 py-1 rounded-lg border border-gray-200 shadow-sm whitespace-nowrap">
-                    {thekedarsList.length} registered
-                  </span>
-                </div>
-              </div>
-
-              {loadingThekedars ? (
-                <div className="py-16 text-center">
-                  <LoadingSpinner message="Loading contractors list..." size="md" />
-                </div>
-              ) : thekedarsList.length === 0 ? (
-                <div className="py-16 text-center text-gray-500 text-xs">
-                  <div className="text-3xl mb-2">👷</div>
-                  <p className="font-semibold text-gray-700">No Thekedars registered.</p>
-                  <p className="text-gray-400 mt-1">Add your first contractor using the form above.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200 text-xs sm:text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          S.No
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Thekedar Name
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Assigned Plant
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
-                      {thekedarsList.map((item, idx) => {
-                        const name = typeof item === 'string' ? item : item.name;
-                        const plant = typeof item === 'string' ? (thekedarPlantFilter !== 'ALL' ? thekedarPlantFilter : 'E41 G2') : (item.plant || 'E41 G2');
-                        const meta = getPlantMeta(plant);
-                        return (
-                          <tr key={`${name}-${plant}-${idx}`} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-3 text-gray-400 font-mono text-xs">{idx + 1}</td>
-                            <td className="px-4 py-3 font-semibold text-gray-900 flex items-center space-x-2">
-                              <span className="w-7 h-7 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
-                                👷
-                              </span>
-                              <span>{name}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`inline-flex items-center space-x-1 text-xs font-bold px-2 py-0.5 rounded-full border ${meta.tagColor || 'bg-gray-100 text-gray-800 border-gray-200'}`}>
-                                <span>{meta.icon || '🏭'}</span>
-                                <span>{meta.name || plant}</span>
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="badge-success text-xs font-semibold">Active in Production</span>
-                            </td>
-                            <td className="px-4 py-3 text-right space-x-2">
-                              <Link
-                                href={`/reports?tab=production&thekedar=${encodeURIComponent(name)}&plant=${encodeURIComponent(plant)}`}
-                                className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline inline-flex items-center space-x-1"
-                              >
-                                <span>View Reports</span>
-                                <span>→</span>
-                              </Link>
-
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveThekedar(item)}
-                                disabled={submittingThekedar}
-                                className="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors font-medium border border-red-200 inline-flex items-center space-x-1"
-                                title={`Remove ${name} (${plant})`}
-                              >
-                                <span>🗑️</span>
-                                <span>Remove</span>
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
 
         {/* SECTION 1: EMPLOYEE MANAGEMENT */}
         {activeSection === 'users' && (
@@ -1399,128 +1044,6 @@ export default function AdminPage() {
                   </table>
                 </div>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* SECTION 3: SYSTEM INFO & DIAGNOSTICS */}
-        {activeSection === 'system' && (
-          <div className="space-y-5 animate-fadeIn">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Database & Infrastructure */}
-              <div className="card space-y-3">
-                <div className="flex items-center space-x-2 border-b border-gray-100 pb-2.5">
-                  <span className="text-xl">🗄️</span>
-                  <h3 className="text-sm font-bold text-gray-900">Database & Cloud Backend</h3>
-                </div>
-                <div className="text-xs space-y-2 text-gray-700">
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">Provider:</span>
-                    <span className="font-semibold text-gray-900">Supabase PostgreSQL 15+</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">Connection State:</span>
-                    <span className="flex items-center space-x-1.5 font-bold text-emerald-700">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span>{dbStatus === 'connected' ? 'Connected & Healthy' : 'Checking'}</span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">Query Round-Trip Latency:</span>
-                    <span className="font-mono font-semibold text-gray-900">
-                      {dbLatency ? `${dbLatency} ms` : '—'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-1">
-                    <span className="text-gray-500">Row Level Security (RLS):</span>
-                    <span className="badge-success text-[10px]">Enabled & Enforced</span>
-                  </div>
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={checkDatabaseHealth}
-                    className="btn-secondary text-xs w-full py-1.5"
-                  >
-                    Run Health Check Ping
-                  </button>
-                </div>
-              </div>
-
-              {/* Application Details */}
-              <div className="card space-y-3">
-                <div className="flex items-center space-x-2 border-b border-gray-100 pb-2.5">
-                  <span className="text-xl">❄️</span>
-                  <h3 className="text-sm font-bold text-gray-900">Application Environment</h3>
-                </div>
-                <div className="text-xs space-y-2 text-gray-700">
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">System Name:</span>
-                    <span className="font-bold text-gray-900">Jospo E41 MFG System</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">Framework:</span>
-                    <span className="font-semibold text-gray-900">Next.js 14 App Router</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-gray-50">
-                    <span className="text-gray-500">Version:</span>
-                    <span className="font-mono font-bold text-primary-700">v1.0.0</span>
-                  </div>
-                  <div className="flex justify-between py-1">
-                    <span className="text-gray-500">Active User:</span>
-                    <span className="font-semibold text-gray-900">
-                      {employee?.name} ({employee?.email})
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Models Master Quick Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200">
-              <div className="p-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                    Cooler Models Master Directory ({models.length})
-                  </h4>
-                  <p className="text-[11px] text-gray-500">QR Code bindings and active catalogue status</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200 text-xs">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Code</th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Model Name</th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600">QR Scan String</th>
-                      <th className="px-4 py-2.5 text-right font-semibold text-gray-600">Current Stock</th>
-                      <th className="px-4 py-2.5 text-center font-semibold text-gray-600">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
-                    {models.map((m) => (
-                      <tr key={m.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2.5 font-mono font-bold text-primary-700">{m.code}</td>
-                        <td className="px-4 py-2.5 text-gray-900 font-medium">{m.name}</td>
-                        <td className="px-4 py-2.5 font-mono text-gray-600 bg-gray-50 rounded">
-                          {m.qr_data}
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-extrabold text-gray-900">
-                          {stockMap[m.id] ?? 0} units
-                        </td>
-                        <td className="px-4 py-2.5 text-center">
-                          {m.is_active ? (
-                            <span className="badge-success">Active</span>
-                          ) : (
-                            <span className="badge-danger">Inactive</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}

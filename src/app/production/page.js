@@ -1569,10 +1569,10 @@ export default function ProductionPage() {
 
               <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                 <Link
-                  href="/admin?section=thekedars"
+                  href="/admin"
                   className="text-xs font-semibold text-primary-700 hover:underline"
                 >
-                  Open Full Admin Panel →
+                  Open Admin Console →
                 </Link>
                 <button
                   type="button"
