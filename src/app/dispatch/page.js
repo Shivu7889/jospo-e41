@@ -37,6 +37,7 @@ import {
   normalizePlant,
   resolveDestinationPlant,
   resolveTransferStatus,
+  isInboundEnabledForPlant,
   getPlantMeta,
 } from '@/lib/plants';
 
@@ -78,6 +79,25 @@ export default function DispatchListPage() {
 
   // Tabs: 'outward' (dispatches from this plant) vs 'inbound' (incoming inter-plant shipments)
   const [activeTab, setActiveTab] = useState('outward');
+
+  // Automatically switch back to 'outward' if activePlant does not have inbound enabled (e.g. D4, C116)
+  useEffect(() => {
+    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant) && activeTab === 'inbound') {
+      setActiveTab('outward');
+    }
+  }, [activePlant, activeTab]);
+
+  // Support ?tab=inbound URL parameter if activePlant is inbound-enabled
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('tab') === 'inbound') {
+        if (activePlant === ALL_PLANTS_ID || isInboundEnabledForPlant(activePlant)) {
+          setActiveTab('inbound');
+        }
+      }
+    }
+  }, [activePlant]);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'draft' | 'confirmed' | 'cancelled'
@@ -282,6 +302,11 @@ export default function DispatchListPage() {
 
   // Incoming vehicles waiting for secondary co-loading at this plant
   const incomingCoLoadVehicles = useMemo(() => {
+    // Only show if inbound is enabled for this plant (currently E41 G2 only)
+    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+      return [];
+    }
+
     return dispatches.filter((d) => {
       if (d.status !== 'confirmed') return false;
       if (!isCoLoadingDispatch(d)) return false;
@@ -289,6 +314,9 @@ export default function DispatchListPage() {
       if (status !== 'part_loaded') return false;
 
       const nextPlant = resolveNextLoadingPlant(d);
+      // Skip if next plant does not have inbound/co-loading enabled yet
+      if (!isInboundEnabledForPlant(nextPlant)) return false;
+
       if (activePlant !== ALL_PLANTS_ID) {
         if (nextPlant !== activePlant) return false;
       }
@@ -298,6 +326,11 @@ export default function DispatchListPage() {
 
   // Inbound transfers list (confirmed local transfers received or in-transit to this plant)
   const filteredInboundTransfers = useMemo(() => {
+    // Only show inbound transfers for plants where inbound is enabled (currently E41 G2 only)
+    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+      return [];
+    }
+
     return dispatches.filter((d) => {
       const destPlant = resolveDestinationPlant(d);
       const originPlant = normalizePlant(d.from_location);
@@ -305,6 +338,9 @@ export default function DispatchListPage() {
       if (!destPlant || destPlant === originPlant) return false;
       const isLocal = resolveDispatchType(d) === 'local' || Boolean(destPlant);
       if (!isLocal || d.status !== 'confirmed') return false;
+
+      // Only show transfers where destination plant is inbound-enabled
+      if (!isInboundEnabledForPlant(destPlant)) return false;
 
       if (activePlant !== ALL_PLANTS_ID) {
         if (destPlant !== activePlant) return false;
@@ -770,7 +806,9 @@ export default function DispatchListPage() {
             <p className="mt-1 text-sm text-gray-600">
               {activePlant === ALL_PLANTS_ID
                 ? 'Overview of outward shipments and inter-plant transfers across all facilities.'
-                : `Outward shipments and inbound stock transfers for ${activePlant} facility.`}
+                : isInboundEnabledForPlant(activePlant)
+                  ? `Outward shipments and inbound stock transfers for ${activePlant} facility.`
+                  : `Outward shipments for ${activePlant} facility.`}
             </p>
           </div>
           <div className="flex items-center space-x-3">
@@ -1023,27 +1061,29 @@ export default function DispatchListPage() {
             <span>Outward Dispatches ({filteredDispatches.length})</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('inbound')}
-            className={`pb-3 px-3 text-sm font-bold border-b-2 flex items-center space-x-2 transition-all relative ${
-              activeTab === 'inbound'
-                ? 'border-primary-600 text-primary-700 font-extrabold'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <span className="text-base">📥</span>
-            <span>Inbound Plant Transfers</span>
-            {inboundTransfersCount > 0 ? (
-              <span className="px-2 py-0.5 rounded-full text-xs font-black bg-rose-500 text-white shadow-sm animate-pulse">
-                {inboundTransfersCount} Pending
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
-                {filteredInboundTransfers.length}
-              </span>
-            )}
-          </button>
+          {(activePlant === ALL_PLANTS_ID || isInboundEnabledForPlant(activePlant)) && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('inbound')}
+              className={`pb-3 px-3 text-sm font-bold border-b-2 flex items-center space-x-2 transition-all relative ${
+                activeTab === 'inbound'
+                  ? 'border-primary-600 text-primary-700 font-extrabold'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <span className="text-base">📥</span>
+              <span>Inbound Plant Transfers</span>
+              {inboundTransfersCount > 0 ? (
+                <span className="px-2 py-0.5 rounded-full text-xs font-black bg-rose-500 text-white shadow-sm animate-pulse">
+                  {inboundTransfersCount} Pending
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
+                  {filteredInboundTransfers.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* OUTWARD DISPATCHES TAB */}

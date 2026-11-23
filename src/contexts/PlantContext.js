@@ -11,6 +11,7 @@ import {
   isOwnerUser,
   resolveDestinationPlant,
   resolveTransferStatus,
+  isInboundEnabledForPlant,
 } from '@/lib/plants';
 
 const PlantContext = createContext(null);
@@ -82,6 +83,12 @@ export function PlantProvider({ children }) {
   // Fetch pending inbound transfers count for activePlant
   const fetchInboundTransfersCount = useCallback(async () => {
     if (!employee) return;
+    // If activePlant is specified and does not have inbound enabled (e.g. D4, C116), do not show inbound count
+    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+      setInboundTransfersCount(0);
+      return;
+    }
+
     try {
       setLoadingTransfers(true);
       // Fetch only unreceived confirmed dispatches (drastically reduces payload from thousands to just a few rows)
@@ -109,6 +116,9 @@ export function PlantProvider({ children }) {
         const status = resolveTransferStatus(d);
         // Constraint: Valid inter-plant transfer must not originate and terminate at the same plant
         if (destPlant && destPlant !== originPlant && status === 'in_transit') {
+          // Skip if destination plant does not have inbound transfers enabled yet (e.g. D4, C116)
+          if (!isInboundEnabledForPlant(destPlant)) return;
+
           if (activePlant === ALL_PLANTS_ID) {
             count += 1;
           } else if (destPlant === activePlant) {

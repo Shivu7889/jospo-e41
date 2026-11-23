@@ -16,6 +16,7 @@ import {
   ALL_PLANTS_ID,
   DEFAULT_PLANT_ID,
   normalizePlant,
+  isInboundEnabledForPlant,
   getPlantMeta,
 } from '@/lib/plants';
 
@@ -408,7 +409,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Inbound Inter-Plant Transfers Alert Banner */}
-        {inboundTransfersCount > 0 && (
+        {inboundTransfersCount > 0 && (activePlant === ALL_PLANTS_ID || isInboundEnabledForPlant(activePlant)) && (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 text-amber-950 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-pulse">
             <div className="flex items-center space-x-3">
               <span className="text-3xl">🚚</span>

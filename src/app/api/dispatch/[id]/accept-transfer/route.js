@@ -8,6 +8,7 @@ import {
   resolveDestinationPlant,
   resolveTransferStatus,
   formatPlantRemarks,
+  isInboundEnabledForPlant,
 } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
@@ -72,6 +73,14 @@ export async function POST(request, { params }) {
 
     // 3. Determine destination plant and check employee permission
     const resolvedDestPlant = destPlant || normalizePlant(employee.plant);
+
+    if (!isInboundEnabledForPlant(resolvedDestPlant)) {
+      return NextResponse.json(
+        { error: `Inbound transfer receiving is currently disabled for ${resolvedDestPlant} plant. It is active on E41 G2 plant only.` },
+        { status: 400 }
+      );
+    }
+
     const isOwner = isOwnerUser(employee);
 
     if (!isOwner) {

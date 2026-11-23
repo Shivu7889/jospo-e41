@@ -46,6 +46,19 @@ export const ALL_PLANTS_ID = 'ALL';
 export const DEFAULT_PLANT_ID = 'E41 G2';
 
 /**
+ * Manufacturing plants where Inbound Stock Transfer receipt & tracking is active.
+ * Currently active ONLY for 'E41 G2' plant.
+ * Other plants (D4, C116) will be enabled once physical receiving terminals are deployed.
+ */
+export const INBOUND_ENABLED_PLANTS = ['E41 G2'];
+
+export function isInboundEnabledForPlant(plantId) {
+  if (!plantId) return false;
+  const normalized = normalizePlant(plantId);
+  return INBOUND_ENABLED_PLANTS.includes(normalized);
+}
+
+/**
  * Normalizes any plant string (e.g. 'Jospo E41', 'E41', 'E41 G2', 'D4', 'C116')
  * into the canonical ID: 'E41 G2', 'D4', 'C116', or 'ALL'.
  */
