@@ -1345,25 +1345,6 @@ export default function DispatchListPage() {
                                   )
                                 )}
 
-                              {/* Multi-Part Routing for Confirmed Party Dispatch */}
-                              {dispatch.status === 'confirmed' &&
-                                resolveDispatchType(dispatch) === 'party' &&
-                                !isCoLoadingDispatch(dispatch) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const origin = normalizePlant(dispatch.from_location);
-                                      const defaultNext = origin === 'E41 G2' ? 'D4' : 'E41 G2';
-                                      setNextPlantSelected(defaultNext);
-                                      setSendToNextPlantModal(dispatch);
-                                    }}
-                                    className="px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
-                                    title="Send truck to another plant (D4 / C116) to load missing models"
-                                  >
-                                    <span>🚚 Send to...</span>
-                                  </button>
-                                )}
-
                               {/* Inbound Transfer Action: If this shipment arrives at this plant */}
                               {dispatch.status === 'confirmed' &&
                                 resolveDestinationPlant(dispatch) &&
@@ -2585,37 +2566,6 @@ export default function DispatchListPage() {
                   )}
                 </div>
               )}
-
-              {/* Option to convert confirmed party dispatch to multi-part co-loading */}
-              {viewDetailsModal.status === 'confirmed' &&
-                resolveDispatchType(viewDetailsModal) === 'party' &&
-                !isCoLoadingDispatch(viewDetailsModal) && (
-                  <div className="mb-4 bg-indigo-50/90 border border-indigo-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                    <div>
-                      <span className="font-bold text-indigo-950 flex items-center space-x-1.5 text-xs">
-                        <span>🚚 Multi-Part Loading: Send Truck to Next Plant</span>
-                        <span className="text-[10px] bg-indigo-200 text-indigo-800 font-extrabold px-1.5 py-0.2 rounded uppercase">Part Load</span>
-                      </span>
-                      <p className="text-[11px] text-gray-600 mt-0.5">
-                        Agar kuch model yahan available nahi the, to is gaadi ko D4 ya C116 plant bhejein taaki wahan baaki model load kiye ja sakein.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const origin = normalizePlant(viewDetailsModal.from_location);
-                        const defaultNext = origin === 'E41 G2' ? 'D4' : 'E41 G2';
-                        setNextPlantSelected(defaultNext);
-                        const d = viewDetailsModal;
-                        setViewDetailsModal(null);
-                        setSendToNextPlantModal(d);
-                      }}
-                      className="btn-primary text-xs py-2 px-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold whitespace-nowrap inline-flex items-center space-x-1 shadow-sm"
-                    >
-                      <span>🚚 Send to... →</span>
-                    </button>
-                  </div>
-                )}
 
               <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-2">
                 Items ({viewDetailsModal.dispatch_items?.length || 0})

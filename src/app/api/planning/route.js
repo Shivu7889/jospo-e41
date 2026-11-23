@@ -451,9 +451,9 @@ export async function PATCH(request) {
  */
 export async function DELETE(request) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin'] });
+    const auth = await authenticateRequest({ allowedRoles: ['owner', 'admin', 'dispatch'] });
     if (auth.error) return auth.error;
-    const { supabase } = auth;
+    const { supabase, employee } = auth;
     const adminDb = createAdminSupabase() || supabase;
 
     let id = null;
@@ -473,10 +473,50 @@ export async function DELETE(request) {
       return NextResponse.json({ success: false, error: 'Plan id is required' }, { status: 400 });
     }
 
-    const { error: delErr } = await adminDb
+    // 1. Unlink any dispatches referencing this plan so foreign key does not block deletion
+    try {
+      await adminDb
+        .from('dispatches')
+        .update({ plan_id: null })
+        .eq('plan_id', id);
+    } catch (e) {
+      console.warn('Could not unlink dispatches plan_id:', e);
+    }
+
+    // 2. Clear linked_dispatch_id on the plan itself if any
+    try {
+      await adminDb
+        .from('dispatch_plans')
+        .update({ linked_dispatch_id: null })
+        .eq('id', id);
+    } catch (e) {
+      console.warn('Could not clear linked_dispatch_id:', e);
+    }
+
+    // 3. Explicitly delete child items first so foreign key cascade never blocks deletion
+    try {
+      await adminDb
+        .from('dispatch_plan_items')
+        .delete()
+        .eq('plan_id', id);
+    } catch (itemsDelErr) {
+      console.warn('Child items delete warning:', itemsDelErr);
+    }
+
+    // 4. Delete the plan header
+    let { error: delErr } = await adminDb
       .from('dispatch_plans')
       .delete()
       .eq('id', id);
+
+    // Fallback to authenticated client if adminDb had an issue
+    if (delErr && supabase) {
+      const retry = await supabase
+        .from('dispatch_plans')
+        .delete()
+        .eq('id', id);
+      delErr = retry.error;
+    }
 
     if (delErr) throw delErr;
 

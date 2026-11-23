@@ -19,7 +19,8 @@ export default function PlanningPage() {
   const { showToast } = useToast();
   const { activePlant, isOwner } = usePlant();
 
-  const isOwnerOrAdmin = isOwner || employee?.role === 'owner' || employee?.role === 'admin';
+  const userRole = String(employee?.role || '').toLowerCase().trim();
+  const isOwnerOrAdmin = isOwner || userRole === 'owner' || userRole === 'admin' || userRole === 'dispatch' || employee?.is_owner === true;
 
   // Date Filter State
   const todayStr = useMemo(() => getTodayIST(), []);
@@ -352,7 +353,7 @@ export default function PlanningPage() {
 
     try {
       setIsDeleting(true);
-      const res = await fetch('/api/planning', {
+      const res = await fetch(`/api/planning?id=${encodeURIComponent(deletingPlan.id)}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: deletingPlan.id }),
