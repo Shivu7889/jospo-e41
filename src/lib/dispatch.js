@@ -4,7 +4,7 @@
  * and Multi-Plant Co-Loading (Shared Vehicle across E41, D4, C116)
  */
 
-import { normalizePlant, resolveModelManufacturingPlant } from './plants';
+import { normalizePlant, resolveModelManufacturingPlant, resolveDestinationPlant, ALL_PLANTS_ID } from './plants';
 
 export function resolveDispatchType(dispatch) {
   const fromPlant = dispatch?.from_location ? normalizePlant(dispatch.from_location) : null;
@@ -182,6 +182,28 @@ export function isDispatchRelevantToPlant(dispatch, plant) {
   const dest = dispatch.destination_plant || dispatch.destination;
   if (dest && normalizePlant(dest) === p) return true;
   return false;
+}
+
+/**
+ * Checks whether this dispatch is an outward dispatch for a given plant.
+ * Strictly excludes inward entries (where this plant is the receiving destination)
+ * and ensures only dispatches originating from the same plant are shown.
+ */
+export function isOutwardDispatchForPlant(dispatch, plant) {
+  if (!dispatch || !plant) return false;
+  if (plant === ALL_PLANTS_ID) return true;
+  const p = normalizePlant(plant);
+  const origin = normalizePlant(dispatch.from_location);
+  const dest = resolveDestinationPlant(dispatch);
+  const destNorm = dispatch.destination ? normalizePlant(dispatch.destination) : null;
+
+  // Do not show inward entry (destination is this plant)
+  if (dest === p || (destNorm === p && destNorm !== origin)) {
+    return false;
+  }
+
+  // Only show same plant dispatch
+  return origin === p;
 }
 
 /**

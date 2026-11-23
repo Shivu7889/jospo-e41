@@ -168,9 +168,10 @@ export async function GET(request) {
         const destPlant = resolveDestinationPlant(d);
 
         if (plant && plant !== ALL_PLANTS_ID) {
-          if (originPlant !== plant && destPlant !== plant) {
-            return;
-          }
+          // Do not show inward entry (inter-plant transfers arriving at this plant)
+          if (destPlant && destPlant === plant) return;
+          // Outward dispatch only from this plant
+          if (originPlant !== plant) return;
         }
 
         const cleanRem = cleanPlantRemarks(d.remarks || '');

@@ -146,7 +146,7 @@ export default function DashboardPage() {
         .limit(5);
 
       if (activePlant !== ALL_PLANTS_ID) {
-        dispQuery = dispQuery.or(`from_location.eq.${activePlant},destination_plant.eq.${activePlant}`);
+        dispQuery = dispQuery.eq('from_location', activePlant);
       }
 
       // Execute all 4 independent data sources in parallel (cuts dashboard load time by up to 75%)

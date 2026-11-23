@@ -26,6 +26,7 @@ import {
   resolveItemLoadedPlant,
   getCoLoadingBadge,
   isDispatchRelevantToPlant,
+  isOutwardDispatchForPlant,
   getDispatchLoadedPlants,
   formatCoLoadingRoute,
 } from '@/lib/dispatch';
@@ -235,9 +236,9 @@ export default function DispatchListPage() {
   // Filtered dispatches (scoped to activePlant)
   const filteredDispatches = useMemo(() => {
     return dispatches.filter((d) => {
-      // Plant scope: if activePlant is not ALL, dispatch must be relevant to activePlant
+      // Plant scope: if activePlant is not ALL, dispatch must be an outward dispatch from activePlant
       if (activePlant !== ALL_PLANTS_ID) {
-        if (!isDispatchRelevantToPlant(d, activePlant)) return false;
+        if (!isOutwardDispatchForPlant(d, activePlant)) return false;
       }
       // Status filter
       if (statusFilter !== 'all' && d.status !== statusFilter) {
@@ -340,7 +341,7 @@ export default function DispatchListPage() {
     const todayStr = getTodayIST();
     const relevant = activePlant === ALL_PLANTS_ID
       ? dispatches
-      : dispatches.filter((d) => isDispatchRelevantToPlant(d, activePlant));
+      : dispatches.filter((d) => isOutwardDispatchForPlant(d, activePlant));
 
     const total = relevant.length;
     const drafts = relevant.filter((d) => d.status === 'draft').length;
