@@ -1360,7 +1360,7 @@ export default function DispatchListPage() {
                                     className="px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors inline-flex items-center space-x-1 shadow-xs"
                                     title="Send truck to another plant (D4 / C116) to load missing models"
                                   >
-                                    <span>🚚 Route to Next Plant</span>
+                                    <span>🚚 Send to...</span>
                                   </button>
                                 )}
 
@@ -2612,7 +2612,7 @@ export default function DispatchListPage() {
                       }}
                       className="btn-primary text-xs py-2 px-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold whitespace-nowrap inline-flex items-center space-x-1 shadow-sm"
                     >
-                      <span>🚚 Send to Next Plant →</span>
+                      <span>🚚 Send to... →</span>
                     </button>
                   </div>
                 )}

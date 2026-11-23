@@ -2919,45 +2919,95 @@ function NewDispatchContent() {
             </div>
           )}
 
-          {/* Multi-Plant Co-Loading / Part Load Option (Shown after models are loaded at this plant) */}
+          {/* Dispatch Routing Options: "Completed" vs "Send to..." */}
           {dispatchType === 'party' && items.length > 0 && (
-            <div className={`p-4 rounded-xl border transition-all ${
-              isCoLoading
-                ? 'bg-gradient-to-r from-amber-50/90 via-indigo-50/80 to-blue-50/90 border-indigo-300 shadow-sm'
-                : 'bg-gray-50/80 hover:bg-indigo-50/30 border-gray-200'
-            }`}>
-              <label className="flex items-start space-x-3 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={isCoLoading}
-                  onChange={(e) => setIsCoLoading(e.target.checked)}
-                  className="mt-1 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                />
-                <div className="flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-bold text-gray-900">
-                      🚚 Kuch Model Yahan Available Nahi Hain? Gaadi Agle Plant Bhejna Hai (Multi-Part / Co-Loading)
-                    </span>
-                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase ${
-                      isCoLoading ? 'bg-amber-500 text-white shadow-xs' : 'bg-gray-200 text-gray-700'
-                    }`}>
-                      {isCoLoading ? 'Part-Load Active' : 'Direct Dispatch'}
+            <div className="p-4 bg-gray-50/90 rounded-2xl border border-gray-200 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-700 flex items-center space-x-1.5">
+                  <span>🚚 Vehicle Loading Action</span>
+                  <span className="text-gray-400 font-normal">({normalizePlant(fromLocation)})</span>
+                </span>
+                <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                  !isCoLoading
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-100 text-amber-900 border border-amber-300'
+                }`}>
+                  {!isCoLoading ? '✓ Completed (Direct Party Dispatch)' : `⏳ Send to ${nextLoadingPlant} Plant`}
+                </span>
+              </div>
+
+              {/* 2 Clear Options: "Completed" OR "Send to..." */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Option 1: Completed */}
+                <button
+                  type="button"
+                  onClick={() => setIsCoLoading(false)}
+                  className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 cursor-pointer ${
+                    !isCoLoading
+                      ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-300 shadow-xs'
+                      : 'bg-white border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold flex-shrink-0 ${
+                    !isCoLoading ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    ✓
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-gray-900">Completed</span>
+                      {!isCoLoading && (
+                        <span className="text-[10px] bg-emerald-600 text-white font-extrabold px-2 py-0.5 rounded-full uppercase">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-600 block mt-0.5 leading-snug">
+                      Saara maal load ho gaya. Gaadi seedhe party <strong>({destination || 'Destination'})</strong> ko रवाना hogi.
                     </span>
                   </div>
-                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Agar is party ke kuch model <strong>{normalizePlant(fromLocation)}</strong> par available nahi hain ya doosre plant par bante hain, to tick karein taaki gaadi aadhi load hokar doosre plant jayegi aur baaki model load karegi.
-                  </p>
-                </div>
-              </label>
+                </button>
 
+                {/* Option 2: Send to... */}
+                <button
+                  type="button"
+                  onClick={() => setIsCoLoading(true)}
+                  className={`p-3.5 rounded-xl border text-left transition-all flex items-start space-x-3 cursor-pointer ${
+                    isCoLoading
+                      ? 'bg-indigo-50/90 border-indigo-500 ring-2 ring-indigo-300 shadow-xs'
+                      : 'bg-white border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold flex-shrink-0 ${
+                    isCoLoading ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    🚚
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-gray-900">Send to (Other Plant)</span>
+                      {isCoLoading && (
+                        <span className="text-[10px] bg-indigo-600 text-white font-extrabold px-2 py-0.5 rounded-full uppercase">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-600 block mt-0.5 leading-snug">
+                      Kuch model yahan available nahi hain. Gaadi aage doosre plant par jayegi aur baaki model load karegi.
+                    </span>
+                  </div>
+                </button>
+              </div>
+
+              {/* If "Send to..." is selected, pick the target plant */}
               {isCoLoading && (
-                <div className="mt-3 pt-3 border-t border-indigo-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/80 p-3 rounded-lg border border-indigo-100">
+                <div className="pt-3 border-t border-indigo-200/60 bg-white p-3.5 rounded-xl border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
                   <div>
-                    <span className="text-xs font-bold text-gray-800 block">
-                      Agle kis plant par gaadi ko bhej rahe hain? (Next Stop): <span className="text-red-500">*</span>
+                    <span className="text-xs font-bold text-gray-900 block">
+                      Send to which plant? <span className="text-red-500">*</span>
                     </span>
                     <span className="text-[11px] text-gray-500">
-                      Gaadi wahan pahunchte hi unke dock par <strong>&quot;➕ Load Models&quot;</strong> ka option show hoga.
+                      Wahan pahunchte hi dock workers ko <strong>&quot;➕ Load Models&quot;</strong> ka button show hoga.
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2966,14 +3016,14 @@ function NewDispatchContent() {
                         key={otherPlant.id}
                         type="button"
                         onClick={() => setNextLoadingPlant(otherPlant.id)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center space-x-1.5 ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center space-x-1.5 ${
                           nextLoadingPlant === otherPlant.id
                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm ring-2 ring-indigo-300'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                            : 'bg-gray-50 text-gray-700 border-gray-300 hover:bg-gray-100'
                         }`}
                       >
-                        <span>{otherPlant.icon}</span>
-                        <span>{otherPlant.shortName} Plant</span>
+                        <span className="text-sm">{otherPlant.icon}</span>
+                        <span>Send to {otherPlant.shortName} Plant</span>
                       </button>
                     ))}
                   </div>
@@ -3061,14 +3111,44 @@ function NewDispatchContent() {
               </span>
               <span className="font-semibold text-primary-800">{destination}</span>
             </div>
-            {dispatchType === 'party' && isCoLoading && (
-              <div className="col-span-2 sm:col-span-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center space-x-2">
-                <span className="text-base">🚚</span>
-                <div>
-                  <span className="font-bold text-blue-900 block">Multi-Plant Co-Loading Active (Part Load)</span>
-                  <span className="text-gray-600 block text-[11px]">
-                    Stop 1: <strong>{fromLocation}</strong> (Loading now) → Stop 2: <strong>{nextLoadingPlant} Plant</strong> (Remaining models) → Final: <strong>{destination}</strong>
-                  </span>
+            {dispatchType === 'party' && (
+              <div className="col-span-2 sm:col-span-3 p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white shadow-2xs">
+                <div className="flex items-center space-x-2.5">
+                  <span className="text-xl">{isCoLoading ? '🚚' : '✅'}</span>
+                  <div>
+                    <span className="font-bold text-gray-900 block text-xs">
+                      Loading Action: {isCoLoading ? `Send to ${nextLoadingPlant} Plant (Part-Load)` : 'Completed (Direct to Party)'}
+                    </span>
+                    <span className="text-gray-500 block text-[11px]">
+                      {isCoLoading
+                        ? `Stop 1: ${fromLocation} ➔ Stop 2: ${nextLoadingPlant} Plant ➔ Final Party: ${destination}`
+                        : `Truck loading complete at ${fromLocation} ➔ Dispatches directly to ${destination}`}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsCoLoading(false)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
+                      !isCoLoading
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200'
+                    }`}
+                  >
+                    ✓ Completed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCoLoading(true)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
+                      isCoLoading
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200'
+                    }`}
+                  >
+                    🚚 Send to...
+                  </button>
                 </div>
               </div>
             )}
@@ -3189,8 +3269,8 @@ function NewDispatchContent() {
                   : (existingDispatchStatus === 'confirmed'
                       ? '💾 Save Updates & Adjust Stock'
                       : (isCoLoading && dispatchType === 'party'
-                          ? `🚚 Confirm Part-Load & Route to ${nextLoadingPlant} Plant →`
-                          : 'Confirm & Deduct Stock ✓'))}
+                          ? `🚚 Send to ${nextLoadingPlant} Plant →`
+                          : '✅ Completed: Confirm Dispatch ✓'))}
               </button>
             </div>
           </div>
