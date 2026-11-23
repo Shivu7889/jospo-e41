@@ -806,7 +806,7 @@ export default function ProductionPage() {
 
           <div className="flex items-center space-x-3 text-sm">
             <Link
-              href="/reports?tab=thekedar_production"
+              href="/reports?tab=production"
               className="bg-white hover:bg-gray-50 text-gray-700 font-semibold px-3 py-2 rounded-xl border border-gray-200 shadow-sm flex items-center space-x-1.5 transition-colors text-xs"
             >
               <span>👷</span>

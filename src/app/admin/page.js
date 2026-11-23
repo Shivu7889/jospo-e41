@@ -672,7 +672,7 @@ export default function AdminPage() {
 
                 <div className="flex items-center space-x-2">
                   <Link
-                    href="/reports?tab=thekedar_production"
+                    href="/reports?tab=production"
                     className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm"
                   >
                     <span>📊</span>
@@ -845,7 +845,7 @@ export default function AdminPage() {
                             </td>
                             <td className="px-4 py-3 text-right space-x-2">
                               <Link
-                                href={`/reports?tab=thekedar_production&thekedar=${encodeURIComponent(name)}&plant=${encodeURIComponent(plant)}`}
+                                href={`/reports?tab=production&thekedar=${encodeURIComponent(name)}&plant=${encodeURIComponent(plant)}`}
                                 className="text-xs font-bold text-primary-700 hover:text-primary-800 hover:underline inline-flex items-center space-x-1"
                               >
                                 <span>View Reports</span>

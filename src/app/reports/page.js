@@ -18,14 +18,32 @@ export default function ReportsPage() {
   const { activePlant, isOwner } = usePlant();
   const isAdmin = employee?.role === 'admin' || employee?.role === 'owner' || isOwner;
 
-  // Active Tab: 'thekedar_production' | 'daily_production' | 'daily_dispatch' | 'monthly_summary' | 'model_stock'
-  const [activeTab, setActiveTab] = useState('thekedar_production');
+  // Exactly 3 Tabs: 'production' | 'dispatch' | 'monthly_summary'
+  const TABS = [
+    { id: 'production', label: 'Production', icon: '🏭' },
+    { id: 'dispatch', label: 'Dispatch', icon: '🚚' },
+    { id: 'monthly_summary', label: 'Monthly Summary', icon: '📊' },
+  ];
 
-  // Filter States
+  const [activeTab, setActiveTab] = useState('production');
+
+  // Date constants
   const todayStr = useMemo(() => getTodayIST(), []);
-  const [productionDate, setProductionDate] = useState(todayStr);
-  const [dispatchDate, setDispatchDate] = useState(todayStr);
+  const firstDayOfMonth = useMemo(() => getTodayIST().slice(0, 7) + '-01', []);
 
+  // 1. Production Tab Filter States
+  const [productionStartDate, setProductionStartDate] = useState(firstDayOfMonth);
+  const [productionEndDate, setProductionEndDate] = useState(todayStr);
+  const [selectedThekedar, setSelectedThekedar] = useState('all');
+  const [selectedModel, setSelectedModel] = useState('all');
+  const [thekedarContractorsList, setThekedarContractorsList] = useState([]);
+  const [modelsList, setModelsList] = useState([]);
+
+  // 2. Dispatch Tab Filter States
+  const [dispatchStartDate, setDispatchStartDate] = useState(todayStr);
+  const [dispatchEndDate, setDispatchEndDate] = useState(todayStr);
+
+  // 3. Monthly Summary Tab Filter States
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
@@ -36,72 +54,125 @@ export default function ReportsPage() {
   const [editContractorName, setEditContractorName] = useState('');
   const [updatingContractor, setUpdatingContractor] = useState(false);
 
-  // Thekedar (Contractor) Report Filter States
-  const firstDayOfMonth = useMemo(() => {
-    return getTodayIST().slice(0, 7) + '-01';
-  }, []);
-  const [thekedarStartDate, setThekedarStartDate] = useState(firstDayOfMonth);
-  const [thekedarEndDate, setThekedarEndDate] = useState(todayStr);
-  const [selectedThekedar, setSelectedThekedar] = useState('all');
-  const [thekedarContractorsList, setThekedarContractorsList] = useState([]);
-
   // Data States
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState(null);
 
-  // Read URL query parameters on initial mount (e.g. /reports?tab=thekedar_production&thekedar=Ramesh)
+  // Read URL query parameters on initial mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
       const thekedarParam = params.get('thekedar') || params.get('contractor');
+      const modelParam = params.get('model') || params.get('model_id');
+
       if (tabParam) {
-        setActiveTab(tabParam);
+        if (tabParam === 'daily_production' || tabParam === 'thekedar_production' || tabParam === 'production') {
+          setActiveTab('production');
+        } else if (tabParam === 'daily_dispatch' || tabParam === 'dispatch') {
+          setActiveTab('dispatch');
+        } else if (tabParam === 'monthly_summary') {
+          setActiveTab('monthly_summary');
+        }
       }
       if (thekedarParam) {
         setSelectedThekedar(thekedarParam);
       }
+      if (modelParam) {
+        setSelectedModel(modelParam);
+      }
     }
   }, []);
 
-  // Quick Date Preset handler for Thekedar report
-  const handleSetDatePreset = (preset) => {
+  // Quick Date Preset helper for Production
+  const handleSetProductionDatePreset = (preset) => {
     const today = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const toYMD = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
     if (preset === 'today') {
       const s = toYMD(today);
-      setThekedarStartDate(s);
-      setThekedarEndDate(s);
+      setProductionStartDate(s);
+      setProductionEndDate(s);
     } else if (preset === 'yesterday') {
       const y = new Date(today);
       y.setDate(y.getDate() - 1);
       const s = toYMD(y);
-      setThekedarStartDate(s);
-      setThekedarEndDate(s);
+      setProductionStartDate(s);
+      setProductionEndDate(s);
     } else if (preset === 'this_week') {
       const d = new Date(today);
       const day = d.getDay() || 7; // Monday = 1
       d.setDate(d.getDate() - day + 1);
-      setThekedarStartDate(toYMD(d));
-      setThekedarEndDate(toYMD(today));
+      setProductionStartDate(toYMD(d));
+      setProductionEndDate(toYMD(today));
     } else if (preset === 'this_month') {
       const d = new Date(today.getFullYear(), today.getMonth(), 1);
-      setThekedarStartDate(toYMD(d));
-      setThekedarEndDate(toYMD(today));
+      setProductionStartDate(toYMD(d));
+      setProductionEndDate(toYMD(today));
     } else if (preset === 'last_month') {
       const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const end = new Date(today.getFullYear(), today.getMonth(), 0);
-      setThekedarStartDate(toYMD(start));
-      setThekedarEndDate(toYMD(end));
+      setProductionStartDate(toYMD(start));
+      setProductionEndDate(toYMD(end));
     } else if (preset === 'all') {
-      setThekedarStartDate('2024-01-01');
-      setThekedarEndDate(toYMD(today));
+      setProductionStartDate('2024-01-01');
+      setProductionEndDate(toYMD(today));
     }
   };
 
-  // Export to Excel helper
+  // Quick Date Preset helper for Dispatch
+  const handleSetDispatchDatePreset = (preset) => {
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const toYMD = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    if (preset === 'today') {
+      const s = toYMD(today);
+      setDispatchStartDate(s);
+      setDispatchEndDate(s);
+    } else if (preset === 'yesterday') {
+      const y = new Date(today);
+      y.setDate(y.getDate() - 1);
+      const s = toYMD(y);
+      setDispatchStartDate(s);
+      setDispatchEndDate(s);
+    } else if (preset === 'this_week') {
+      const d = new Date(today);
+      const day = d.getDay() || 7;
+      d.setDate(d.getDate() - day + 1);
+      setDispatchStartDate(toYMD(d));
+      setDispatchEndDate(toYMD(today));
+    } else if (preset === 'this_month') {
+      const d = new Date(today.getFullYear(), today.getMonth(), 1);
+      setDispatchStartDate(toYMD(d));
+      setDispatchEndDate(toYMD(today));
+    } else if (preset === 'last_month') {
+      const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), 0);
+      setDispatchStartDate(toYMD(start));
+      setDispatchEndDate(toYMD(end));
+    } else if (preset === 'all') {
+      setDispatchStartDate('2024-01-01');
+      setDispatchEndDate(toYMD(today));
+    }
+  };
+
+  // Reset Production Filters
+  const handleResetProductionFilters = () => {
+    setProductionStartDate(firstDayOfMonth);
+    setProductionEndDate(todayStr);
+    setSelectedThekedar('all');
+    setSelectedModel('all');
+  };
+
+  const isProductionFiltered =
+    selectedThekedar !== 'all' ||
+    selectedModel !== 'all' ||
+    productionStartDate !== firstDayOfMonth ||
+    productionEndDate !== todayStr;
+
+  // Generic Export to Excel helper
   const handleExportToExcel = async (data, filename) => {
     try {
       if (!data || data.length === 0) {
@@ -116,19 +187,20 @@ export default function ReportsPage() {
     }
   };
 
-  // Export Thekedar Production to Excel
-  const handleExportThekedarExcel = () => {
+  // Export Production to Excel
+  const handleExportProductionExcel = () => {
     try {
       const rows = reportData?.data || [];
       if (rows.length === 0) {
-        showToast('No Thekedar production data available to export.', 'warning');
+        showToast('No production data available to export.', 'warning');
         return;
       }
 
       const exportData = rows.map((r, idx) => ({
         'S.No': idx + 1,
-        'Thekedar (Contractor)': r.contractor_name || 'General / Unassigned',
         'Production Date': r.production_date,
+        'Plant': r.plant || 'Main Plant',
+        'Thekedar (Contractor)': r.contractor_name || r.thekedar_name || 'General / Unassigned',
         'Model Code': r.model_code,
         'Model Name': r.model_name,
         'Quantity (Units)': r.quantity,
@@ -138,10 +210,74 @@ export default function ReportsPage() {
       }));
 
       const safeThekedar = selectedThekedar === 'all' ? 'All_Thekedars' : selectedThekedar.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filename = `Jospo_Thekedar_Production_${safeThekedar}_${thekedarStartDate}_to_${thekedarEndDate}`;
+      const safeModel = selectedModel === 'all'
+        ? 'All_Models'
+        : (modelsList.find((m) => String(m.id) === String(selectedModel))?.code || 'Model');
+      const filename = `Jospo_Production_Report_${safeThekedar}_${safeModel}_${productionStartDate}_to_${productionEndDate}`;
       handleExportToExcel(exportData, filename);
     } catch (err) {
-      console.error('Thekedar Excel export error:', err);
+      console.error('Production Excel export error:', err);
+      showToast('Export failed: ' + err.message, 'error');
+    }
+  };
+
+  // Export Dispatch to Excel
+  const handleExportDispatchExcel = () => {
+    try {
+      const rows = reportData?.data || [];
+      if (rows.length === 0) {
+        showToast('No dispatch data available to export.', 'warning');
+        return;
+      }
+
+      const exportData = rows.map((r, idx) => ({
+        'S.No': idx + 1,
+        'Dispatch Date': r.dispatch_date,
+        'Vehicle Number': r.vehicle_number,
+        'From Plant': r.from_location,
+        'Destination': r.destination,
+        'Model Code': r.model_code,
+        'Model Name': r.model_name,
+        'Quantity (Units)': r.quantity,
+        'Status': r.status,
+        'Officer': r.employee_name,
+        'Remarks': r.remarks || '',
+      }));
+
+      const filename = `Jospo_Dispatch_Report_${dispatchStartDate}_to_${dispatchEndDate}`;
+      handleExportToExcel(exportData, filename);
+    } catch (err) {
+      console.error('Dispatch Excel export error:', err);
+      showToast('Export failed: ' + err.message, 'error');
+    }
+  };
+
+  // Export Monthly Summary to Excel
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const handleExportMonthlyExcel = () => {
+    try {
+      const rows = reportData?.data || [];
+      if (rows.length === 0) {
+        showToast('No monthly summary data available to export.', 'warning');
+        return;
+      }
+
+      const exportRows = rows.map((r) => ({
+        'Date': r.date,
+        'Production Units': r.production,
+        'Dispatch Units': r.dispatch,
+        'Net Inventory Change': r.net_change,
+      }));
+      handleExportToExcel(
+        exportRows,
+        `Jospo_Monthly_Summary_${monthNames[selectedMonth - 1]}_${selectedYear}`
+      );
+    } catch (err) {
+      console.error('Monthly export error:', err);
       showToast('Export failed: ' + err.message, 'error');
     }
   };
@@ -179,14 +315,12 @@ export default function ReportsPage() {
       setLoading(true);
       let url = `/api/reports?type=${activeTab}`;
 
-      if (activeTab === 'daily_production') {
-        url += `&date=${productionDate}`;
-      } else if (activeTab === 'daily_dispatch') {
-        url += `&date=${dispatchDate}`;
+      if (activeTab === 'production') {
+        url += `&start_date=${productionStartDate}&end_date=${productionEndDate}&thekedar=${encodeURIComponent(selectedThekedar)}&model_id=${encodeURIComponent(selectedModel)}`;
+      } else if (activeTab === 'dispatch') {
+        url += `&start_date=${dispatchStartDate}&end_date=${dispatchEndDate}`;
       } else if (activeTab === 'monthly_summary') {
         url += `&month=${selectedMonth}&year=${selectedYear}`;
-      } else if (activeTab === 'thekedar_production') {
-        url += `&start_date=${thekedarStartDate}&end_date=${thekedarEndDate}&thekedar=${encodeURIComponent(selectedThekedar)}`;
       }
 
       url += `&plant=${encodeURIComponent(activePlant)}`;
@@ -200,8 +334,15 @@ export default function ReportsPage() {
 
       setReportData(json);
 
-      if (activeTab === 'thekedar_production' && json.summary?.thekedar_list) {
-        setThekedarContractorsList(json.summary.thekedar_list);
+      if (activeTab === 'production') {
+        if (json.thekedar_list && Array.isArray(json.thekedar_list)) {
+          setThekedarContractorsList(json.thekedar_list);
+        } else if (json.summary?.thekedar_list && Array.isArray(json.summary.thekedar_list)) {
+          setThekedarContractorsList(json.summary.thekedar_list);
+        }
+        if (json.models_list && Array.isArray(json.models_list)) {
+          setModelsList(json.models_list);
+        }
       }
     } catch (err) {
       console.error('Error fetching report:', err);
@@ -211,13 +352,14 @@ export default function ReportsPage() {
     }
   }, [
     activeTab,
-    productionDate,
-    dispatchDate,
+    productionStartDate,
+    productionEndDate,
+    selectedThekedar,
+    selectedModel,
+    dispatchStartDate,
+    dispatchEndDate,
     selectedMonth,
     selectedYear,
-    thekedarStartDate,
-    thekedarEndDate,
-    selectedThekedar,
     activePlant,
     showToast,
   ]);
@@ -226,10 +368,10 @@ export default function ReportsPage() {
     fetchReport();
   }, [fetchReport]);
 
-  const monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
+  const selectedModelObj = useMemo(() => {
+    if (selectedModel === 'all') return null;
+    return modelsList.find((m) => String(m.id) === String(selectedModel));
+  }, [selectedModel, modelsList]);
 
   return (
     <AppShell allowedRoles={['admin', 'owner']}>
@@ -252,7 +394,7 @@ export default function ReportsPage() {
               )}
             </div>
             <p className="mt-1 text-sm text-gray-600">
-              Audit logs, production figures, dispatch performance, and Excel spreadsheets.
+              Complete production auditing, dispatch tracking, and monthly reconciliation spreadsheets.
             </p>
           </div>
           <div className="flex items-center space-x-2">
@@ -280,29 +422,23 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Tab Navigation */}
+        {/* Tab Navigation (EXACTLY 3 TABS) */}
         <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-2 sm:space-x-4 overflow-x-auto" aria-label="Reports tabs">
-            {[
-              { id: 'thekedar_production', label: 'Thekedar Production', icon: '👷' },
-              { id: 'daily_production', label: 'Daily Production', icon: '🏭' },
-              { id: 'daily_dispatch', label: 'Daily Dispatch', icon: '🚚' },
-              { id: 'monthly_summary', label: 'Monthly Summary', icon: '📊' },
-              { id: 'model_stock', label: 'Model-wise Stock', icon: '📋' },
-            ].map((tab) => {
+          <nav className="-mb-px flex space-x-3 sm:space-x-6 overflow-x-auto" aria-label="Reports tabs">
+            {TABS.map((tab) => {
               const active = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`whitespace-nowrap pb-3 px-3 sm:px-4 border-b-2 text-xs sm:text-sm font-semibold flex items-center space-x-2 transition-colors ${
+                  className={`whitespace-nowrap pb-3.5 px-3 sm:px-5 border-b-2 text-sm sm:text-base font-bold flex items-center space-x-2.5 transition-all ${
                     active
-                      ? 'border-primary-600 text-primary-700'
+                      ? 'border-primary-600 text-primary-700 bg-primary-50/30 rounded-t-lg'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                   }`}
                 >
-                  <span>{tab.icon}</span>
+                  <span className="text-lg">{tab.icon}</span>
                   <span>{tab.label}</span>
                 </button>
               );
@@ -310,15 +446,17 @@ export default function ReportsPage() {
           </nav>
         </div>
 
-        {/* 0. THEKEDAR (CONTRACTOR) PRODUCTION REPORT */}
-        {activeTab === 'thekedar_production' && (
+        {/* ========================================================================= */}
+        {/* 1. PRODUCTION REPORT (Date, Thekedar, Model Filters)                       */}
+        {/* ========================================================================= */}
+        {activeTab === 'production' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Filter & Action Toolbar */}
             <div className="card p-5 border border-gray-200 shadow-sm space-y-4">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                {/* Filters */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
-                  {/* Thekedar Dropdown */}
+                {/* 3 Main Filters: Date, Thekedar, Model */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
+                  {/* Filter 1: Thekedar (Contractor) */}
                   <div>
                     <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
                       👷 Thekedar (Contractor)
@@ -337,38 +475,69 @@ export default function ReportsPage() {
                     </select>
                   </div>
 
-                  {/* Start Date */}
+                  {/* Filter 2: Model-wise */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      📦 Model Wise
+                    </label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs sm:text-sm font-semibold bg-white text-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    >
+                      <option value="all">📦 All Models (Entire Catalog)</option>
+                      {modelsList.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.code ? `[${m.code}] ` : ''}{m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Filter 3: From Date */}
                   <div>
                     <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
                       📅 From Date
                     </label>
                     <input
                       type="date"
-                      value={thekedarStartDate}
-                      onChange={(e) => setThekedarStartDate(e.target.value)}
+                      value={productionStartDate}
+                      onChange={(e) => setProductionStartDate(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-primary-500"
                     />
                   </div>
 
-                  {/* End Date */}
+                  {/* Filter 4: To Date */}
                   <div>
                     <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
                       📅 To Date
                     </label>
                     <input
                       type="date"
-                      value={thekedarEndDate}
-                      onChange={(e) => setThekedarEndDate(e.target.value)}
+                      value={productionEndDate}
+                      onChange={(e) => setProductionEndDate(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-primary-500"
                     />
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex items-center space-x-2 pt-1 lg:pt-0">
+                {/* Actions & Export */}
+                <div className="flex flex-wrap items-center gap-2 pt-1 lg:pt-0">
+                  {isProductionFiltered && (
+                    <button
+                      type="button"
+                      onClick={handleResetProductionFilters}
+                      className="btn-secondary text-xs py-2.5 px-3 inline-flex items-center space-x-1 shadow-sm font-medium text-rose-700 hover:bg-rose-50 border-rose-200"
+                      title="Reset all filters back to default month range and all models/thekedars"
+                    >
+                      <span>🔄</span>
+                      <span>Reset Filters</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
-                    onClick={handleExportThekedarExcel}
+                    onClick={handleExportProductionExcel}
                     disabled={loading || !reportData?.data?.length}
                     className="btn-success text-xs py-2.5 px-4 inline-flex items-center space-x-2 shadow-sm font-bold"
                   >
@@ -391,7 +560,7 @@ export default function ReportsPage() {
 
               {/* Quick Date Presets */}
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
-                <span className="text-xs font-semibold text-gray-500">Quick Range:</span>
+                <span className="text-xs font-bold text-gray-500">Quick Date Presets:</span>
                 {[
                   { label: 'Today', key: 'today' },
                   { label: 'Yesterday', key: 'yesterday' },
@@ -403,8 +572,8 @@ export default function ReportsPage() {
                   <button
                     key={p.key}
                     type="button"
-                    onClick={() => handleSetDatePreset(p.key)}
-                    className="px-2.5 py-1 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                    onClick={() => handleSetProductionDatePreset(p.key)}
+                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
                   >
                     {p.label}
                   </button>
@@ -416,47 +585,178 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <StatsCard
                 title="Total Coolers Assembled"
-                value={`${(reportData?.summary?.total_quantity || 0).toLocaleString()} units`}
+                value={`${(reportData?.total_quantity || reportData?.summary?.total_quantity || 0).toLocaleString()} units`}
                 icon="❄️"
                 color="indigo"
-                subtitle={`${thekedarStartDate} to ${thekedarEndDate}`}
+                subtitle={`${productionStartDate} to ${productionEndDate}`}
               />
               <StatsCard
                 title="Thekedars Active"
-                value={reportData?.summary?.thekedar_count || 0}
+                value={reportData?.thekedar_count || reportData?.summary?.thekedar_count || 0}
                 icon="👷"
                 color="amber"
                 subtitle={selectedThekedar === 'all' ? 'All active contractors' : selectedThekedar}
               />
               <StatsCard
                 title="Production Batches"
-                value={reportData?.summary?.total_entries || 0}
+                value={reportData?.total_entries || reportData?.summary?.total_entries || 0}
                 icon="📋"
                 color="emerald"
                 subtitle="Recorded assembly logs"
               />
               <StatsCard
-                title="Contractor Selected"
-                value={selectedThekedar === 'all' ? 'All (Factory)' : selectedThekedar}
-                icon="🏭"
+                title="Active Filter Scope"
+                value={selectedThekedar !== 'all' ? selectedThekedar : selectedModelObj ? selectedModelObj.code : 'All Factory'}
+                icon="🔍"
                 color="blue"
-                subtitle={selectedThekedar !== 'all' ? 'Filtered view' : 'Cumulative'}
+                subtitle={
+                  selectedModelObj
+                    ? `Model: ${selectedModelObj.code}`
+                    : selectedThekedar !== 'all'
+                    ? 'Filtered Thekedar'
+                    : 'Factory cumulative'
+                }
               />
             </div>
 
-            {/* Contractor Summary Cards (When viewing 'all') */}
+            {/* Contractor Settlement Slip View (When single contractor is chosen) */}
+            {selectedThekedar !== 'all' && (
+              <div className="card p-5 border-2 border-amber-300 bg-gradient-to-r from-amber-50/50 via-white to-amber-50/30 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-amber-200/80 pb-3">
+                  <div>
+                    <span className="text-xs font-bold tracking-wider uppercase text-amber-700">
+                      Contractor Assembly Statement & Slip
+                    </span>
+                    <h2 className="text-xl font-extrabold text-gray-900 flex items-center space-x-2 mt-0.5">
+                      <span>👷</span>
+                      <span>{selectedThekedar}</span>
+                    </h2>
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      Period: <span className="font-semibold">{productionStartDate}</span> to{' '}
+                      <span className="font-semibold">{productionEndDate}</span>
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedThekedar('all')}
+                      className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
+                    >
+                      ← Back to All Thekedars
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-sm inline-flex items-center space-x-1"
+                    >
+                      <span>🖨️</span>
+                      <span>Print Slip</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Model Wise Summary for this contractor */}
+                {(() => {
+                  const target = (selectedThekedar || '').toLowerCase().trim();
+                  const contractorSummary = (reportData?.by_thekedar || []).find((c) => {
+                    const name = (c?.contractor_name || c?.thekedar_name || '').toLowerCase().trim();
+                    return name === target;
+                  });
+
+                  if (!contractorSummary || !contractorSummary.models) return null;
+
+                  return (
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">
+                        Model Wise Assembled Units by {selectedThekedar}:
+                      </h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {Object.entries(contractorSummary.models).map(([modelKey, m]) => {
+                          const code = typeof m === 'object' ? (m.code || modelKey) : modelKey;
+                          const name = typeof m === 'object' ? (m.name || code) : 'Units';
+                          const qty = typeof m === 'object' ? (m.quantity || 0) : m;
+                          return (
+                            <div key={code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
+                              <span className="font-mono font-bold text-xs text-primary-700">{code}</span>
+                              <p className="text-xs text-gray-500 truncate">{name}</p>
+                              <p className="text-lg font-extrabold text-gray-900 mt-1 font-mono">{qty} units</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* Model Summary Breakdown Cards */}
+            {reportData?.by_model?.length > 0 && (
+              <div className="card p-5 border border-gray-200 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-gray-900 flex items-center space-x-2">
+                      <span>📦 Model-wise Assembled Breakdown</span>
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Units produced per cooler model in selected date range. Click any model to isolate.
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-primary-700 bg-primary-50 border border-primary-200 px-2.5 py-1 rounded-full">
+                    {reportData.by_model.length} Models
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+                  {(reportData.by_model || []).map((m) => {
+                    const isCurrent =
+                      selectedModelObj && (selectedModelObj.code === m.model_code || selectedModelObj.name === m.model_name);
+                    return (
+                      <div
+                        key={m.model_code}
+                        onClick={() => {
+                          const found = modelsList.find((mod) => mod.code === m.model_code || mod.name === m.model_name);
+                          if (found) {
+                            setSelectedModel(String(found.id));
+                          }
+                        }}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                          isCurrent
+                            ? 'border-primary-500 bg-primary-50/70 shadow-sm ring-2 ring-primary-400'
+                            : 'border-gray-200 bg-white hover:border-primary-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-primary-700 truncate">{m.model_code}</span>
+                          <span className="text-[10px] text-gray-400 font-semibold">{m.entry_count} logs</span>
+                        </div>
+                        <p className="text-[11px] text-gray-600 truncate mt-0.5" title={m.model_name}>
+                          {m.model_name}
+                        </p>
+                        <p className="text-base font-extrabold text-gray-900 font-mono mt-1">
+                          {(m.total_quantity || 0).toLocaleString()} <span className="text-[10px] font-normal text-gray-500">units</span>
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Contractor Summary Cards (When viewing 'all' thekedars) */}
             {selectedThekedar === 'all' && reportData?.by_thekedar?.length > 0 && (
               <div className="card p-5 border border-gray-200 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
-                      <span>👷 Contractor Summary Breakdown</span>
+                    <h3 className="text-sm sm:text-base font-bold text-gray-900 flex items-center space-x-2">
+                      <span>👷 Thekedar Performance Breakdown</span>
                     </h3>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Coolers assembled per Thekedar between {thekedarStartDate} and {thekedarEndDate}. Click any contractor to filter.
+                      Coolers assembled per contractor between {productionStartDate} and {productionEndDate}. Click to filter.
                     </p>
                   </div>
-                  <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2.5 py-1 rounded-full">
+                  <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full">
                     {reportData.by_thekedar.length} Contractors
                   </span>
                 </div>
@@ -527,78 +827,6 @@ export default function ReportsPage() {
               </div>
             )}
 
-            {/* Contractor Settlement Slip View (When single contractor is chosen) */}
-            {selectedThekedar !== 'all' && (
-              <div className="card p-5 border-2 border-amber-300 bg-gradient-to-r from-amber-50/50 via-white to-amber-50/30 shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-amber-200/80 pb-3">
-                  <div>
-                    <span className="text-xs font-bold tracking-wider uppercase text-amber-700">
-                      Contractor Assembly Statement & Slip
-                    </span>
-                    <h2 className="text-xl font-extrabold text-gray-900 flex items-center space-x-2 mt-0.5">
-                      <span>👷</span>
-                      <span>{selectedThekedar}</span>
-                    </h2>
-                    <p className="text-xs text-gray-600 mt-0.5">
-                      Period: <span className="font-semibold">{thekedarStartDate}</span> to{' '}
-                      <span className="font-semibold">{thekedarEndDate}</span>
-                    </p>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedThekedar('all')}
-                      className="px-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                    >
-                      ← Back to All Thekedars
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => window.print()}
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-sm inline-flex items-center space-x-1"
-                    >
-                      <span>🖨️</span>
-                      <span>Print Slip</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Model Wise Summary for this contractor */}
-                {(() => {
-                  const target = (selectedThekedar || '').toLowerCase().trim();
-                  const contractorSummary = (reportData?.by_thekedar || []).find((c) => {
-                    const name = (c?.contractor_name || c?.thekedar_name || '').toLowerCase().trim();
-                    return name === target;
-                  });
-
-                  if (!contractorSummary || !contractorSummary.models) return null;
-
-                  return (
-                    <div>
-                      <h4 className="text-xs font-bold text-gray-700 uppercase mb-2">
-                        Model Wise Assembled Units:
-                      </h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        {Object.entries(contractorSummary.models).map(([modelKey, m]) => {
-                          const code = typeof m === 'object' ? (m.code || modelKey) : modelKey;
-                          const name = typeof m === 'object' ? (m.name || code) : 'Units';
-                          const qty = typeof m === 'object' ? (m.quantity || 0) : m;
-                          return (
-                            <div key={code} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
-                              <span className="font-mono font-bold text-xs text-primary-700">{code}</span>
-                              <p className="text-xs text-gray-500 truncate">{name}</p>
-                              <p className="text-lg font-extrabold text-gray-900 mt-1 font-mono">{qty} units</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
             {/* Detailed Production Entries Table */}
             <div className="card p-0 overflow-hidden border border-gray-200 shadow-sm">
               <div className="p-4 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -607,7 +835,7 @@ export default function ReportsPage() {
                     <span>📋 Detailed Production Entries Log</span>
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Individual assembly records matching selected Thekedar and date range.
+                    Individual assembly logs matching selected Thekedar, Model, and Date filters.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -615,7 +843,7 @@ export default function ReportsPage() {
                     Showing {reportData?.data?.length || 0} entries
                   </span>
                   <Link
-                    href={`/production?date=${encodeURIComponent(thekedarEndDate || todayStr)}&thekedar=${selectedThekedar !== 'all' ? encodeURIComponent(selectedThekedar) : ''}`}
+                    href={`/production?date=${encodeURIComponent(productionEndDate || todayStr)}&thekedar=${selectedThekedar !== 'all' ? encodeURIComponent(selectedThekedar) : ''}`}
                     className="inline-flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-colors active:scale-95"
                     title="Open Production screen to add any missed models"
                   >
@@ -627,14 +855,14 @@ export default function ReportsPage() {
 
               {loading ? (
                 <div className="py-16 text-center">
-                  <LoadingSpinner message="Loading Thekedar production records..." size="md" />
+                  <LoadingSpinner message="Loading production entries..." size="md" />
                 </div>
               ) : !reportData?.data?.length ? (
                 <div className="py-16 text-center text-gray-500 text-xs">
-                  <div className="text-3xl mb-2">👷</div>
+                  <div className="text-3xl mb-2">🏭</div>
                   <p className="font-semibold text-gray-700">No production entries found for this selection.</p>
                   <p className="text-gray-400 mt-1">
-                    Try selecting a wider date range or "All Thekedars".
+                    Try selecting a wider date range, "All Thekedars", or "All Models".
                   </p>
                 </div>
               ) : (
@@ -675,7 +903,7 @@ export default function ReportsPage() {
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center space-x-1.5">
                               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-900 border border-amber-200">
-                                👷 {row.contractor_name || 'General / Unassigned'}
+                                👷 {row.contractor_name || row.thekedar_name || 'General / Unassigned'}
                               </span>
                               {isAdmin && (
                                 <button
@@ -720,13 +948,14 @@ export default function ReportsPage() {
                       <tr>
                         <td colSpan={4} className="px-4 py-3 text-left uppercase">
                           TOTAL UNITS ASSEMBLED (
-                          {selectedThekedar === 'all' ? 'All Thekedars' : selectedThekedar})
+                          {selectedThekedar === 'all' ? 'All Thekedars' : selectedThekedar}
+                          {selectedModelObj ? ` • ${selectedModelObj.code}` : ''})
                         </td>
                         <td className="px-4 py-3 text-right text-base text-emerald-700 font-mono font-extrabold">
-                          {(reportData?.summary?.total_quantity || 0).toLocaleString()} units
+                          {(reportData?.total_quantity || reportData?.summary?.total_quantity || 0).toLocaleString()} units
                         </td>
                         <td colSpan={2} className="px-4 py-3 text-right text-gray-500 text-xs">
-                          {reportData?.summary?.total_entries || 0} batches recorded
+                          {reportData?.total_entries || reportData?.summary?.total_entries || 0} batches recorded
                         </td>
                       </tr>
                     </tfoot>
@@ -790,7 +1019,7 @@ export default function ReportsPage() {
                         type="text"
                         value={editContractorName}
                         onChange={(e) => setEditContractorName(e.target.value)}
-                        placeholder="e.g. Chotu"
+                        placeholder="e.g. Ramesh"
                         className="input-field text-xs bg-white font-medium"
                       />
                     </div>
@@ -820,200 +1049,82 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* 1. DAILY PRODUCTION REPORT */}
-        {activeTab === 'daily_production' && (
+        {/* ========================================================================= */}
+        {/* 2. DISPATCH REPORT (Date Range Filter + Vehicles / Items Breakdown)       */}
+        {/* ========================================================================= */}
+        {activeTab === 'dispatch' && (
           <div className="space-y-5 animate-fadeIn">
             {/* Filter & Export Bar */}
-            <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex items-center space-x-3 text-xs sm:text-sm">
-                <span className="font-semibold text-gray-700">Production Date:</span>
-                <input
-                  type="date"
-                  value={productionDate}
-                  onChange={(e) => setProductionDate(e.target.value)}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium focus:ring-1 focus:ring-primary-500"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  href={`/production?date=${encodeURIComponent(productionDate)}`}
-                  className="btn-primary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-sm font-bold"
-                  title={`Open Production to add missed models for ${productionDate}`}
-                >
-                  <span>➕</span>
-                  <span>Add Missed Model for {productionDate}</span>
-                </Link>
+            <div className="card p-4 border border-gray-200 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm">
+                  <span className="font-bold text-gray-700">Dispatch Period:</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-gray-500 text-xs">From:</span>
+                    <input
+                      type="date"
+                      value={dispatchStartDate}
+                      onChange={(e) => setDispatchStartDate(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm font-medium focus:ring-1 focus:ring-primary-500"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-gray-500 text-xs">To:</span>
+                    <input
+                      type="date"
+                      value={dispatchEndDate}
+                      onChange={(e) => setDispatchEndDate(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm font-medium focus:ring-1 focus:ring-primary-500"
+                    />
+                  </div>
+                </div>
 
                 <button
                   type="button"
-                  onClick={() => {
-                    const exportRows = (reportData?.data || []).map((r) => ({
-                      'Date': r.production_date,
-                      'Model Code': r.model_code,
-                      'Model Name': r.model_name,
-                      'Quantity': r.quantity,
-                      'Logged By': r.employee_name,
-                      'Remarks': r.remarks,
-                      'Timestamp': r.created_at,
-                    }));
-                    handleExportToExcel(exportRows, `Jospo_Daily_Production_${productionDate}`);
-                  }}
+                  onClick={handleExportDispatchExcel}
                   disabled={loading || !reportData?.data?.length}
-                  className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
+                  className="btn-success text-xs py-2.5 px-4 inline-flex items-center space-x-2 shadow-sm font-bold"
                 >
                   <span>📥</span>
                   <span>Export to Excel (.xlsx)</span>
                 </button>
               </div>
-            </div>
 
-            {/* Quick Stat Card */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <StatsCard
-                title="Date"
-                value={productionDate}
-                icon="📅"
-                color="indigo"
-                subtitle="Selected production day"
-              />
-              <StatsCard
-                title="Total Units Produced"
-                value={reportData?.total_quantity ?? 0}
-                icon="❄️"
-                color="green"
-                subtitle="Total coolers manufactured"
-              />
-              <StatsCard
-                title="Production Entries"
-                value={reportData?.data?.length ?? 0}
-                icon="📝"
-                color="blue"
-                subtitle="Batches recorded"
-              />
-            </div>
-
-            {/* Report Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200">
-              {loading ? (
-                <div className="py-16 text-center">
-                  <LoadingSpinner message="Calculating daily production figures..." size="md" />
-                </div>
-              ) : !reportData?.data?.length ? (
-                <div className="py-16 text-center text-gray-500 text-xs">
-                  <div className="text-3xl mb-2">🏭</div>
-                  <p className="font-semibold text-gray-700">No production entries recorded on {productionDate}</p>
-                  <p className="mt-1">Try picking a different date or log entries in the Production module.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200 text-xs sm:text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Model Code
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Model Name
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          Quantity
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Employee
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Remarks
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
-                      {reportData.data.map((row) => (
-                        <tr key={row.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-mono font-bold text-primary-700">
-                            {row.model_code}
-                          </td>
-                          <td className="px-4 py-3 text-gray-900 font-medium">{row.model_name}</td>
-                          <td className="px-4 py-3 text-right font-extrabold text-gray-900">
-                            {row.quantity} units
-                          </td>
-                          <td className="px-4 py-3 text-gray-700">{row.employee_name}</td>
-                          <td className="px-4 py-3 text-gray-500 text-xs truncate max-w-xs">
-                            {row.remarks || '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-900 text-xs sm:text-sm">
-                      <tr>
-                        <td colSpan={2} className="px-4 py-3 text-left">
-                          DAILY TOTAL PRODUCTION
-                        </td>
-                        <td className="px-4 py-3 text-right text-emerald-700 text-base">
-                          {reportData.total_quantity} units
-                        </td>
-                        <td colSpan={2} className="px-4 py-3" />
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* 2. DAILY DISPATCH REPORT */}
-        {activeTab === 'daily_dispatch' && (
-          <div className="space-y-5 animate-fadeIn">
-            {/* Filter & Export Bar */}
-            <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex items-center space-x-3 text-xs sm:text-sm">
-                <span className="font-semibold text-gray-700">Dispatch Date:</span>
-                <input
-                  type="date"
-                  value={dispatchDate}
-                  onChange={(e) => setDispatchDate(e.target.value)}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium focus:ring-1 focus:ring-primary-500"
-                />
+              {/* Quick Date Presets */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
+                <span className="text-xs font-semibold text-gray-500">Quick Presets:</span>
+                {[
+                  { label: 'Today', key: 'today' },
+                  { label: 'Yesterday', key: 'yesterday' },
+                  { label: 'This Week', key: 'this_week' },
+                  { label: 'This Month', key: 'this_month' },
+                  { label: 'Last Month', key: 'last_month' },
+                  { label: 'All Time', key: 'all' },
+                ].map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => handleSetDispatchDatePreset(p.key)}
+                    className="px-2.5 py-1 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                  >
+                    {p.label}
+                  </button>
+                ))}
               </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const exportRows = (reportData?.data || []).map((r) => ({
-                    'Date': r.dispatch_date,
-                    'Vehicle': r.vehicle_number,
-                    'From': r.from_location,
-                    'Destination': r.destination,
-                    'Model Code': r.model_code,
-                    'Model Name': r.model_name,
-                    'Quantity': r.quantity,
-                    'Status': r.status,
-                    'Officer': r.employee_name,
-                    'Remarks': r.remarks,
-                  }));
-                  handleExportToExcel(exportRows, `Jospo_Daily_Dispatch_${dispatchDate}`);
-                }}
-                disabled={loading || !reportData?.data?.length}
-                className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
-              >
-                <span>📥</span>
-                <span>Export to Excel (.xlsx)</span>
-              </button>
             </div>
 
             {/* Quick Stat Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <StatsCard
-                title="Date"
-                value={dispatchDate}
+                title="Dispatch Period"
+                value={dispatchStartDate === dispatchEndDate ? dispatchStartDate : `${dispatchStartDate} to ${dispatchEndDate}`}
                 icon="📅"
                 color="indigo"
-                subtitle="Selected dispatch date"
+                subtitle="Selected dispatch date range"
               />
               <StatsCard
                 title="Confirmed Units Dispatched"
-                value={reportData?.total_confirmed_quantity ?? 0}
+                value={`${(reportData?.total_confirmed_quantity ?? 0).toLocaleString()} units`}
                 icon="🚚"
                 color="green"
                 subtitle="Total coolers on vehicles"
@@ -1028,16 +1139,16 @@ export default function ReportsPage() {
             </div>
 
             {/* Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200">
+            <div className="card p-0 overflow-hidden border border-gray-200 shadow-sm">
               {loading ? (
                 <div className="py-16 text-center">
-                  <LoadingSpinner message="Querying daily dispatches..." size="md" />
+                  <LoadingSpinner message="Querying dispatches..." size="md" />
                 </div>
               ) : !reportData?.data?.length ? (
                 <div className="py-16 text-center text-gray-500 text-xs">
                   <div className="text-3xl mb-2">🚚</div>
-                  <p className="font-semibold text-gray-700">No dispatches scheduled on {dispatchDate}</p>
-                  <p className="mt-1">Try picking a different date or register a new dispatch with QR scanning.</p>
+                  <p className="font-semibold text-gray-700">No dispatches found for this period.</p>
+                  <p className="mt-1">Try picking a wider date range or register a new dispatch with QR scanning.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1103,8 +1214,8 @@ export default function ReportsPage() {
                         <td colSpan={3} className="px-4 py-3 text-left">
                           TOTAL CONFIRMED DISPATCH UNITS
                         </td>
-                        <td className="px-4 py-3 text-right text-emerald-700 text-base">
-                          {reportData.total_confirmed_quantity} units
+                        <td className="px-4 py-3 text-right text-emerald-700 text-base font-mono">
+                          {(reportData?.total_confirmed_quantity || 0).toLocaleString()} units
                         </td>
                         <td colSpan={2} className="px-4 py-3" />
                       </tr>
@@ -1116,17 +1227,19 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* 3. MONTHLY SUMMARY (PRODUCTION VS DISPATCH) */}
+        {/* ========================================================================= */}
+        {/* 3. MONTHLY SUMMARY (Production vs Dispatch Trend & Daily Reconciliation)   */}
+        {/* ========================================================================= */}
         {activeTab === 'monthly_summary' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Filter & Export Bar */}
-            <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border border-gray-200 shadow-sm">
               <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm">
-                <span className="font-semibold text-gray-700">Select Month:</span>
+                <span className="font-bold text-gray-700">Select Month:</span>
                 <select
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium focus:ring-1 focus:ring-primary-500"
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-1 focus:ring-primary-500 bg-white"
                 >
                   {monthNames.map((name, idx) => (
                     <option key={idx + 1} value={idx + 1}>
@@ -1138,7 +1251,7 @@ export default function ReportsPage() {
                 <select
                   value={selectedYear}
                   onChange={(e) => setSelectedYear(Number(e.target.value))}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium focus:ring-1 focus:ring-primary-500"
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-1 focus:ring-primary-500 bg-white"
                 >
                   {[currentYear - 2, currentYear - 1, currentYear, currentYear + 1].map((yr) => (
                     <option key={yr} value={yr}>
@@ -1150,20 +1263,9 @@ export default function ReportsPage() {
 
               <button
                 type="button"
-                onClick={() => {
-                  const exportRows = (reportData?.data || []).map((r) => ({
-                    'Date': r.date,
-                    'Production Units': r.production,
-                    'Dispatch Units': r.dispatch,
-                    'Net Inventory Change': r.net_change,
-                  }));
-                  handleExportToExcel(
-                    exportRows,
-                    `Jospo_Monthly_Summary_${monthNames[selectedMonth - 1]}_${selectedYear}`
-                  );
-                }}
+                onClick={handleExportMonthlyExcel}
                 disabled={loading || !reportData?.data?.length}
-                className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
+                className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm font-bold"
               >
                 <span>📥</span>
                 <span>Export to Excel (.xlsx)</span>
@@ -1174,14 +1276,14 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <StatsCard
                 title="Total Monthly Production"
-                value={reportData?.totals?.production ?? 0}
+                value={`${(reportData?.totals?.production ?? 0).toLocaleString()} units`}
                 icon="🏭"
                 color="green"
                 subtitle={`${monthNames[selectedMonth - 1]} ${selectedYear}`}
               />
               <StatsCard
                 title="Total Monthly Dispatch"
-                value={reportData?.totals?.dispatch ?? 0}
+                value={`${(reportData?.totals?.dispatch ?? 0).toLocaleString()} units`}
                 icon="🚚"
                 color="indigo"
                 subtitle="Confirmed outward shipments"
@@ -1200,7 +1302,7 @@ export default function ReportsPage() {
             </div>
 
             {/* Visual Bar Chart comparing Production vs Dispatch */}
-            <div className="card p-5 border border-gray-200">
+            <div className="card p-5 border border-gray-200 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-100 gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">
@@ -1210,14 +1312,14 @@ export default function ReportsPage() {
                     Day-by-day volume visualization for {monthNames[selectedMonth - 1]} {selectedYear}
                   </p>
                 </div>
-                <div className="flex items-center space-x-4 text-xs">
+                <div className="flex items-center space-x-4 text-xs font-semibold">
                   <div className="flex items-center space-x-1.5">
                     <span className="w-3 h-3 rounded bg-emerald-500 inline-block" />
-                    <span className="text-gray-600">Production</span>
+                    <span className="text-gray-700">Production</span>
                   </div>
                   <div className="flex items-center space-x-1.5">
                     <span className="w-3 h-3 rounded bg-indigo-500 inline-block" />
-                    <span className="text-gray-600">Dispatch</span>
+                    <span className="text-gray-700">Dispatch</span>
                   </div>
                 </div>
               </div>
@@ -1280,7 +1382,7 @@ export default function ReportsPage() {
             </div>
 
             {/* Daily Summary Breakdown Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200">
+            <div className="card p-0 overflow-hidden border border-gray-200 shadow-sm">
               <div className="p-3.5 bg-gray-50 border-b border-gray-200">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700">
                   Daily Breakdown Table
@@ -1331,140 +1433,19 @@ export default function ReportsPage() {
                   <tfoot className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-900 text-xs sm:text-sm">
                     <tr>
                       <td className="px-4 py-3 text-left">MONTHLY TOTALS</td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {reportData?.totals?.production ?? 0} units
+                      <td className="px-4 py-3 text-right text-emerald-700 font-mono">
+                        {(reportData?.totals?.production ?? 0).toLocaleString()} units
                       </td>
-                      <td className="px-4 py-3 text-right text-indigo-700">
-                        {reportData?.totals?.dispatch ?? 0} units
+                      <td className="px-4 py-3 text-right text-indigo-700 font-mono">
+                        {(reportData?.totals?.dispatch ?? 0).toLocaleString()} units
                       </td>
-                      <td className="px-4 py-3 text-right text-base text-primary-700">
-                        {reportData?.totals?.net_change ?? 0} units
+                      <td className="px-4 py-3 text-right text-base text-primary-700 font-mono">
+                        {(reportData?.totals?.net_change ?? 0).toLocaleString()} units
                       </td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* 4. MODEL-WISE STOCK REPORT */}
-        {activeTab === 'model_stock' && (
-          <div className="space-y-5 animate-fadeIn">
-            {/* Filter & Export Bar */}
-            <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-bold text-gray-900">Current Stock by Model</h3>
-                <p className="text-xs text-gray-500">
-                  Comprehensive audit of warehouse holdings and cumulative ledger totals
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const exportRows = (reportData?.data || []).map((r) => ({
-                    'Model Code': r.model_code,
-                    'Model Name': r.model_name,
-                    'Current Stock': r.current_stock,
-                    'All-Time Production': r.total_production_all_time,
-                    'All-Time Dispatched': r.total_dispatch_all_time,
-                    'All-Time Adjustments': r.net_adjustments_all_time,
-                  }));
-                  handleExportToExcel(exportRows, `Jospo_Model_Stock_Report_${todayStr}`);
-                }}
-                disabled={loading || !reportData?.data?.length}
-                className="btn-success text-xs py-2 px-4 inline-flex items-center space-x-2 shadow-sm"
-              >
-                <span>📥</span>
-                <span>Export to Excel (.xlsx)</span>
-              </button>
-            </div>
-
-            {/* Table */}
-            <div className="card p-0 overflow-hidden border border-gray-200">
-              {loading ? (
-                <div className="py-16 text-center">
-                  <LoadingSpinner message="Calculating cumulative stock balances..." size="md" />
-                </div>
-              ) : !reportData?.data?.length ? (
-                <div className="py-16 text-center text-gray-500 text-xs">
-                  <div className="text-3xl mb-2">📋</div>
-                  <p className="font-semibold text-gray-700">No cooler models found.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200 text-xs sm:text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Model Code
-                        </th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase tracking-wider">
-                          Model Name
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          Current Stock
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          All-Time Production
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          All-Time Dispatch
-                        </th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600 uppercase tracking-wider">
-                          Stock Status
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
-                      {reportData.data.map((row) => (
-                        <tr key={row.model_id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-mono font-bold text-primary-700">
-                            {row.model_code}
-                          </td>
-                          <td className="px-4 py-3 text-gray-900 font-medium">{row.model_name}</td>
-                          <td className="px-4 py-3 text-right font-extrabold text-gray-900 text-sm">
-                            {row.current_stock} units
-                          </td>
-                          <td className="px-4 py-3 text-right text-emerald-700 font-semibold">
-                            {row.total_production_all_time}
-                          </td>
-                          <td className="px-4 py-3 text-right text-indigo-700 font-semibold">
-                            {row.total_dispatch_all_time}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            {row.current_stock <= 0 ? (
-                              <span className="badge-danger">Out of Stock</span>
-                            ) : row.current_stock <= 5 ? (
-                              <span className="badge-warning">Low Stock ({row.current_stock})</span>
-                            ) : (
-                              <span className="badge-success">In Stock</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-900 text-xs sm:text-sm">
-                      <tr>
-                        <td colSpan={2} className="px-4 py-3 text-left">
-                          TOTAL CURRENT WAREHOUSE STOCK
-                        </td>
-                        <td className="px-4 py-3 text-right text-base text-primary-700">
-                          {(reportData?.data || []).reduce((acc, r) => acc + r.current_stock, 0)} units
-                        </td>
-                        <td className="px-4 py-3 text-right text-emerald-700">
-                          {(reportData?.data || []).reduce((acc, r) => acc + r.total_production_all_time, 0)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-indigo-700">
-                          {(reportData?.data || []).reduce((acc, r) => acc + r.total_dispatch_all_time, 0)}
-                        </td>
-                        <td className="px-4 py-3" />
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
             </div>
           </div>
         )}

@@ -92,8 +92,11 @@ export async function GET(request) {
       });
     }
 
-    // 2. Daily Dispatch Report
-    if (type === 'daily_dispatch') {
+    // 2. Dispatch Report
+    if (type === 'dispatch' || type === 'daily_dispatch') {
+      const startDate = searchParams.get('start_date') || searchParams.get('date') || date;
+      const endDate = searchParams.get('end_date') || searchParams.get('date') || date;
+
       let { data, error } = await supabase
         .from('dispatches')
         .select(`
@@ -118,7 +121,9 @@ export async function GET(request) {
             )
           )
         `)
-        .eq('dispatch_date', date)
+        .gte('dispatch_date', startDate)
+        .lte('dispatch_date', endDate)
+        .order('dispatch_date', { ascending: false })
         .order('created_at', { ascending: false });
 
       if (error && (error.message?.includes('relationship') || error.code === 'PGRST200')) {
@@ -142,7 +147,9 @@ export async function GET(request) {
               )
             )
           `)
-          .eq('dispatch_date', date)
+          .gte('dispatch_date', startDate)
+          .lte('dispatch_date', endDate)
+          .order('dispatch_date', { ascending: false })
           .order('created_at', { ascending: false });
         data = fallback.data;
         error = fallback.error;
@@ -207,8 +214,10 @@ export async function GET(request) {
       });
 
       return NextResponse.json({
-        report_type: 'daily_dispatch',
+        report_type: 'dispatch',
         date,
+        start_date: startDate,
+        end_date: endDate,
         plant,
         total_confirmed_quantity: totalQuantity,
         data: rows,
@@ -370,14 +379,14 @@ export async function GET(request) {
       });
     }
 
-    // 5. Thekedar / Contractor Production Report
-    if (type === 'thekedar_production' || type === 'contractor_production') {
+    // 5. Production Report (Unified with Date, Thekedar & Model filters)
+    if (type === 'production' || type === 'thekedar_production' || type === 'contractor_production') {
       const todayStr = getTodayIST();
       const pad = (n) => String(n).padStart(2, '0');
       const defaultStartDate = `${year}-${pad(month)}-01`;
 
-      const startDate = searchParams.get('start_date') || defaultStartDate;
-      const endDate = searchParams.get('end_date') || todayStr;
+      const startDate = searchParams.get('start_date') || searchParams.get('date') || defaultStartDate;
+      const endDate = searchParams.get('end_date') || searchParams.get('date') || todayStr;
       const selectedThekedar = searchParams.get('thekedar') || searchParams.get('contractor_name') || 'all';
       const selectedModelId = searchParams.get('model_id') || 'all';
 
@@ -521,17 +530,62 @@ export async function GET(request) {
         byModel[r.model_code].entry_count += 1;
       });
 
+      // Fetch active cooler models for catalog dropdown
+      let catalogModels = [];
+      try {
+        const modelsRes = await supabase
+          .from('cooler_models')
+          .select('id, name, code')
+          .order('name');
+        if (modelsRes.data) {
+          catalogModels = modelsRes.data;
+        }
+      } catch (err) {
+        console.warn('Could not fetch cooler_models for reports filter:', err.message);
+      }
+
+      // Gather all known contractor names (recent entries + filtered records)
+      const allKnownThekedars = new Set(plantThekedarsSet);
+      allThekedarsSet.forEach((t) => allKnownThekedars.add(t));
+
+      try {
+        const { data: recentContractors } = await supabase
+          .from('production_entries')
+          .select('contractor_name, remarks')
+          .order('created_at', { ascending: false })
+          .limit(300);
+
+        (recentContractors || []).forEach((r) => {
+          const name = extractThekedar(r);
+          if (name && name !== 'General Assembly') {
+            allKnownThekedars.add(name);
+          }
+        });
+      } catch (e) {
+        // Ignore fallback error
+      }
+
+      const finalizedThekedars = Array.from(allKnownThekedars).sort();
+
       return NextResponse.json({
-        report_type: 'thekedar_production',
+        report_type: 'production',
         start_date: startDate,
         end_date: endDate,
         selected_thekedar: selectedThekedar,
+        selected_model_id: selectedModelId,
         total_quantity: totalQuantity,
         total_entries: filteredRows.length,
         thekedar_count: Object.keys(byThekedar).length,
-        thekedar_list: Array.from(plantThekedarsSet).sort(),
+        thekedar_list: finalizedThekedars,
+        models_list: catalogModels,
         by_thekedar: Object.values(byThekedar).sort((a, b) => b.total_quantity - a.total_quantity),
         by_model: Object.values(byModel).sort((a, b) => b.total_quantity - a.total_quantity),
+        summary: {
+          total_quantity: totalQuantity,
+          total_entries: filteredRows.length,
+          thekedar_count: Object.keys(byThekedar).length,
+          thekedar_list: finalizedThekedars,
+        },
         data: filteredRows,
       });
     }
