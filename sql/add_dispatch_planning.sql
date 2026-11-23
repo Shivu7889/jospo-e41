@@ -4,13 +4,18 @@
 -- ====================================================================
 
 -- 1. Create dispatch_plans Header Table
+-- Supports:
+--   - Destination-first planning (vehicle_number is optional at planning stage)
+--   - Multi-plant manufacturing (plant can be E41 G2, D4, C116, or MULTI)
+--   - Dispatch strategies (single_plant, coloading, split, auto)
 CREATE TABLE IF NOT EXISTS public.dispatch_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_date DATE NOT NULL DEFAULT CURRENT_DATE,
   plant TEXT NOT NULL DEFAULT 'E41 G2',
-  vehicle_number TEXT NOT NULL,
-  destination TEXT NOT NULL,
+  vehicle_number TEXT DEFAULT '', -- Optional at planning time! Assigned when truck arrives at dock.
+  destination TEXT NOT NULL,      -- Party Name or Destination Plant
   dispatch_type TEXT NOT NULL DEFAULT 'party' CHECK (dispatch_type IN ('party', 'local')),
+  dispatch_mode TEXT NOT NULL DEFAULT 'auto' CHECK (dispatch_mode IN ('auto', 'single_plant', 'coloading', 'split')),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'loading', 'completed', 'cancelled')),
   priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'urgent', 'high')),
   notes TEXT,
@@ -21,20 +26,30 @@ CREATE TABLE IF NOT EXISTS public.dispatch_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- If table already existed previously with vehicle_number NOT NULL, make it optional:
+ALTER TABLE public.dispatch_plans ALTER COLUMN vehicle_number DROP NOT NULL;
+ALTER TABLE public.dispatch_plans ALTER COLUMN vehicle_number SET DEFAULT '';
+ALTER TABLE public.dispatch_plans ADD COLUMN IF NOT EXISTS dispatch_mode TEXT DEFAULT 'auto';
+
 -- 2. Create dispatch_plan_items Line Items Table
+-- Tracks item target quantity and which manufacturing plant produces it!
 CREATE TABLE IF NOT EXISTS public.dispatch_plan_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_id UUID NOT NULL REFERENCES public.dispatch_plans(id) ON DELETE CASCADE,
   model_id UUID NOT NULL REFERENCES public.cooler_models(id) ON DELETE CASCADE,
+  plant TEXT NOT NULL DEFAULT 'E41 G2', -- Responsible plant for this cooler model
   planned_quantity INTEGER NOT NULL CHECK (planned_quantity > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Ensure plant column exists on line items if table was previously created:
+ALTER TABLE public.dispatch_plan_items ADD COLUMN IF NOT EXISTS plant TEXT DEFAULT 'E41 G2';
 
 -- 3. Add plan_id to dispatches table to link actual dispatch back to plan
 ALTER TABLE public.dispatches 
   ADD COLUMN IF NOT EXISTS plan_id UUID REFERENCES public.dispatch_plans(id) ON DELETE SET NULL;
 
--- 4. Indexes for fast filtering
+-- 4. Indexes for fast filtering across plants
 CREATE INDEX IF NOT EXISTS idx_dispatch_plans_date_plant 
   ON public.dispatch_plans(plan_date, plant, status);
 
@@ -43,6 +58,9 @@ CREATE INDEX IF NOT EXISTS idx_dispatch_plans_status
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_plan_items_plan 
   ON public.dispatch_plan_items(plan_id);
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_plan_items_plant 
+  ON public.dispatch_plan_items(plant);
 
 CREATE INDEX IF NOT EXISTS idx_dispatches_plan_id 
   ON public.dispatches(plan_id);

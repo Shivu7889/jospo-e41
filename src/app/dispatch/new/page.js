@@ -1919,25 +1919,33 @@ function NewDispatchContent() {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono font-extrabold text-xs sm:text-sm text-gray-900">
-                          {plan.vehicle_number}
+                        <span className="font-extrabold text-xs sm:text-sm text-gray-900 truncate pr-1">
+                          🏢 {plan.destination}
                         </span>
                         {plan.priority === 'urgent' && (
-                          <span className="text-[9px] font-extrabold bg-rose-600 text-white px-1.5 py-0.5 rounded">
+                          <span className="text-[9px] font-extrabold bg-rose-600 text-white px-1.5 py-0.5 rounded flex-shrink-0">
                             URGENT
                           </span>
                         )}
                         {isSelected && (
-                          <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                          <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded flex-shrink-0">
                             ✓ ACTIVE
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-800 font-bold truncate mt-1">
-                        {plan.destination}
+                      <div className="text-xs text-gray-600 font-mono mt-1 flex items-center space-x-1">
+                        {plan.vehicle_number ? (
+                          <span className="bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200 font-bold">
+                            🚚 {plan.vehicle_number}
+                          </span>
+                        ) : (
+                          <span className="text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-semibold text-[11px]">
+                            ⏳ Vehicle Pending
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-gray-500 mt-2 pt-2 border-t border-gray-100">
-                        <span>🏭 {plan.plant}</span>
+                        <span>🏭 {plan.plant === 'MULTI' ? 'Multi-Plant' : plan.plant}</span>
                         <span className="font-extrabold text-indigo-700">
                           {plan.total_planned_quantity} units
                         </span>
@@ -2395,8 +2403,11 @@ function NewDispatchContent() {
                           {loadedQty} / {targetQty} pcs
                         </span>
                       </div>
-                      <div className="text-xs text-gray-700 font-semibold truncate mt-1">
-                        {planItem.cooler_models?.name || 'Cooler Model'}
+                      <div className="text-xs text-gray-700 font-semibold truncate mt-1 flex items-center justify-between">
+                        <span className="truncate">{planItem.cooler_models?.name || 'Cooler Model'}</span>
+                        <span className="text-[10px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0 ml-1">
+                          🏭 {planItem.plant || planItem.cooler_models?.manufacturing_plant || 'E41 G2'}
+                        </span>
                       </div>
                       {/* Progress Bar */}
                       <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden mt-2">

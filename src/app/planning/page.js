@@ -43,18 +43,25 @@ export default function PlanningPage() {
   const [editingPlanId, setEditingPlanId] = useState(null);
   const [savingPlan, setSavingPlan] = useState(false);
 
-  // Form Fields
+  // Form Fields (Destination is mandatory, Vehicle is optional)
   const [formDate, setFormDate] = useState(todayStr);
   const [formPlant, setFormPlant] = useState(activePlant && activePlant !== ALL_PLANTS_ID ? activePlant : 'E41 G2');
   const [formVehicle, setFormVehicle] = useState('');
   const [formDestination, setFormDestination] = useState('');
   const [formDispatchType, setFormDispatchType] = useState('party'); // 'party' | 'local'
+  const [formDispatchMode, setFormDispatchMode] = useState('coloading'); // 'coloading' | 'split'
   const [formPriority, setFormPriority] = useState('normal'); // 'normal' | 'urgent' | 'high'
   const [formNotes, setFormNotes] = useState('');
   const [formDriverPhone, setFormDriverPhone] = useState('');
   const [formItems, setFormItems] = useState([{ model_id: '', planned_quantity: '' }]);
 
-  // Delete / Cancel Confirmation Modal
+  // Quick Assign Vehicle Modal State
+  const [assigningVehiclePlan, setAssigningVehiclePlan] = useState(null);
+  const [assignVehicleInput, setAssignVehicleInput] = useState('');
+  const [assignDriverPhoneInput, setAssignDriverPhoneInput] = useState('');
+  const [savingVehicle, setSavingVehicle] = useState(false);
+
+  // Delete Confirmation Modal
   const [deletingPlan, setDeletingPlan] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -141,6 +148,27 @@ export default function PlanningPage() {
     };
   }, [plans]);
 
+  // Live Plant Summary calculation for current form
+  const formPlantSummary = useMemo(() => {
+    const summary = {};
+    formItems.forEach((it) => {
+      if (!it.model_id || !it.planned_quantity) return;
+      const m = models.find((mod) => mod.id === it.model_id);
+      const p = normalizePlant(m?.manufacturing_plant || 'E41 G2');
+      if (!summary[p]) summary[p] = { count: 0, items: [] };
+      summary[p].count += Number(it.planned_quantity);
+      summary[p].items.push({
+        code: m?.code || 'MODEL',
+        name: m?.name || 'Cooler',
+        qty: Number(it.planned_quantity),
+      });
+    });
+    return summary;
+  }, [formItems, models]);
+
+  const distinctPlantsInForm = Object.keys(formPlantSummary);
+  const isFormMultiPlant = distinctPlantsInForm.length > 1;
+
   // Open Create Modal
   const handleOpenCreateModal = () => {
     setEditingPlanId(null);
@@ -149,6 +177,7 @@ export default function PlanningPage() {
     setFormVehicle('');
     setFormDestination('');
     setFormDispatchType('party');
+    setFormDispatchMode('coloading');
     setFormPriority('normal');
     setFormNotes('');
     setFormDriverPhone('');
@@ -164,6 +193,7 @@ export default function PlanningPage() {
     setFormVehicle(plan.vehicle_number || '');
     setFormDestination(plan.destination || '');
     setFormDispatchType(plan.dispatch_type || 'party');
+    setFormDispatchMode(plan.dispatch_mode || 'coloading');
     setFormPriority(plan.priority || 'normal');
     setFormNotes(plan.notes || '');
     setFormDriverPhone(plan.driver_phone || '');
@@ -171,6 +201,7 @@ export default function PlanningPage() {
     const existingItems = (plan.dispatch_plan_items || []).map((it) => ({
       model_id: it.model_id,
       planned_quantity: String(it.planned_quantity || ''),
+      plant: it.plant,
     }));
 
     setFormItems(existingItems.length > 0 ? existingItems : [{ model_id: '', planned_quantity: '' }]);
@@ -198,15 +229,11 @@ export default function PlanningPage() {
   const handleSavePlan = async (e) => {
     e.preventDefault();
 
-    const cleanVehicle = formVehicle.trim().toUpperCase();
     const cleanDest = formDestination.trim();
+    const cleanVehicle = formVehicle.trim().toUpperCase();
 
-    if (!cleanVehicle) {
-      showToast('Please enter a vehicle registration number.', 'warning');
-      return;
-    }
     if (!cleanDest) {
-      showToast('Please provide a party name or destination.', 'warning');
+      showToast('Please provide a party name or destination for this plan.', 'warning');
       return;
     }
 
@@ -224,10 +251,11 @@ export default function PlanningPage() {
 
       const payload = {
         plan_date: formDate,
-        plant: formPlant,
+        plant: isFormMultiPlant ? 'MULTI' : formPlant,
         vehicle_number: cleanVehicle,
         destination: cleanDest,
         dispatch_type: formDispatchType,
+        dispatch_mode: isFormMultiPlant ? formDispatchMode : 'single_plant',
         priority: formPriority,
         notes: formNotes,
         driver_phone: formDriverPhone,
@@ -256,8 +284,8 @@ export default function PlanningPage() {
 
       showToast(
         editingPlanId
-          ? `Plan for vehicle ${cleanVehicle} updated successfully!`
-          : `Plan for vehicle ${cleanVehicle} created!`,
+          ? `Plan for ${cleanDest} updated successfully!`
+          : `Plan for ${cleanDest} created!`,
         'success'
       );
 
@@ -268,6 +296,53 @@ export default function PlanningPage() {
       showToast(err.message || 'Error saving plan', 'error');
     } finally {
       setSavingPlan(false);
+    }
+  };
+
+  // Open Quick Assign Vehicle Modal
+  const handleOpenAssignVehicle = (plan) => {
+    setAssigningVehiclePlan(plan);
+    setAssignVehicleInput(plan.vehicle_number || '');
+    setAssignDriverPhoneInput(plan.driver_phone || '');
+  };
+
+  // Submit Quick Assign Vehicle
+  const handleSaveAssignedVehicle = async (e) => {
+    e.preventDefault();
+    if (!assigningVehiclePlan) return;
+
+    const cleanV = assignVehicleInput.trim().toUpperCase();
+    if (!cleanV) {
+      showToast('Please enter a vehicle registration number.', 'warning');
+      return;
+    }
+
+    try {
+      setSavingVehicle(true);
+      const res = await fetch('/api/planning', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: assigningVehiclePlan.id,
+          vehicle_number: cleanV,
+          driver_phone: assignDriverPhoneInput.trim() || null,
+          status: assigningVehiclePlan.status === 'pending' ? 'loading' : assigningVehiclePlan.status,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to assign vehicle');
+      }
+
+      showToast(`Vehicle ${cleanV} assigned to plan ${assigningVehiclePlan.destination}!`, 'success');
+      setAssigningVehiclePlan(null);
+      fetchPlans(true);
+    } catch (err) {
+      console.error('Assign vehicle error:', err);
+      showToast(err.message || 'Error assigning vehicle', 'error');
+    } finally {
+      setSavingVehicle(false);
     }
   };
 
@@ -288,7 +363,7 @@ export default function PlanningPage() {
         throw new Error(result.error || 'Failed to delete plan');
       }
 
-      showToast(`Plan for ${deletingPlan.vehicle_number} deleted.`, 'success');
+      showToast(`Plan for ${deletingPlan.destination} deleted.`, 'success');
       setDeletingPlan(null);
       fetchPlans(true);
     } catch (err) {
@@ -315,7 +390,7 @@ export default function PlanningPage() {
               </span>
             </div>
             <p className="mt-1 text-xs sm:text-sm text-gray-500">
-              Schedule vehicles, target model quantities, and track live loading progress against today&apos;s plan.
+              Schedule party orders &amp; target cooler models. Multi-plant manufacturing is split automatically.
             </p>
           </div>
 
@@ -327,7 +402,7 @@ export default function PlanningPage() {
                 className="btn-primary text-xs sm:text-sm py-2 px-4 inline-flex items-center space-x-2 shadow-sm font-bold"
               >
                 <span>➕</span>
-                <span>Add Dispatch Plan</span>
+                <span>Schedule Dispatch Plan</span>
               </button>
             )}
 
@@ -409,7 +484,7 @@ export default function PlanningPage() {
           {/* Status Filter */}
           <div className="flex items-center space-x-1 overflow-x-auto">
             {[
-              { id: 'all', label: 'All Plans' },
+              { id: 'all', label: 'All Orders' },
               { id: 'pending', label: '⏳ Pending' },
               { id: 'loading', label: '🔄 In Progress' },
               { id: 'completed', label: '✅ Completed' },
@@ -433,14 +508,14 @@ export default function PlanningPage() {
         {/* Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
           <StatsCard
-            title="Planned Trucks"
+            title="Planned Orders"
             value={stats.totalTrucks}
-            icon="🚚"
+            icon="🏢"
             color="indigo"
             subtitle={`${stats.completedTrucks} completed`}
           />
           <StatsCard
-            title="Planned Units"
+            title="Total Planned Units"
             value={stats.totalUnits.toLocaleString()}
             icon="📦"
             color="blue"
@@ -458,7 +533,7 @@ export default function PlanningPage() {
             value={stats.completedTrucks}
             icon="✅"
             color="green"
-            subtitle={`${stats.pendingTrucks} trucks pending`}
+            subtitle={`${stats.pendingTrucks} orders pending`}
           />
         </div>
 
@@ -474,7 +549,7 @@ export default function PlanningPage() {
               No dispatch plans for {selectedDate === todayStr ? 'Today' : selectedDate}
             </h3>
             <p className="text-xs text-gray-500 max-w-md mx-auto">
-              Owner/Admin can add a dispatch plan specifying vehicle number, destination, and target cooler quantities.
+              Owner/Admin can add a plan with party destination and required cooler models. Vehicle can be assigned later when the truck arrives.
             </p>
             {isOwnerOrAdmin && (
               <button
@@ -483,7 +558,7 @@ export default function PlanningPage() {
                 className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-1.5 font-bold shadow-xs mt-2"
               >
                 <span>➕</span>
-                <span>Create Plan for {selectedDate}</span>
+                <span>Schedule Plan for {selectedDate}</span>
               </button>
             )}
           </div>
@@ -493,6 +568,9 @@ export default function PlanningPage() {
               const isUrgent = plan.priority === 'urgent' || plan.priority === 'high';
               const isDone = plan.status === 'completed';
               const isLoading = plan.status === 'loading';
+              const hasVehicle = Boolean(plan.vehicle_number && plan.vehicle_number.trim());
+              const breakdown = plan.plant_breakdown || {};
+              const breakdownPlants = Object.keys(breakdown);
 
               return (
                 <div
@@ -505,12 +583,12 @@ export default function PlanningPage() {
                       : 'border-gray-200 bg-white'
                   }`}
                 >
-                  {/* Card Header */}
+                  {/* Card Header: Destination Prominent */}
                   <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono font-extrabold text-base sm:text-lg text-gray-900 bg-gray-100 px-2.5 py-0.5 rounded-lg border border-gray-300">
-                          {plan.vehicle_number}
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-lg font-extrabold text-gray-900 tracking-tight">
+                          🏢 {plan.destination}
                         </span>
                         {isUrgent && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-600 text-white animate-pulse">
@@ -528,17 +606,37 @@ export default function PlanningPage() {
                         >
                           {isDone ? '✅ Completed' : isLoading ? '🔄 Loading' : '⏳ Pending'}
                         </span>
-                        <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
-                          🏭 {plan.plant}
-                        </span>
                       </div>
 
-                      <div className="mt-1.5 flex items-center space-x-1.5 text-xs text-gray-700">
-                        <span className="font-bold text-gray-900">{plan.destination}</span>
-                        <span className="text-gray-400">•</span>
-                        <span className="text-[11px] text-gray-500 uppercase tracking-wider font-semibold">
-                          {plan.dispatch_type === 'local' ? 'Internal Transfer' : 'Party Dispatch'}
-                        </span>
+                      {/* Vehicle Details & Plant Badges */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        {hasVehicle ? (
+                          <span className="font-mono font-bold text-xs bg-gray-100 text-gray-900 px-2 py-0.5 rounded border border-gray-300 flex items-center space-x-1">
+                            <span>🚚</span>
+                            <span>{plan.vehicle_number}</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center space-x-1 bg-amber-50 text-amber-800 border border-amber-200 text-xs px-2 py-0.5 rounded font-bold">
+                            <span>⏳</span>
+                            <span>Vehicle Pending</span>
+                          </span>
+                        )}
+
+                        {plan.is_multi_plant ? (
+                          <span className="text-[11px] font-extrabold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                            🏭 Multi-Plant ({breakdownPlants.join(' + ')})
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
+                            🏭 {plan.plant}
+                          </span>
+                        )}
+
+                        {plan.dispatch_mode === 'coloading' && (
+                          <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded">
+                            🔄 Co-Loading
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -565,10 +663,44 @@ export default function PlanningPage() {
                     </div>
                   </div>
 
+                  {/* Multi-Plant Breakdown Tags (If models manufactured at different plants) */}
+                  {plan.is_multi_plant && breakdownPlants.length > 1 && (
+                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5 text-xs space-y-1.5">
+                      <div className="font-bold text-indigo-950 text-[11px] uppercase tracking-wider flex items-center justify-between">
+                        <span>🏭 Plant-wise Loading Split:</span>
+                        <span className="text-[10px] font-medium text-indigo-700">
+                          {plan.dispatch_mode === 'coloading' ? '1 Truck visits both plants' : 'Separate Trucks'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                        {breakdownPlants.map((p) => {
+                          const info = breakdown[p];
+                          const pDone = info.loaded >= info.planned && info.planned > 0;
+                          return (
+                            <div
+                              key={p}
+                              className={`p-1.5 rounded-lg border text-xs flex items-center justify-between ${
+                                pDone
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                  : 'bg-white border-indigo-100 text-gray-800'
+                              }`}
+                            >
+                              <span className="font-bold text-[11px]">🏭 {p}</span>
+                              <span className="font-extrabold">
+                                {info.loaded} / {info.planned} pcs {pDone && '✅'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Model Items Checklist */}
                   <div className="space-y-2 bg-gray-50 p-3 rounded-xl border border-gray-200 text-xs">
-                    <div className="font-bold text-gray-700 text-[11px] uppercase tracking-wider mb-1">
-                      Planned Cooler Models:
+                    <div className="font-bold text-gray-700 text-[11px] uppercase tracking-wider mb-1 flex items-center justify-between">
+                      <span>Planned Cooler Models:</span>
+                      <span className="text-[10px] text-gray-400 font-normal">Manufacturing Plant</span>
                     </div>
                     {(plan.dispatch_plan_items || []).map((item) => (
                       <div
@@ -581,6 +713,9 @@ export default function PlanningPage() {
                           </span>
                           <span className="text-gray-700 truncate font-medium">
                             {item.cooler_models?.name}
+                          </span>
+                          <span className="text-[10px] font-semibold text-gray-500 bg-gray-200/70 px-1 py-0.2 rounded">
+                            🏭 {item.plant || item.cooler_models?.manufacturing_plant || 'E41 G2'}
                           </span>
                         </div>
                         <div className="flex items-center space-x-2 flex-shrink-0">
@@ -618,6 +753,17 @@ export default function PlanningPage() {
                   {/* Action Buttons */}
                   <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                     <div className="flex items-center space-x-2">
+                      {!hasVehicle && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAssignVehicle(plan)}
+                          className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-2.5 py-1 rounded-lg border border-amber-300 transition-colors inline-flex items-center space-x-1"
+                        >
+                          <span>🚚</span>
+                          <span>Assign Vehicle</span>
+                        </button>
+                      )}
+
                       {isOwnerOrAdmin && (
                         <>
                           <button
@@ -640,10 +786,10 @@ export default function PlanningPage() {
 
                     {/* Start Loading Button */}
                     <Link
-                      href={`/dispatch/new?plan_id=${plan.id}&vehicle=${encodeURIComponent(
-                        plan.vehicle_number
-                      )}&destination=${encodeURIComponent(plan.destination)}&plant=${encodeURIComponent(
-                        plan.plant
+                      href={`/dispatch/new?plan_id=${plan.id}&destination=${encodeURIComponent(
+                        plan.destination
+                      )}&vehicle=${encodeURIComponent(plan.vehicle_number || '')}&plant=${encodeURIComponent(
+                        plan.plant === 'MULTI' ? 'E41 G2' : plan.plant
                       )}&type=${encodeURIComponent(plan.dispatch_type)}`}
                       className={`btn-primary text-xs py-1.5 px-3.5 inline-flex items-center space-x-1.5 font-bold shadow-xs ${
                         isDone
@@ -652,7 +798,7 @@ export default function PlanningPage() {
                       }`}
                     >
                       <span>🚚</span>
-                      <span>{isDone ? 'View Dispatch' : 'Start Loading Truck'}</span>
+                      <span>{isDone ? 'View Dispatch' : hasVehicle ? 'Start Loading' : 'Assign & Load'}</span>
                       <span>→</span>
                     </Link>
                   </div>
@@ -682,7 +828,7 @@ export default function PlanningPage() {
                       {editingPlanId ? 'Edit Dispatch Plan' : 'Schedule New Dispatch Plan'}
                     </h3>
                     <p className="text-xs text-gray-500">
-                      Specify vehicle, target party, and planned cooler models.
+                      Enter destination and target cooler models. Vehicle can be assigned now or later at the dock.
                     </p>
                   </div>
                 </div>
@@ -699,10 +845,25 @@ export default function PlanningPage() {
               {/* Form */}
               <form onSubmit={handleSavePlan} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Destination / Party Name (Mandatory) */}
+                  <div className="sm:col-span-2">
+                    <label className="label text-xs font-bold text-gray-700">
+                      Party Name / Destination <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Shree Ram Coolers, Indore / Jodhpur Unit"
+                      value={formDestination}
+                      onChange={(e) => setFormDestination(e.target.value)}
+                      className="input-field text-sm font-semibold"
+                    />
+                  </div>
+
                   {/* Plan Date */}
                   <div>
                     <label className="label text-xs font-bold text-gray-700">
-                      Dispatch Date <span className="text-red-500">*</span>
+                      Target Dispatch Date <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="date"
@@ -713,50 +874,18 @@ export default function PlanningPage() {
                     />
                   </div>
 
-                  {/* Manufacturing Plant */}
+                  {/* Vehicle Number (OPTIONAL) */}
                   <div>
-                    <label className="label text-xs font-bold text-gray-700">
-                      Origin Plant <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={formPlant}
-                      onChange={(e) => setFormPlant(e.target.value)}
-                      className="input-field text-xs font-bold bg-white"
-                      required
-                    >
-                      <option value="E41 G2">🏭 E41 G2 Plant</option>
-                      <option value="C116">🏭 C116 Plant</option>
-                      <option value="D4">🏭 D4 Plant</option>
-                    </select>
-                  </div>
-
-                  {/* Vehicle Number */}
-                  <div>
-                    <label className="label text-xs font-bold text-gray-700">
-                      Vehicle Registration Number <span className="text-red-500">*</span>
+                    <label className="label text-xs font-bold text-gray-700 flex items-center justify-between">
+                      <span>Vehicle Number (Optional)</span>
+                      <span className="text-[10px] text-gray-400 font-normal">Can assign at dock</span>
                     </label>
                     <input
                       type="text"
-                      required
-                      placeholder="e.g. MP09 AB 1234"
+                      placeholder="e.g. MP09 AB 1234 (Leave blank if not decided)"
                       value={formVehicle}
                       onChange={(e) => setFormVehicle(e.target.value.toUpperCase())}
                       className="input-field font-mono font-bold uppercase text-sm"
-                    />
-                  </div>
-
-                  {/* Destination / Party Name */}
-                  <div>
-                    <label className="label text-xs font-bold text-gray-700">
-                      Party Name / Destination <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Shree Ram Coolers, Indore"
-                      value={formDestination}
-                      onChange={(e) => setFormDestination(e.target.value)}
-                      className="input-field text-sm font-semibold"
                     />
                   </div>
 
@@ -802,7 +931,7 @@ export default function PlanningPage() {
                     <label className="label text-xs font-bold text-gray-700">Instructions / Notes (Optional)</label>
                     <input
                       type="text"
-                      placeholder="e.g. Send before 3 PM, check bill copy"
+                      placeholder="e.g. Load before 3 PM, check bill copy"
                       value={formNotes}
                       onChange={(e) => setFormNotes(e.target.value)}
                       className="input-field text-xs"
@@ -814,7 +943,7 @@ export default function PlanningPage() {
                 <div className="pt-2 border-t border-gray-100 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                      Planned Cooler Models & Quantities
+                      Planned Cooler Models &amp; Quantities
                     </span>
                     <button
                       type="button"
@@ -827,45 +956,100 @@ export default function PlanningPage() {
                   </div>
 
                   <div className="space-y-2">
-                    {formItems.map((item, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <SearchableSelect
-                            options={models.map((m) => ({
-                              id: m.id,
-                              code: m.code,
-                              name: `${m.name} (${m.code})`,
-                            }))}
-                            value={item.model_id}
-                            onChange={(val) => handleUpdateItemRow(idx, 'model_id', val)}
-                            placeholder="-- Select Cooler Model --"
-                          />
+                    {formItems.map((item, idx) => {
+                      const selectedModel = models.find((m) => m.id === item.model_id);
+                      const mfgPlant = normalizePlant(selectedModel?.manufacturing_plant || 'E41 G2');
+
+                      return (
+                        <div key={idx} className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <SearchableSelect
+                              options={models.map((m) => ({
+                                id: m.id,
+                                code: m.code,
+                                name: `${m.name} (${m.code}) — 🏭 ${m.manufacturing_plant || 'E41 G2'}`,
+                              }))}
+                              value={item.model_id}
+                              onChange={(val) => handleUpdateItemRow(idx, 'model_id', val)}
+                              placeholder="-- Select Cooler Model --"
+                            />
+                          </div>
+
+                          {/* Model Plant Badge */}
+                          {selectedModel && (
+                            <span className="hidden sm:inline-flex text-[10px] font-bold text-gray-600 bg-gray-100 px-2 py-1.5 rounded-lg border border-gray-200 flex-shrink-0">
+                              🏭 {mfgPlant}
+                            </span>
+                          )}
+
+                          <div className="w-24 sm:w-28 flex-shrink-0">
+                            <input
+                              type="number"
+                              min="1"
+                              required
+                              placeholder="Qty"
+                              value={item.planned_quantity}
+                              onChange={(e) => handleUpdateItemRow(idx, 'planned_quantity', e.target.value)}
+                              className="input-field text-xs py-2 text-center font-bold"
+                            />
+                          </div>
+
+                          {formItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItemRow(idx)}
+                              className="w-8 h-8 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center font-bold flex-shrink-0"
+                              title="Remove row"
+                            >
+                              ✕
+                            </button>
+                          )}
                         </div>
-                        <div className="w-24 sm:w-28 flex-shrink-0">
-                          <input
-                            type="number"
-                            min="1"
-                            required
-                            placeholder="Qty"
-                            value={item.planned_quantity}
-                            onChange={(e) => handleUpdateItemRow(idx, 'planned_quantity', e.target.value)}
-                            className="input-field text-xs py-2 text-center font-bold"
-                          />
-                        </div>
-                        {formItems.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItemRow(idx)}
-                            className="w-8 h-8 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center font-bold"
-                            title="Remove row"
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
+
+                {/* Multi-Plant Live Summary Box */}
+                {isFormMultiPlant && (
+                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-3.5 space-y-2.5 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-1.5 font-extrabold text-xs text-indigo-950">
+                        <span>🏭</span>
+                        <span>Multi-Plant Split Detected ({distinctPlantsInForm.length} Plants):</span>
+                      </div>
+                      <span className="text-[11px] font-bold text-indigo-800">
+                        Total: {Object.values(formPlantSummary).reduce((a, b) => a + b.count, 0)} units
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {Object.entries(formPlantSummary).map(([plant, info]) => (
+                        <div key={plant} className="bg-white p-2 rounded-lg border border-indigo-100 shadow-2xs">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-gray-800">🏭 {plant}</span>
+                            <span className="font-extrabold text-indigo-700">{info.count} pcs</span>
+                          </div>
+                          <div className="text-[10px] text-gray-500 truncate mt-0.5">
+                            {info.items.map((i) => `${i.code}: ${i.qty}`).join(', ')}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-indigo-200/60 text-xs">
+                      <span className="font-bold text-indigo-900">Dispatch Logistics Strategy:</span>
+                      <select
+                        value={formDispatchMode}
+                        onChange={(e) => setFormDispatchMode(e.target.value)}
+                        className="input-field text-xs py-1 px-2.5 w-auto bg-white font-semibold"
+                      >
+                        <option value="coloading">🔄 Co-Loading (Single truck visits both plants)</option>
+                        <option value="split">📦 Split (Separate trucks from each plant)</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
 
                 {/* Submit Actions */}
                 <div className="flex items-center justify-end space-x-2 pt-3 border-t border-gray-100">
@@ -894,6 +1078,88 @@ export default function PlanningPage() {
           </div>
         )}
 
+        {/* Quick Modal: Assign Vehicle */}
+        {assigningVehiclePlan && (
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">🚚</span>
+                  <div>
+                    <h3 className="font-extrabold text-base text-gray-900">
+                      Assign Vehicle for Loading
+                    </h3>
+                    <p className="text-xs text-gray-500 truncate max-w-xs">
+                      {assigningVehiclePlan.destination}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAssigningVehiclePlan(null)}
+                  disabled={savingVehicle}
+                  className="text-gray-400 hover:text-gray-600 bg-gray-100 rounded-full p-1"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveAssignedVehicle} className="space-y-3">
+                <div>
+                  <label className="label text-xs font-bold text-gray-700">
+                    Vehicle Registration Number <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    placeholder="e.g. MP09 AB 1234"
+                    value={assignVehicleInput}
+                    onChange={(e) => setAssignVehicleInput(e.target.value.toUpperCase())}
+                    className="input-field font-mono font-bold text-base uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="label text-xs font-bold text-gray-700">Driver Phone (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 9876543210"
+                    value={assignDriverPhoneInput}
+                    onChange={(e) => setAssignDriverPhoneInput(e.target.value)}
+                    className="input-field text-xs"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setAssigningVehiclePlan(null)}
+                    disabled={savingVehicle}
+                    className="btn-secondary text-xs py-2 px-3.5"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingVehicle}
+                    className="btn-primary text-xs py-2 px-4 font-bold shadow-sm"
+                  >
+                    {savingVehicle ? 'Saving...' : '💾 Assign Truck'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Modal: Delete Confirmation */}
         {deletingPlan && (
           <div
@@ -909,10 +1175,10 @@ export default function PlanningPage() {
                 🗑️
               </div>
               <h3 className="font-bold text-gray-900 text-base">
-                Delete Plan for {deletingPlan.vehicle_number}?
+                Delete Plan for {deletingPlan.destination}?
               </h3>
               <p className="text-xs text-gray-500">
-                This will remove the scheduled plan for {deletingPlan.destination}. This action cannot be undone.
+                This will remove the scheduled plan ({deletingPlan.total_planned_quantity} units). This action cannot be undone.
               </p>
               <div className="flex items-center justify-center space-x-2 pt-2">
                 <button
