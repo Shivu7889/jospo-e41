@@ -99,35 +99,56 @@ export default function AdminPage() {
     }
   }, [supabase, showToast]);
 
-  // 2. Fetch Models & Current Stock
-  const fetchModelsAndStock = useCallback(async () => {
+  // 2. Fetch Models & Current Stock for adjustmentPlant
+  const fetchModelsAndStock = useCallback(async (targetPlant = adjustmentPlant) => {
     try {
       setLoadingModels(true);
+      // Fetch all active cooler models so full model roster is available to admin
       const { data: modelsData, error: modelsError } = await supabase
         .from('cooler_models')
-        .select('*')
+        .select('id, name, code, is_active, manufacturing_plant')
+        .eq('is_active', true)
         .order('name', { ascending: true });
 
-      if (modelsError) throw modelsError;
-      setModels(modelsData || []);
+      if (modelsError) {
+        console.warn('Could not fetch cooler_models with manufacturing_plant:', modelsError);
+      } else if (modelsData) {
+        setModels(modelsData);
+      }
 
-      const { data: stockData, error: stockError } = await supabase
-        .from('current_stock')
-        .select('*');
+      // Fetch accurate plant-scoped stock from /api/stock
+      const res = await fetch(`/api/stock?plant=${encodeURIComponent(targetPlant)}&refresh=true`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.currentStock) {
+          const sm = {};
+          json.currentStock.forEach((s) => {
+            sm[s.model_id] = s.current_stock;
+          });
+          setStockMap(sm);
+          return;
+        }
+      }
 
-      if (!stockError && stockData) {
+      // Fallback: direct Supabase query on plant_stock_summary view
+      const { data: pssData } = await supabase
+        .from('plant_stock_summary')
+        .select('*')
+        .eq('plant', targetPlant);
+
+      if (pssData) {
         const sm = {};
-        stockData.forEach((s) => {
+        pssData.forEach((s) => {
           sm[s.model_id] = s.current_stock;
         });
         setStockMap(sm);
       }
     } catch (err) {
-      console.error('Error fetching models:', err);
+      console.error('Error fetching models and stock:', err);
     } finally {
       setLoadingModels(false);
     }
-  }, [supabase]);
+  }, [adjustmentPlant, supabase]);
 
   // 3. Fetch Recent Stock Adjustments
   const fetchRecentAdjustments = useCallback(async () => {
@@ -166,9 +187,12 @@ export default function AdminPage() {
 
   useEffect(() => {
     fetchEmployees();
-    fetchModelsAndStock();
     fetchRecentAdjustments();
-  }, [fetchEmployees, fetchModelsAndStock, fetchRecentAdjustments]);
+  }, [fetchEmployees, fetchRecentAdjustments]);
+
+  useEffect(() => {
+    fetchModelsAndStock(adjustmentPlant);
+  }, [adjustmentPlant, fetchModelsAndStock]);
 
   // Handle Add Employee Submit
   const handleAddEmployee = async (e) => {
@@ -371,56 +395,37 @@ export default function AdminPage() {
       showToast('Audit reason is required for stock adjustments.', 'warning');
       return;
     }
-    if (!employee?.id) {
-      showToast('Admin employee profile required to adjust stock.', 'error');
-      return;
-    }
 
     try {
       setSubmittingAdjustment(true);
 
-      const netDelta = adjustmentType === 'add' ? qty : -qty;
-      const model = models.find((m) => m.id === selectedModelId);
-      const currentHolding = stockMap[selectedModelId] ?? 0;
-
-      // Prevent negative stock balance on deduction
-      if (adjustmentType === 'deduct' && currentHolding + netDelta < 0) {
-        showToast(
-          `Cannot deduct ${qty} units. Current stock is only ${currentHolding} units.`,
-          'error'
-        );
-        setShowConfirmAdjustmentModal(false);
-        return;
-      }
-
-      // Insert audited transaction (dual-mode: native plant column with fallback to notes)
-      const auditNotes = `[Plant: ${adjustmentPlant}] Emergency Adjustment (${adjustmentType.toUpperCase()}): ${adjustmentReason.trim()}`;
-      let { error: insertError } = await supabase.from('stock_transactions').insert({
-        model_id: selectedModelId,
-        transaction_type: 'adjustment',
-        quantity: netDelta,
-        employee_id: employee.id,
-        plant: adjustmentPlant,
-        notes: auditNotes,
+      const res = await fetch('/api/stock/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model_id: selectedModelId,
+          plant: adjustmentPlant,
+          adjustment_type: adjustmentType,
+          quantity: qty,
+          reason: adjustmentReason.trim(),
+        }),
       });
 
-      if (insertError && (insertError.code === 'PGRST204' || insertError.message?.includes('plant'))) {
-        const fallback = await supabase.from('stock_transactions').insert({
-          model_id: selectedModelId,
-          transaction_type: 'adjustment',
-          quantity: netDelta,
-          employee_id: employee.id,
-          notes: auditNotes,
-        });
-        insertError = fallback.error;
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to record stock adjustment');
       }
 
-      if (insertError) throw insertError;
+      // Clear client session caches so /stock and /dashboard reflect updated inventory immediately
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('jospo_cached_stock_list');
+          sessionStorage.removeItem('jospo_cached_stock_stats');
+          sessionStorage.removeItem('jospo_dashboard_cache');
+        } catch (e) {}
+      }
 
-      showToast(
-        `Stock successfully ${adjustmentType === 'add' ? 'added' : 'deducted'} for ${model?.code || 'model'} at ${adjustmentPlant}.`,
-        'success'
-      );
+      showToast(data.message || 'Stock adjustment recorded successfully', 'success');
 
       // Reset form
       setShowConfirmAdjustmentModal(false);
@@ -429,7 +434,7 @@ export default function AdminPage() {
       setAdjustmentReason('');
 
       // Refresh data
-      await fetchModelsAndStock();
+      await fetchModelsAndStock(adjustmentPlant);
       await fetchRecentAdjustments();
     } catch (err) {
       console.error('Error performing stock adjustment:', err);
@@ -827,29 +832,6 @@ export default function AdminPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Select Model */}
-                <div className="sm:col-span-2">
-                  <label htmlFor="adjustModel" className="label text-xs">
-                    Cooler Model <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    id="adjustModel"
-                    value={selectedModelId}
-                    onChange={(e) => setSelectedModelId(e.target.value)}
-                    className="input-field text-sm py-2"
-                  >
-                    <option value="">-- Choose Cooler Model to Adjust --</option>
-                    {models.map((m) => {
-                      const stock = stockMap[m.id] ?? 0;
-                      return (
-                        <option key={m.id} value={m.id}>
-                          {m.code} - {m.name} (Current Stock: {stock} units)
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-
                 {/* Target Plant for Adjustment */}
                 <div className="sm:col-span-2">
                   <label htmlFor="adjustPlant" className="label text-xs">
@@ -870,6 +852,29 @@ export default function AdminPage() {
                   <p className="text-[11px] text-gray-500 mt-1">
                     Select which manufacturing plant&apos;s physical inventory balance is being adjusted.
                   </p>
+                </div>
+
+                {/* Select Model */}
+                <div className="sm:col-span-2">
+                  <label htmlFor="adjustModel" className="label text-xs">
+                    Cooler Model <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="adjustModel"
+                    value={selectedModelId}
+                    onChange={(e) => setSelectedModelId(e.target.value)}
+                    className="input-field text-sm py-2"
+                  >
+                    <option value="">-- Choose Cooler Model to Adjust --</option>
+                    {models.map((m) => {
+                      const stock = stockMap[m.id] ?? 0;
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {m.code} - {m.name} (Current Stock at {adjustmentPlant}: {stock} units)
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
 
                 {/* Adjustment Type: Add or Deduct */}
@@ -941,12 +946,12 @@ export default function AdminPage() {
               {selectedModelId && (
                 <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 text-xs flex items-center justify-between">
                   <div>
-                    <span className="text-gray-500">Current Stock: </span>
+                    <span className="text-gray-500">Current Stock at {adjustmentPlant}: </span>
                     <strong className="text-gray-900">{stockMap[selectedModelId] ?? 0} units</strong>
                   </div>
                   <span className="text-gray-400">→</span>
                   <div>
-                    <span className="text-gray-500">Projected Stock After Adjustment: </span>
+                    <span className="text-gray-500">Projected Stock at {adjustmentPlant}: </span>
                     <strong className="text-primary-700 font-bold">
                       {(stockMap[selectedModelId] ?? 0) +
                         (adjustmentType === 'add'
@@ -1007,6 +1012,7 @@ export default function AdminPage() {
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Timestamp</th>
+                        <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Plant</th>
                         <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Model</th>
                         <th className="px-4 py-2.5 text-right font-semibold text-gray-600">Adjustment</th>
                         <th className="px-4 py-2.5 text-left font-semibold text-gray-600">Officer</th>
@@ -1018,6 +1024,11 @@ export default function AdminPage() {
                         <tr key={tx.id} className="hover:bg-gray-50">
                           <td className="px-4 py-2.5 whitespace-nowrap text-gray-500 text-xs">
                             {new Date(tx.created_at).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              🏭 {tx.plant || 'E41 G2'}
+                            </span>
                           </td>
                           <td className="px-4 py-2.5">
                             <span className="font-mono font-bold text-primary-700">
@@ -1192,6 +1203,10 @@ export default function AdminPage() {
 
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 mb-4 text-xs space-y-2">
                 <div className="flex justify-between">
+                  <span className="text-gray-500">Target Plant:</span>
+                  <span className="font-bold text-gray-900">🏭 {adjustmentPlant}</span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-gray-500">Model:</span>
                   <span className="font-bold text-gray-900">
                     {models.find((m) => m.id === selectedModelId)?.name}
@@ -1205,6 +1220,19 @@ export default function AdminPage() {
                     }`}
                   >
                     {adjustmentType === 'add' ? 'ADD (+)' : 'DEDUCT (-)'} {adjustmentQuantity} units
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Stock Balance ({adjustmentPlant}):</span>
+                  <span className="font-mono font-bold text-gray-900">
+                    {stockMap[selectedModelId] ?? 0} units →{' '}
+                    <span className="text-primary-700">
+                      {(stockMap[selectedModelId] ?? 0) +
+                        (adjustmentType === 'add'
+                          ? Number(adjustmentQuantity) || 0
+                          : -(Number(adjustmentQuantity) || 0))}{' '}
+                      units
+                    </span>
                   </span>
                 </div>
                 <div className="flex justify-between">

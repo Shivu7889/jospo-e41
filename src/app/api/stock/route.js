@@ -72,7 +72,7 @@ export async function GET(request) {
     // 2. Prepare independent queries (lean select to minimize bandwidth)
     let txQuery = supabase
       .from('stock_transactions')
-      .select('model_id, quantity, plant');
+      .select('model_id, quantity, plant, notes');
 
     let prodQuery = supabase
       .from('production_entries')

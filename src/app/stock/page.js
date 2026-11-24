@@ -27,6 +27,15 @@ export default function StockPage() {
   const { employee, user } = useAuth();
   const supabase = getSupabase();
   const { activePlant, isOwner, userPlant } = usePlant();
+  const isAdmin = employee?.role === 'admin' || isOwner;
+
+  // Inline Stock Adjustment Modal (Admin/Owner only)
+  const [adjustTargetItem, setAdjustTargetItem] = useState(null);
+  const [adjustPlant, setAdjustPlant] = useState(DEFAULT_PLANT_ID);
+  const [adjustType, setAdjustType] = useState('add');
+  const [adjustQuantity, setAdjustQuantity] = useState(1);
+  const [adjustReason, setAdjustReason] = useState('');
+  const [submittingAdjust, setSubmittingAdjust] = useState(false);
 
   // Sorting & Filtering States for Current Stock (Sort by availability by default)
   const [sortBy, setSortBy] = useState('stock_desc'); // 'stock_desc' (Highest stock first) | 'stock_asc' | 'out_of_stock' | 'code_asc' | 'code_desc'
@@ -414,10 +423,75 @@ export default function StockPage() {
     showToast(`Exported ${rows.length} ledger transactions to Excel`, 'success');
   };
 
+  // Handle open inline stock adjustment modal
+  const handleOpenAdjustModal = (row) => {
+    setAdjustTargetItem(row);
+    const initialPlant = activePlant === ALL_PLANTS_ID ? (row.manufacturing_plant || DEFAULT_PLANT_ID) : activePlant;
+    setAdjustPlant(initialPlant);
+    setAdjustType('add');
+    setAdjustQuantity(1);
+    setAdjustReason('');
+  };
+
+  // Perform audited stock adjustment
+  const handlePerformStockAdjustment = async (e) => {
+    e.preventDefault();
+    if (!adjustTargetItem) return;
+    const qty = parseInt(adjustQuantity, 10);
+    if (isNaN(qty) || qty <= 0) {
+      showToast('Please enter a valid positive quantity.', 'warning');
+      return;
+    }
+    if (!adjustReason.trim()) {
+      showToast('Audit reason is required for stock adjustments.', 'warning');
+      return;
+    }
+
+    try {
+      setSubmittingAdjust(true);
+      const res = await fetch('/api/stock/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model_id: adjustTargetItem.model_id,
+          plant: adjustPlant,
+          adjustment_type: adjustType,
+          quantity: qty,
+          reason: adjustReason.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to record stock adjustment');
+      }
+
+      // Purge local storage caches so user gets fresh view instantly
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('jospo_cached_stock_list');
+        sessionStorage.removeItem('jospo_cached_stock_stats');
+        sessionStorage.removeItem('jospo_dashboard_cache');
+      }
+
+      showToast(data.message || 'Stock adjustment recorded successfully', 'success');
+      setAdjustTargetItem(null);
+      await Promise.all([
+        fetchStockOverview(true),
+        fetchStockLedger(),
+      ]);
+    } catch (err) {
+      console.error('Error recording stock adjustment:', err);
+      showToast(err.message || 'Failed to record stock adjustment', 'error');
+    } finally {
+      setSubmittingAdjust(false);
+    }
+  };
+
   // Current Stock Table Columns (Dynamic: Consolidated Matrix or Single Plant)
   const currentStockColumns = useMemo(() => {
+    let cols = [];
     if (activePlant === ALL_PLANTS_ID) {
-      return [
+      cols = [
         {
           key: 'model_code',
           label: 'Model Code',
@@ -541,76 +615,96 @@ export default function StockPage() {
           },
         },
       ];
+    } else {
+      cols = [
+        {
+          key: 'model_code',
+          label: 'Model Code',
+          render: (val) => (
+            <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
+              {val}
+            </span>
+          ),
+        },
+        {
+          key: 'model_name',
+          label: 'Model Name',
+          render: (val) => <span className="font-semibold text-gray-900 text-sm block">{val}</span>,
+        },
+        {
+          key: 'current_stock',
+          label: `Current Stock (${activePlant})`,
+          align: 'right',
+          render: (val) => {
+            const qty = Number(val ?? 0);
+            let colorClass = 'text-emerald-700 font-extrabold';
+            if (qty < 0) colorClass = 'text-purple-700 font-extrabold';
+            else if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
+            else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
+            return (
+              <span className={`font-mono text-base ${colorClass}`}>
+                {qty.toLocaleString()} <span className="text-xs font-normal text-gray-500">units</span>
+              </span>
+            );
+          },
+        },
+        {
+          key: 'status',
+          label: 'Stock Status',
+          align: 'center',
+          render: (_, row) => {
+            const qty = Number(row.current_stock ?? 0);
+            if (qty < 0) {
+              return (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300" title="Dispatched before daily production log">
+                  ⚡ Negative ({qty})
+                </span>
+              );
+            }
+            if (qty === 0) {
+              return (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                  ● Out of Stock (0)
+                </span>
+              );
+            }
+            if (qty < 10) {
+              return (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                  ▲ Low Stock (&lt;10)
+                </span>
+              );
+            }
+            return (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                ✓ Good Stock ({qty})
+              </span>
+            );
+          },
+        },
+      ];
     }
 
-    return [
-      {
-        key: 'model_code',
-        label: 'Model Code',
-        render: (val) => (
-          <span className="font-mono font-bold text-xs text-primary-700 bg-primary-50 px-2.5 py-1 rounded-md border border-primary-200">
-            {val}
-          </span>
-        ),
-      },
-      {
-        key: 'model_name',
-        label: 'Model Name',
-        render: (val) => <span className="font-semibold text-gray-900 text-sm block">{val}</span>,
-      },
-      {
-        key: 'current_stock',
-        label: `Current Stock (${activePlant})`,
-        align: 'right',
-        render: (val) => {
-          const qty = Number(val ?? 0);
-          let colorClass = 'text-emerald-700 font-extrabold';
-          if (qty < 0) colorClass = 'text-purple-700 font-extrabold';
-          else if (qty === 0) colorClass = 'text-rose-600 font-extrabold';
-          else if (qty < 10) colorClass = 'text-amber-600 font-extrabold';
-          return (
-            <span className={`font-mono text-base ${colorClass}`}>
-              {qty.toLocaleString()} <span className="text-xs font-normal text-gray-500">units</span>
-            </span>
-          );
-        },
-      },
-      {
-        key: 'status',
-        label: 'Stock Status',
+    if (isAdmin) {
+      cols.push({
+        key: 'actions',
+        label: 'Action',
         align: 'center',
-        render: (_, row) => {
-          const qty = Number(row.current_stock ?? 0);
-          if (qty < 0) {
-            return (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300" title="Dispatched before daily production log">
-                ⚡ Negative ({qty})
-              </span>
-            );
-          }
-          if (qty === 0) {
-            return (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                ● Out of Stock (0)
-              </span>
-            );
-          }
-          if (qty < 10) {
-            return (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                ▲ Low Stock (&lt;10)
-              </span>
-            );
-          }
-          return (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-              ✓ Good Stock ({qty})
-            </span>
-          );
-        },
-      },
-    ];
-  }, [activePlant]);
+        render: (_, row) => (
+          <button
+            type="button"
+            onClick={() => handleOpenAdjustModal(row)}
+            className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold bg-gray-100 hover:bg-primary-50 text-gray-700 hover:text-primary-700 border border-gray-200 transition-colors shadow-sm"
+            title="Adjust physical stock balance (Audited)"
+          >
+            ⚖️ Adjust
+          </button>
+        ),
+      });
+    }
+
+    return cols;
+  }, [activePlant, isAdmin]);
 
   // Stock Ledger Table Columns
   const ledgerColumns = [
@@ -1259,6 +1353,191 @@ export default function StockPage() {
           userName={employee?.name || user?.email?.split('@')[0] || 'Staff'}
           onClose={() => setShowPrintModal(false)}
         />
+      )}
+
+      {/* Inline Audited Stock Adjustment Modal (Admin/Owner) */}
+      {adjustTargetItem && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-gray-900 flex items-center space-x-2">
+                  <span>⚖️</span>
+                  <span>Adjust Stock Balance</span>
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Audited inventory adjustment for physical discrepancies.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdjustTargetItem(null)}
+                className="text-gray-400 hover:text-gray-600 text-lg font-bold p-1 rounded-md"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Target Model Info Card */}
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-mono font-bold text-xs text-primary-700 bg-primary-100 px-2 py-0.5 rounded">
+                    {adjustTargetItem.model_code}
+                  </span>
+                  <div className="font-semibold text-gray-900 text-sm mt-1">
+                    {adjustTargetItem.model_name}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-gray-500">All Plants Total</div>
+                  <div className="text-sm font-extrabold text-gray-800 font-mono">
+                    {(adjustTargetItem.plant_breakdown?.total ?? adjustTargetItem.current_stock ?? 0).toLocaleString()} <span className="text-xs font-normal text-gray-400">units</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handlePerformStockAdjustment} className="space-y-3.5">
+              {/* Plant Selection */}
+              <div>
+                <label className="label text-xs font-semibold text-gray-700">
+                  Target Plant <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={adjustPlant}
+                  onChange={(e) => setAdjustPlant(e.target.value)}
+                  className="input-field text-sm py-2"
+                >
+                  {PLANTS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      🏭 {p.id} — {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Adjustment Type Toggle */}
+              <div>
+                <label className="label text-xs font-semibold text-gray-700">
+                  Adjustment Type <span className="text-red-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdjustType('add')}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center space-x-1.5 ${
+                      adjustType === 'add'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-400 ring-2 ring-emerald-200'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span>➕ Add Stock (+)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjustType('deduct')}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center space-x-1.5 ${
+                      adjustType === 'deduct'
+                        ? 'bg-rose-50 text-rose-700 border-rose-400 ring-2 ring-rose-200'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span>➖ Deduct Stock (-)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Quantity */}
+              <div>
+                <label className="label text-xs font-semibold text-gray-700">
+                  Quantity <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10000"
+                  value={adjustQuantity}
+                  onChange={(e) => setAdjustQuantity(e.target.value)}
+                  className="input-field font-mono font-bold text-sm py-2"
+                  placeholder="Enter quantity"
+                  required
+                />
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="label text-xs font-semibold text-gray-700">
+                  Audit Reason <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={adjustReason}
+                  onChange={(e) => setAdjustReason(e.target.value)}
+                  placeholder="e.g. Physical inventory recount discrepancy"
+                  className="input-field text-sm py-2"
+                  required
+                />
+              </div>
+
+              {/* Stock Preview */}
+              {(() => {
+                const cur = adjustTargetItem.plant_breakdown?.[adjustPlant] !== undefined
+                  ? (adjustTargetItem.plant_breakdown[adjustPlant] || 0)
+                  : (adjustPlant === activePlant ? (adjustTargetItem.current_stock || 0) : 0);
+                const q = parseInt(adjustQuantity, 10) || 0;
+                const proj = adjustType === 'add' ? cur + q : cur - q;
+                return (
+                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Current Stock at {adjustPlant}:</span>
+                      <span className="font-bold font-mono text-gray-900">{cur.toLocaleString()} units</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Projected Balance:</span>
+                      <span className={`font-extrabold font-mono ${proj < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                        {proj.toLocaleString()} units
+                      </span>
+                    </div>
+                    {adjustType === 'deduct' && q > cur && (
+                      <p className="text-rose-600 font-medium text-[11px] pt-1">
+                        ⚠️ Warning: Deducting more than current stock ({cur} units) will result in negative stock.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end space-x-3 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setAdjustTargetItem(null)}
+                  disabled={submittingAdjust}
+                  className="btn-secondary text-xs py-2 px-3.5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingAdjust || !adjustReason.trim() || Number(adjustQuantity) <= 0}
+                  className={`text-xs py-2 px-4 rounded-lg font-bold text-white shadow-sm flex items-center space-x-1.5 transition-all ${
+                    adjustType === 'add'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300'
+                      : 'bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300'
+                  }`}
+                >
+                  {submittingAdjust ? (
+                    <span>Adjusting...</span>
+                  ) : (
+                    <span>{adjustType === 'add' ? '➕ Confirm Addition' : '➖ Confirm Deduction'}</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </AppShell>
   );
