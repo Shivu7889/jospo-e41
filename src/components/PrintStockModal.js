@@ -14,6 +14,7 @@ export default function PrintStockModal({
 }) {
   const [searchQuery, setSearchQuery] = useState(initialSearch || '');
   const [printSort, setPrintSort] = useState('stock_desc'); // 'stock_desc' | 'stock_asc' | 'code_asc'
+  const [pdfNotice, setPdfNotice] = useState(false);
 
   // Strictly filter for models that have available stock (> 0)
   const printableList = useMemo(() => {
@@ -67,6 +68,29 @@ export default function PrintStockModal({
   const handlePrint = () => {
     if (typeof window !== 'undefined') {
       window.print();
+    }
+  };
+
+  const handleSaveAsPdf = () => {
+    if (typeof window !== 'undefined') {
+      setPdfNotice(true);
+      const origTitle = document.title;
+      const cleanPlant = activePlant === ALL_PLANTS_ID ? 'All_Plants' : activePlant.replace(/\s+/g, '_');
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).replace(/\s+/g, '_');
+
+      // Set clean document title so browser's "Save as PDF" uses this filename
+      document.title = `Jospo_Stock_Report_${cleanPlant}_${dateStr}`;
+
+      window.print();
+
+      setTimeout(() => {
+        document.title = origTitle;
+      }, 1500);
     }
   };
 
@@ -128,9 +152,20 @@ export default function PrintStockModal({
               type="button"
               onClick={handlePrint}
               disabled={!printableList.length}
-              className="btn-primary text-xs py-1.5 px-4 inline-flex items-center space-x-1.5 font-bold shadow-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+              className="btn-primary text-xs py-1.5 px-3.5 inline-flex items-center space-x-1.5 font-bold shadow-xs bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+              title="Print document on physical printer"
             >
               <span>🖨️ Print Now</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveAsPdf}
+              disabled={!printableList.length}
+              className="text-xs py-1.5 px-3.5 inline-flex items-center space-x-1.5 font-bold shadow-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition-colors border border-rose-700 disabled:opacity-50 active:scale-95"
+              title="Save document as PDF file"
+            >
+              <span>📄 Save as PDF</span>
             </button>
 
             <button
@@ -143,6 +178,28 @@ export default function PrintStockModal({
             </button>
           </div>
         </div>
+
+        {/* PDF Guidance Banner */}
+        {pdfNotice && (
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-4 flex items-center justify-between text-xs text-rose-950 shadow-xs print:hidden animate-in fade-in duration-150">
+            <div className="flex items-center space-x-2.5">
+              <span className="text-xl">📄</span>
+              <div>
+                <p className="font-bold text-rose-950">How to Save as PDF:</p>
+                <p className="text-[11px] text-rose-800 mt-0.5">
+                  In your browser&apos;s print window, select <strong>Destination &rarr; &quot;Save as PDF&quot;</strong>, then click <strong>Save</strong>.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPdfNotice(false)}
+              className="text-rose-600 hover:text-rose-900 font-bold text-xs p-1 rounded-md"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Printable Document Sheet */}
         <div className="border border-gray-900 p-5 sm:p-7 rounded-lg text-gray-900 text-xs font-sans print:border-2 print:border-black print:p-4 print:rounded-none bg-white">
@@ -340,9 +397,9 @@ export default function PrintStockModal({
         </div>
 
         {/* Modal Bottom Actions (Screen Only) */}
-        <div className="mt-4 flex items-center justify-between print:hidden">
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-gray-100 print:hidden">
           <span className="text-xs text-gray-500">
-            Tip: Press <strong>Ctrl+P</strong> or <strong>Cmd+P</strong> or click <strong>Print Now</strong>. Formatted cleanly for A4 paper.
+            💡 Tip: To download, click <strong>Save as PDF</strong> and select Destination &rarr; <em>&quot;Save as PDF&quot;</em> in your print dialog.
           </span>
           <div className="flex items-center space-x-2">
             <button
@@ -356,9 +413,17 @@ export default function PrintStockModal({
               type="button"
               onClick={handlePrint}
               disabled={!printableList.length}
-              className="btn-primary text-xs py-2 px-5 inline-flex items-center space-x-1.5 font-bold shadow-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+              className="btn-primary text-xs py-2 px-4 inline-flex items-center space-x-1.5 font-bold shadow-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
             >
               <span>🖨️ Print Now</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveAsPdf}
+              disabled={!printableList.length}
+              className="text-xs py-2 px-4 inline-flex items-center space-x-1.5 font-bold shadow-md bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition-colors border border-rose-700 disabled:opacity-50 active:scale-95"
+            >
+              <span>📄 Save as PDF</span>
             </button>
           </div>
         </div>

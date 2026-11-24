@@ -14,7 +14,6 @@ import { usePlant } from '@/contexts/PlantContext';
 import dynamic from 'next/dynamic';
 
 const PrintStockModal = dynamic(() => import('@/components/PrintStockModal'), { ssr: false });
-const WhatsAppShareModal = dynamic(() => import('@/components/WhatsAppShareModal'), { ssr: false });
 import {
   PLANTS,
   ALL_PLANTS_ID,
@@ -42,8 +41,6 @@ export default function StockPage() {
   const [sortBy, setSortBy] = useState('stock_desc'); // 'stock_desc' (Highest stock first) | 'stock_asc' | 'out_of_stock' | 'code_asc' | 'code_desc'
   const [stockAvailabilityFilter, setStockAvailabilityFilter] = useState('all'); // 'all' | 'in_stock' | 'low_stock' | 'out_of_stock'
   const [showPrintModal, setShowPrintModal] = useState(false);
-  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
-  const [whatsAppSingleModel, setWhatsAppSingleModel] = useState(null);
 
   // Summary and Stock State (SWR Instant Rendering)
   const [stats, setStats] = useState(() => {
@@ -426,17 +423,6 @@ export default function StockPage() {
     showToast(`Exported ${rows.length} ledger transactions to Excel`, 'success');
   };
 
-  // Handle WhatsApp Share Modal
-  const handleOpenWhatsAppAll = () => {
-    setWhatsAppSingleModel(null);
-    setShowWhatsAppModal(true);
-  };
-
-  const handleOpenWhatsAppSingle = (row) => {
-    setWhatsAppSingleModel(row);
-    setShowWhatsAppModal(true);
-  };
-
   // Handle open inline stock adjustment modal
   const handleOpenAdjustModal = (row) => {
     setAdjustTargetItem(row);
@@ -699,34 +685,23 @@ export default function StockPage() {
       ];
     }
 
-    cols.push({
-      key: 'actions',
-      label: 'Actions',
-      align: 'center',
-      render: (_, row) => (
-        <div className="flex items-center justify-center space-x-1.5">
+    if (isAdmin) {
+      cols.push({
+        key: 'actions',
+        label: 'Action',
+        align: 'center',
+        render: (_, row) => (
           <button
             type="button"
-            onClick={() => handleOpenWhatsAppSingle(row)}
-            className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 transition-colors shadow-2xs"
-            title="Share this cooler model's stock to Owner on WhatsApp"
+            onClick={() => handleOpenAdjustModal(row)}
+            className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold bg-gray-100 hover:bg-primary-50 text-gray-700 hover:text-primary-700 border border-gray-200 transition-colors shadow-2xs"
+            title="Adjust physical stock balance (Audited)"
           >
-            <span>💬</span>
-            <span className="hidden xl:inline ml-1">WhatsApp</span>
+            ⚖️ Adjust
           </button>
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => handleOpenAdjustModal(row)}
-              className="inline-flex items-center px-2 py-1 rounded text-xs font-semibold bg-gray-100 hover:bg-primary-50 text-gray-700 hover:text-primary-700 border border-gray-200 transition-colors shadow-2xs"
-              title="Adjust physical stock balance (Audited)"
-            >
-              ⚖️ Adjust
-            </button>
-          )}
-        </div>
-      ),
-    });
+        ),
+      });
+    }
 
     return cols;
   }, [activePlant, isAdmin]);
@@ -1098,39 +1073,28 @@ export default function StockPage() {
                 </button>
               </div>
 
-              {/* Action Buttons: WhatsApp Share, Print Stock & Export Excel */}
-              <div className="flex flex-wrap items-center gap-2 self-start lg:self-center">
-                <button
-                  type="button"
-                  onClick={handleOpenWhatsAppAll}
-                  disabled={loadingOverview || !filteredStockList.length}
-                  className="text-xs py-2 px-3.5 inline-flex items-center space-x-1.5 shadow-xs font-bold whitespace-nowrap bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors border border-emerald-700 active:scale-95"
-                  title="Share formatted stock report to Owner on WhatsApp"
-                >
-                  <span className="text-sm">💬</span>
-                  <span>Share to Owner</span>
-                </button>
-
+              {/* Action Buttons: Print / Save PDF & Export Excel */}
+              <div className="flex items-center space-x-2 self-start lg:self-center">
                 <button
                   type="button"
                   onClick={() => setShowPrintModal(true)}
                   disabled={loadingOverview || !filteredStockList.length}
-                  className="btn-primary text-xs py-2 px-3 inline-flex items-center space-x-1.5 shadow-xs font-bold whitespace-nowrap bg-indigo-600 hover:bg-indigo-700"
-                  title="Print official physical stock inventory report"
+                  className="btn-primary text-xs py-2 px-3.5 inline-flex items-center space-x-1.5 shadow-xs font-bold whitespace-nowrap bg-indigo-600 hover:bg-indigo-700"
+                  title="Print official physical stock inventory report or save as PDF"
                 >
                   <span>🖨️</span>
-                  <span>Print Sheet</span>
+                  <span>Print / Save PDF</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleExportStockSummary}
                   disabled={loadingOverview || !filteredStockList.length}
-                  className="btn-secondary text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold whitespace-nowrap"
+                  className="btn-success text-xs py-2 px-3 inline-flex items-center space-x-1 shadow-xs font-semibold whitespace-nowrap"
                   title="Download current stock balances as Excel spreadsheet"
                 >
                   <span>📥</span>
-                  <span>Excel</span>
+                  <span>Export Excel</span>
                 </button>
               </div>
             </div>
@@ -1388,24 +1352,6 @@ export default function StockPage() {
           plantTotals={plantTotals}
           userName={employee?.name || user?.email?.split('@')[0] || 'Staff'}
           onClose={() => setShowPrintModal(false)}
-        />
-      )}
-
-      {/* WhatsApp Share Stock Modal */}
-      {showWhatsAppModal && (
-        <WhatsAppShareModal
-          isOpen={showWhatsAppModal}
-          onClose={() => {
-            setShowWhatsAppModal(false);
-            setWhatsAppSingleModel(null);
-          }}
-          stockList={stockList}
-          filteredStockList={filteredStockList}
-          stats={stats}
-          plantTotals={plantTotals}
-          activePlant={activePlant}
-          userName={employee?.name || user?.email?.split('@')[0] || 'Staff'}
-          singleModel={whatsAppSingleModel}
         />
       )}
 
