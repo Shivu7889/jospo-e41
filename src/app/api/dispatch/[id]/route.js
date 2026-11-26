@@ -133,7 +133,7 @@ export async function GET(request, { params }) {
 // PUT: Update dispatch (header info, co-loading route, or line items with stock sync)
 export async function PUT(request, { params }) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch', 'owner'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
     const adminDb = createAdminSupabase() || supabase;
@@ -433,7 +433,7 @@ export async function PUT(request, { params }) {
 // DELETE: Delete dispatch (admin can delete any dispatch and restore stock; dispatch staff can only delete drafts)
 export async function DELETE(request, { params }) {
   try {
-    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch'] });
+    const auth = await authenticateRequest({ allowedRoles: ['admin', 'dispatch', 'owner'] });
     if (auth.error) return auth.error;
     const { supabase } = auth;
     const adminDb = createAdminSupabase() || supabase;

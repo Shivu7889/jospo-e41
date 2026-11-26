@@ -35,6 +35,7 @@ import {
   PLANTS,
   ALL_PLANTS_ID,
   normalizePlant,
+  getOtherPlants,
   resolveDestinationPlant,
   resolveTransferStatus,
   isInboundEnabledForPlant,
@@ -646,6 +647,24 @@ export default function DispatchListPage() {
     if (editDispatchType === 'local' && normalizePlant(dest) === normalizePlant(editFromLocation)) {
       showToast(`Invalid Destination: Transfer cannot be sent to the same plant (${normalizePlant(editFromLocation)}). Please select a different receiving plant.`, 'error');
       return;
+    }
+
+    if (!editItems || editItems.length === 0) {
+      showToast('Dispatch must contain at least one cooler model.', 'warning');
+      return;
+    }
+
+    for (let i = 0; i < editItems.length; i++) {
+      const it = editItems[i];
+      if (!it.model_id) {
+        showToast(`Item #${i + 1}: Please select a valid cooler model`, 'warning');
+        return;
+      }
+      const q = parseInt(it.quantity, 10);
+      if (isNaN(q) || q <= 0) {
+        showToast(`Item #${i + 1}: Quantity must be at least 1`, 'warning');
+        return;
+      }
     }
 
     try {
