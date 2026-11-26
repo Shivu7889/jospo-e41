@@ -5,6 +5,7 @@ import { getTodayIST } from '@/lib/date';
 import { normalizePlant, resolveModelManufacturingPlant, ALL_PLANTS_ID } from '@/lib/plants';
 
 import { clearStockCache } from '@/app/api/stock/route';
+import { invalidateCache } from '@/lib/serverCache';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,7 @@ const PRODUCTION_CACHE_TTL = 10 * 1000;
 
 export function clearProductionCache() {
   productionCache.clear();
+  invalidateCache('dashboard_', 'reports_');
 }
 
 /**

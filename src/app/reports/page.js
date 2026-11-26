@@ -300,7 +300,7 @@ export default function ReportsPage() {
 
       showToast(`Updated Thekedar to "${editContractorName.trim()}"!`, 'success');
       setEditingRow(null);
-      await fetchReport();
+      await fetchReport(true);
     } catch (err) {
       console.error('Error updating entry Thekedar:', err);
       showToast(err.message || 'Error updating contractor', 'error');
@@ -309,23 +309,41 @@ export default function ReportsPage() {
     }
   };
 
-  // Fetch Report Data from /api/reports
-  const fetchReport = useCallback(async () => {
+  // Fetch Report Data from /api/reports (with SWR sessionStorage instant preview)
+  const fetchReport = useCallback(async (forceRefresh = false) => {
+    let url = `/api/reports?type=${activeTab}`;
+
+    if (activeTab === 'production') {
+      url += `&start_date=${productionStartDate}&end_date=${productionEndDate}&thekedar=${encodeURIComponent(selectedThekedar)}&model_id=${encodeURIComponent(selectedModel)}`;
+    } else if (activeTab === 'dispatch') {
+      url += `&start_date=${dispatchStartDate}&end_date=${dispatchEndDate}`;
+    } else if (activeTab === 'monthly_summary') {
+      url += `&month=${selectedMonth}&year=${selectedYear}`;
+    }
+
+    url += `&plant=${encodeURIComponent(activePlant)}`;
+    const swrKey = `jospo_report_swr_${url}`;
+
+    let hasSwr = false;
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const cachedRaw = sessionStorage.getItem(swrKey);
+        if (cachedRaw) {
+          const cachedJson = JSON.parse(cachedRaw);
+          setReportData(cachedJson);
+          if (activeTab === 'production') {
+            if (Array.isArray(cachedJson.thekedar_list)) setThekedarContractorsList(cachedJson.thekedar_list);
+            if (Array.isArray(cachedJson.models_list)) setModelsList(cachedJson.models_list);
+          }
+          hasSwr = true;
+        }
+      } catch (e) {}
+    }
+
     try {
-      setLoading(true);
-      let url = `/api/reports?type=${activeTab}`;
-
-      if (activeTab === 'production') {
-        url += `&start_date=${productionStartDate}&end_date=${productionEndDate}&thekedar=${encodeURIComponent(selectedThekedar)}&model_id=${encodeURIComponent(selectedModel)}`;
-      } else if (activeTab === 'dispatch') {
-        url += `&start_date=${dispatchStartDate}&end_date=${dispatchEndDate}`;
-      } else if (activeTab === 'monthly_summary') {
-        url += `&month=${selectedMonth}&year=${selectedYear}`;
-      }
-
-      url += `&plant=${encodeURIComponent(activePlant)}`;
-
-      const res = await fetch(url);
+      if (!hasSwr) setLoading(true);
+      const fetchUrl = forceRefresh ? `${url}&refresh=true` : url;
+      const res = await fetch(fetchUrl);
       const json = await res.json();
 
       if (!res.ok) {
@@ -343,6 +361,12 @@ export default function ReportsPage() {
         if (json.models_list && Array.isArray(json.models_list)) {
           setModelsList(json.models_list);
         }
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem(swrKey, JSON.stringify(json));
+        } catch (e) {}
       }
     } catch (err) {
       console.error('Error fetching report:', err);
@@ -365,7 +389,7 @@ export default function ReportsPage() {
   ]);
 
   useEffect(() => {
-    fetchReport();
+    fetchReport(false);
   }, [fetchReport]);
 
   const selectedModelObj = useMemo(() => {
@@ -400,7 +424,7 @@ export default function ReportsPage() {
           <div className="flex items-center space-x-2">
             <button
               type="button"
-              onClick={fetchReport}
+              onClick={() => fetchReport(true)}
               disabled={loading}
               className="btn-secondary text-sm inline-flex items-center space-x-1.5"
             >

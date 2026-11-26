@@ -33,9 +33,20 @@ export default function PlanningPage() {
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'pending' | 'loading' | 'completed'
 
-  // Data States
+  // Data States (with instant SWR cache)
   const [plans, setPlans] = useState([]);
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_catalog_models');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(true);
   const [tableNotCreated, setTableNotCreated] = useState(false);
 
@@ -73,14 +84,19 @@ export default function PlanningPage() {
     }
   }, [activePlant]);
 
-  // Fetch Cooler Models Catalog for Dropdowns
+  // Fetch Cooler Models Catalog for Dropdowns (view=catalog skips stock queries for 10x speed)
   useEffect(() => {
     async function loadModels() {
       try {
-        const res = await fetch('/api/models?active_only=true');
+        const res = await fetch('/api/models?active_only=true&view=catalog');
         const data = await res.json();
         if (data.success) {
           setModels(data.models || []);
+          if (typeof window !== 'undefined' && data.models) {
+            try {
+              sessionStorage.setItem('jospo_cached_catalog_models', JSON.stringify(data.models));
+            } catch (e) {}
+          }
         }
       } catch (err) {
         console.warn('Failed to load cooler models for planning dropdown:', err);
@@ -89,12 +105,29 @@ export default function PlanningPage() {
     loadModels();
   }, []);
 
-  // Fetch Plans from API
+  // Fetch Plans from API (with SWR sessionStorage preview)
   const fetchPlans = useCallback(async (silent = false) => {
+    const plantParam = activePlant === ALL_PLANTS_ID ? 'ALL' : encodeURIComponent(activePlant);
+    const swrKey = `jospo_cached_plans_${selectedDate}_${plantParam}_${statusFilter}`;
+    let hasSwr = false;
+
+    if (!silent && typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem(swrKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            setPlans(parsed);
+            setLoading(false);
+            hasSwr = true;
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
-      if (!silent) setLoading(true);
-      const plantParam = activePlant === ALL_PLANTS_ID ? 'ALL' : encodeURIComponent(activePlant);
-      const url = `/api/planning?date=${encodeURIComponent(selectedDate)}&plant=${plantParam}&status=${encodeURIComponent(statusFilter)}`;
+      if (!silent && !hasSwr) setLoading(true);
+      const url = `/api/planning?date=${encodeURIComponent(selectedDate)}&plant=${plantParam}&status=${encodeURIComponent(statusFilter)}${silent ? '&refresh=true' : ''}`;
 
       const res = await fetch(url);
       const data = await res.json();
@@ -108,7 +141,13 @@ export default function PlanningPage() {
         setPlans([]);
       } else {
         setTableNotCreated(false);
-        setPlans(data.plans || []);
+        const list = data.plans || [];
+        setPlans(list);
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(swrKey, JSON.stringify(list));
+          } catch (e) {}
+        }
       }
     } catch (err) {
       console.error('Fetch planning error:', err);

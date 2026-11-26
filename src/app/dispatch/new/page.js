@@ -189,12 +189,11 @@ function NewDispatchContent() {
       if (plantParam) setFromLocation(normalizePlant(decodeURIComponent(plantParam)));
       if (typeParam) setDispatchType(decodeURIComponent(typeParam));
 
-      fetch('/api/planning?date=ALL&status=all')
+      fetch(`/api/planning?id=${encodeURIComponent(planIdParam)}`)
         .then((r) => r.json())
         .then((data) => {
-          if (data.success && Array.isArray(data.plans)) {
-            const match = data.plans.find((p) => p.id === planIdParam);
-            if (match) setActivePlanData(match);
+          if (data.success && Array.isArray(data.plans) && data.plans.length > 0) {
+            setActivePlanData(data.plans[0]);
           }
         })
         .catch(() => {});

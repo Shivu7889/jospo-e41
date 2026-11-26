@@ -38,7 +38,18 @@ export function PlantProvider({ children }) {
     return DEFAULT_PLANT_ID;
   });
 
-  const [inboundTransfersCount, setInboundTransfersCount] = useState(0);
+  const [inboundTransfersCount, setInboundTransfersCount] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_inbound_count');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (typeof parsed?.count === 'number') return parsed.count;
+        }
+      } catch (e) {}
+    }
+    return 0;
+  });
   const [loadingTransfers, setLoadingTransfers] = useState(false);
 
   // Sync activePlant based on role / userPlant
@@ -81,7 +92,7 @@ export function PlantProvider({ children }) {
   );
 
   // Fetch pending inbound transfers count for activePlant
-  const fetchInboundTransfersCount = useCallback(async () => {
+  const fetchInboundTransfersCount = useCallback(async (forceRefresh = false) => {
     if (!employee) return;
     // If activePlant is specified and does not have inbound enabled (e.g. D4, C116), do not show inbound count
     if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
@@ -89,20 +100,39 @@ export function PlantProvider({ children }) {
       return;
     }
 
+    // 15s client-side TTL cache avoids re-querying Supabase on every route navigation
+    if (!forceRefresh && typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('jospo_inbound_count');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.plant === activePlant && parsed.expiresAt > Date.now()) {
+            setInboundTransfersCount(parsed.count || 0);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
       setLoadingTransfers(true);
-      // Fetch only unreceived confirmed dispatches (drastically reduces payload from thousands to just a few rows)
+      // Only fetch local transfers in_transit instead of scanning all confirmed party dispatches!
       let { data, error } = await supabase
         .from('dispatches')
-        .select('id, destination, destination_plant, transfer_status, status, remarks, from_location, received_at')
+        .select('id, destination, destination_plant, transfer_status, status, remarks, from_location, received_at, dispatch_type')
         .eq('status', 'confirmed')
-        .is('received_at', null);
+        .eq('dispatch_type', 'local')
+        .eq('transfer_status', 'in_transit')
+        .is('received_at', null)
+        .limit(50);
 
-      if (error && error.message?.includes('received_at')) {
+      if (error && (error.message?.includes('dispatch_type') || error.message?.includes('transfer_status') || error.message?.includes('received_at'))) {
         const retry = await supabase
           .from('dispatches')
           .select('id, destination, destination_plant, transfer_status, status, remarks, from_location')
-          .eq('status', 'confirmed');
+          .eq('status', 'confirmed')
+          .order('created_at', { ascending: false })
+          .limit(50);
         data = retry.data;
         error = retry.error;
       }
@@ -128,6 +158,14 @@ export function PlantProvider({ children }) {
       });
 
       setInboundTransfersCount(count);
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem(
+            'jospo_inbound_count',
+            JSON.stringify({ count, plant: activePlant, expiresAt: Date.now() + 15000 })
+          );
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Error fetching inbound transfers count:', err);
     } finally {

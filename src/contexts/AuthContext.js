@@ -63,8 +63,17 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const fetchEmployee = async (userId) => {
+  const fetchEmployee = async (userId, force = false) => {
     if (!userId || !supabase) return;
+    if (!force && typeof window !== 'undefined') {
+      try {
+        const lastSync = Number(sessionStorage.getItem('jospo_auth_last_sync') || 0);
+        const cachedEmp = localStorage.getItem(CACHE_EMP_KEY);
+        if (cachedEmp && Date.now() - lastSync < 60 * 1000) {
+          return;
+        }
+      } catch (e) {}
+    }
     if (fetchingEmpRef.current) return;
     fetchingEmpRef.current = true;
     try {
@@ -76,6 +85,11 @@ export function AuthProvider({ children }) {
 
       if (error) throw error;
       updateCachedEmployee(data);
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem('jospo_auth_last_sync', String(Date.now()));
+        } catch (e) {}
+      }
     } catch (error) {
       console.error('Error fetching employee:', error);
       // Only clear if employee explicitly not found (PGRST116)
@@ -100,7 +114,7 @@ export function AuthProvider({ children }) {
 
         if (session?.user) {
           updateCachedUser(session.user);
-          await fetchEmployee(session.user.id);
+          await fetchEmployee(session.user.id, false);
         } else {
           // No active session: clear cached credentials
           updateCachedUser(null);
@@ -126,7 +140,7 @@ export function AuthProvider({ children }) {
           setLoading(false);
         } else if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
           updateCachedUser(session.user);
-          await fetchEmployee(session.user.id);
+          await fetchEmployee(session.user.id, true);
           setLoading(false);
         }
       }
@@ -146,7 +160,7 @@ export function AuthProvider({ children }) {
     if (error) throw error;
     if (data?.user) {
       updateCachedUser(data.user);
-      await fetchEmployee(data.user.id);
+      await fetchEmployee(data.user.id, true);
     }
     return data;
   };
@@ -174,7 +188,7 @@ export function AuthProvider({ children }) {
         loading,
         signIn,
         signOut,
-        refreshEmployee: () => fetchEmployee(user?.id),
+        refreshEmployee: () => fetchEmployee(user?.id, true),
       }}
     >
       {children}

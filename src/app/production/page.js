@@ -152,14 +152,40 @@ export default function ProductionPage() {
     return true;
   });
 
-  // Today's Production Log State
-  const [logEntries, setLogEntries] = useState([]);
-  const [loadingLog, setLoadingLog] = useState(true);
+  // Today's Production Log State (with SWR instant cache)
+  const [logEntries, setLogEntries] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_prod_log');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.date === getTodayIST() && Array.isArray(parsed.entries)) {
+            return parsed.entries;
+          }
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [loadingLog, setLoadingLog] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_prod_log');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.date === getTodayIST() && Array.isArray(parsed.entries)) {
+            return false;
+          }
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
 
   // Fetch active cooler models for the dropdown (including manufacturing plant)
   const fetchModels = useCallback(async () => {
     try {
-      const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&for_plant=${encodeURIComponent(activePlant)}&view=production` : '';
+      const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&for_plant=${encodeURIComponent(activePlant)}&view=production` : '&view=production';
       const res = await fetch(`/api/models?active_only=true${plantParam}`);
       const data = await res.json();
       if (res.ok && data.success) {
@@ -220,9 +246,10 @@ export default function ProductionPage() {
 
   // Fetch production log for the selected/today date and plant
   const fetchTodayLog = useCallback(async (targetDate = productionDate) => {
+    const queryDate = targetDate || getTodayStr();
     try {
-      setLoadingLog(true);
-      const queryDate = targetDate || getTodayStr();
+      const hasCached = logEntries.length > 0 && queryDate === getTodayIST();
+      if (!hasCached) setLoadingLog(true);
       const plantParam = activePlant && activePlant !== ALL_PLANTS_ID ? `&plant=${encodeURIComponent(activePlant)}` : '';
       const res = await fetch(`/api/production?date=${encodeURIComponent(queryDate)}${plantParam}`);
       const data = await res.json();
@@ -231,7 +258,13 @@ export default function ProductionPage() {
         throw new Error(data.error || 'Failed to fetch production entries');
       }
 
-      setLogEntries(data.entries || []);
+      const entries = data.entries || [];
+      setLogEntries(entries);
+      if (typeof window !== 'undefined' && queryDate === getTodayIST()) {
+        try {
+          sessionStorage.setItem('jospo_cached_prod_log', JSON.stringify({ date: queryDate, entries }));
+        } catch (e) {}
+      }
 
       if (data.contractors && Array.isArray(data.contractors) && data.contractors.length > 0) {
         setThekedars((prev) => Array.from(new Set([...prev, ...data.contractors])).filter(Boolean));
@@ -242,13 +275,18 @@ export default function ProductionPage() {
     } finally {
       setLoadingLog(false);
     }
-  }, [productionDate, activePlant, showToast]);
+  }, [productionDate, activePlant, showToast, logEntries.length]);
 
+  // Fetch models and contractors ONLY when plant changes (never on date change!)
   useEffect(() => {
     fetchModels();
     fetchThekedars();
+  }, [fetchModels, fetchThekedars]);
+
+  // Fetch production log when date or plant changes
+  useEffect(() => {
     fetchTodayLog(productionDate);
-  }, [fetchModels, fetchThekedars, fetchTodayLog, productionDate, activePlant, targetThekedarPlant]);
+  }, [productionDate, activePlant]);
 
   // Admin-only helper: Add new Thekedar
   const handleAddNewThekedar = async (e) => {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import { getCached, setCached } from '@/lib/serverCache';
 import {
   resolvePlantFromRecord,
   resolveDestinationPlant,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/plants';
 
 export const dynamic = 'force-dynamic';
+const REPORTS_CACHE_TTL = 20 * 1000;
 
 function extractThekedar(row) {
   if (row.contractor_name && typeof row.contractor_name === 'string' && row.contractor_name.trim()) {
@@ -36,6 +38,15 @@ export async function GET(request) {
     const month = parseInt(searchParams.get('month') || String(new Date().getMonth() + 1), 10);
     const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()), 10);
     const plant = searchParams.get('plant') || '';
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    const cacheKey = `reports_${searchParams.toString().replace(/&?refresh=true/, '')}`;
+    if (!forceRefresh) {
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached, { headers: { 'X-Cache': 'HIT' } });
+      }
+    }
 
     // 1. Daily Production Report
     if (type === 'daily_production') {
@@ -214,7 +225,7 @@ export async function GET(request) {
         }
       });
 
-      return NextResponse.json({
+      const dispatchPayload = {
         report_type: 'dispatch',
         date,
         start_date: startDate,
@@ -222,7 +233,9 @@ export async function GET(request) {
         plant,
         total_confirmed_quantity: totalQuantity,
         data: rows,
-      });
+      };
+      setCached(cacheKey, dispatchPayload, REPORTS_CACHE_TTL);
+      return NextResponse.json(dispatchPayload);
     }
 
     // 3. Monthly Summary (Production vs Dispatch by Day)
@@ -232,34 +245,36 @@ export async function GET(request) {
       const daysInMonth = new Date(year, month, 0).getDate();
       const endDate = `${year}-${pad(month)}-${pad(daysInMonth)}`;
 
-      // Fetch production for the month
-      const { data: prodData, error: prodErr } = await supabase
-        .from('production_entries')
-        .select('production_date, quantity')
-        .gte('production_date', startDate)
-        .lte('production_date', endDate);
+      // Fetch production & confirmed dispatches in parallel
+      const [prodRes, dispRes] = await Promise.all([
+        supabase
+          .from('production_entries')
+          .select('production_date, quantity')
+          .gte('production_date', startDate)
+          .lte('production_date', endDate),
+        supabase
+          .from('dispatches')
+          .select(`
+            dispatch_date,
+            status,
+            dispatch_items (
+              quantity
+            )
+          `)
+          .eq('status', 'confirmed')
+          .gte('dispatch_date', startDate)
+          .lte('dispatch_date', endDate),
+      ]);
 
-      if (prodErr) {
-        return NextResponse.json({ error: prodErr.message }, { status: 400 });
+      if (prodRes.error) {
+        return NextResponse.json({ error: prodRes.error.message }, { status: 400 });
+      }
+      if (dispRes.error) {
+        return NextResponse.json({ error: dispRes.error.message }, { status: 400 });
       }
 
-      // Fetch confirmed dispatches for the month
-      const { data: dispData, error: dispErr } = await supabase
-        .from('dispatches')
-        .select(`
-          dispatch_date,
-          status,
-          dispatch_items (
-            quantity
-          )
-        `)
-        .eq('status', 'confirmed')
-        .gte('dispatch_date', startDate)
-        .lte('dispatch_date', endDate);
-
-      if (dispErr) {
-        return NextResponse.json({ error: dispErr.message }, { status: 400 });
-      }
+      const prodData = prodRes.data;
+      const dispData = dispRes.data;
 
       // Aggregate day by day
       const dailyMap = {};
@@ -303,7 +318,7 @@ export async function GET(request) {
         };
       });
 
-      return NextResponse.json({
+      const monthlyPayload = {
         report_type: 'monthly_summary',
         month,
         year,
@@ -315,28 +330,27 @@ export async function GET(request) {
           net_change: totalMonthlyProduction - totalMonthlyDispatch,
         },
         data: dailySummary,
-      });
+      };
+      setCached(cacheKey, monthlyPayload, REPORTS_CACHE_TTL);
+      return NextResponse.json(monthlyPayload);
     }
 
     // 4. Model-wise Stock Report
     if (type === 'model_stock') {
-      // 1. Current stock per model
-      const { data: currentStock, error: stockErr } = await supabase
-        .from('current_stock')
-        .select('*');
+      const [stockRes, txRes] = await Promise.all([
+        supabase.from('current_stock').select('*'),
+        supabase.from('stock_transactions').select('model_id, transaction_type, quantity'),
+      ]);
 
-      if (stockErr) {
-        return NextResponse.json({ error: stockErr.message }, { status: 400 });
+      if (stockRes.error) {
+        return NextResponse.json({ error: stockRes.error.message }, { status: 400 });
+      }
+      if (txRes.error) {
+        return NextResponse.json({ error: txRes.error.message }, { status: 400 });
       }
 
-      // 2. All-time stock transactions for cumulative production & dispatch stats
-      const { data: txs, error: txErr } = await supabase
-        .from('stock_transactions')
-        .select('model_id, transaction_type, quantity');
-
-      if (txErr) {
-        return NextResponse.json({ error: txErr.message }, { status: 400 });
-      }
+      const currentStock = stockRes.data;
+      const txs = txRes.data;
 
       const txStats = {};
       (txs || []).forEach((tx) => {
@@ -373,11 +387,13 @@ export async function GET(request) {
         };
       });
 
-      return NextResponse.json({
+      const modelStockPayload = {
         report_type: 'model_stock',
         generated_at: new Date().toISOString(),
         data: modelStockList,
-      });
+      };
+      setCached(cacheKey, modelStockPayload, REPORTS_CACHE_TTL);
+      return NextResponse.json(modelStockPayload);
     }
 
     // 5. Production Report (Unified with Date, Thekedar & Model filters)
@@ -410,7 +426,7 @@ export async function GET(request) {
         )
       `;
 
-      let query = supabase
+      let prodQuery = supabase
         .from('production_entries')
         .select(`contractor_name, ${selectQuery}`)
         .gte('production_date', startDate)
@@ -419,10 +435,16 @@ export async function GET(request) {
         .order('created_at', { ascending: false });
 
       if (selectedModelId !== 'all') {
-        query = query.eq('model_id', selectedModelId);
+        prodQuery = prodQuery.eq('model_id', selectedModelId);
       }
 
-      let { data, error } = await query;
+      const [prodMainRes, modelsRes, contractorsRes] = await Promise.all([
+        prodQuery,
+        supabase.from('cooler_models').select('id, name, code').order('name'),
+        supabase.from('contractors').select('name').eq('is_active', true),
+      ]);
+
+      let { data, error } = prodMainRes;
 
       // Fallback if contractor_name column doesn't exist yet
       if (error && (error.message?.includes('contractor_name') || error.code === 'PGRST204')) {
@@ -531,44 +553,17 @@ export async function GET(request) {
         byModel[r.model_code].entry_count += 1;
       });
 
-      // Fetch active cooler models for catalog dropdown
-      let catalogModels = [];
-      try {
-        const modelsRes = await supabase
-          .from('cooler_models')
-          .select('id, name, code')
-          .order('name');
-        if (modelsRes.data) {
-          catalogModels = modelsRes.data;
-        }
-      } catch (err) {
-        console.warn('Could not fetch cooler_models for reports filter:', err.message);
-      }
+      const catalogModels = modelsRes?.data || [];
 
-      // Gather all known contractor names (recent entries + filtered records)
       const allKnownThekedars = new Set(plantThekedarsSet);
       allThekedarsSet.forEach((t) => allKnownThekedars.add(t));
-
-      try {
-        const { data: recentContractors } = await supabase
-          .from('production_entries')
-          .select('contractor_name, remarks')
-          .order('created_at', { ascending: false })
-          .limit(300);
-
-        (recentContractors || []).forEach((r) => {
-          const name = extractThekedar(r);
-          if (name && name !== 'General Assembly') {
-            allKnownThekedars.add(name);
-          }
-        });
-      } catch (e) {
-        // Ignore fallback error
-      }
+      (contractorsRes?.data || []).forEach((c) => {
+        if (c.name && c.name.trim()) allKnownThekedars.add(c.name.trim());
+      });
 
       const finalizedThekedars = Array.from(allKnownThekedars).sort();
 
-      return NextResponse.json({
+      const productionPayload = {
         report_type: 'production',
         start_date: startDate,
         end_date: endDate,
@@ -588,7 +583,9 @@ export async function GET(request) {
           thekedar_list: finalizedThekedars,
         },
         data: filteredRows,
-      });
+      };
+      setCached(cacheKey, productionPayload, REPORTS_CACHE_TTL);
+      return NextResponse.json(productionPayload);
     }
 
     return NextResponse.json(

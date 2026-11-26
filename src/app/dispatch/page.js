@@ -157,22 +157,39 @@ export default function DispatchListPage() {
   const [editSecondPlant, setEditSecondPlant] = useState('');
   const [editThirdPlant, setEditThirdPlant] = useState('');
   const [editItems, setEditItems] = useState([]);
-  const [availableModels, setAvailableModels] = useState([]);
+  const [availableModels, setAvailableModels] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_catalog_models');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [newItemModelId, setNewItemModelId] = useState('');
   const [newItemQty, setNewItemQty] = useState(1);
   const [newItemPlant, setNewItemPlant] = useState('E41 G2');
   const [savingDispatchEdit, setSavingDispatchEdit] = useState(false);
 
-  // Defer cooler models catalog preload until after initial page rendering
+  // Defer cooler models catalog preload (uses lightweight view=catalog to skip stock calculations)
   useEffect(() => {
+    if (availableModels.length > 0) return;
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch('/api/models?view=all');
+        const res = await fetch('/api/models?active_only=true&view=catalog');
         if (res.ok) {
           const json = await res.json();
           const list = json.models || json.data || (Array.isArray(json) ? json : []);
           if (Array.isArray(list) && list.length > 0) {
             setAvailableModels(list);
+            if (typeof window !== 'undefined') {
+              try {
+                sessionStorage.setItem('jospo_cached_catalog_models', JSON.stringify(list));
+              } catch (e) {}
+            }
             return;
           }
         }
@@ -183,42 +200,24 @@ export default function DispatchListPage() {
       } catch (err) {
         console.warn('Failed to preload models for edit modal:', err);
       }
-    }, 800);
+    }, 500);
     return () => clearTimeout(timer);
-  }, [supabase]);
+  }, [supabase, availableModels.length]);
 
-  // Fetch dispatches (limited to recent 150 records for instant loading)
+  // Fetch dispatches via cached server endpoint (limited to recent 150 records)
   const fetchDispatches = useCallback(async (isRefresh = false) => {
     try {
-      if (isRefresh) setRefreshing(true);
+      const hasCached = dispatches.length > 0;
+      if (isRefresh || hasCached) setRefreshing(true);
       else setLoading(true);
 
-      const { data, error } = await supabase
-        .from('dispatches')
-        .select(`
-          *,
-          dispatch_items(
-            *,
-            cooler_models(
-              id,
-              name,
-              code,
-              qr_data
-            )
-          ),
-          employees!dispatches_employee_id_fkey(
-            name
-          ),
-          cancelled_by_employee:employees!dispatches_cancelled_by_fkey(
-            name
-          )
-        `)
-        .order('created_at', { ascending: false })
-        .limit(150);
+      const res = await fetch(`/api/dispatch?limit=150${isRefresh ? '&refresh=true' : ''}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to load dispatches');
 
-      if (error) throw error;
-      setDispatches(data || []);
-      if (typeof window !== 'undefined' && data) {
+      const data = json.data || [];
+      setDispatches(data);
+      if (typeof window !== 'undefined') {
         try {
           sessionStorage.setItem('jospo_cached_dispatches', JSON.stringify(data));
         } catch (e) {}
@@ -230,11 +229,11 @@ export default function DispatchListPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [supabase, showToast]);
+  }, [showToast, dispatches.length]);
 
   useEffect(() => {
-    fetchDispatches();
-  }, [fetchDispatches]);
+    fetchDispatches(false);
+  }, []);
 
   // Toggle row expansion
   const toggleRowExpansion = (dispatchId) => {

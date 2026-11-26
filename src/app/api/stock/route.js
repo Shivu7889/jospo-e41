@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getTodayIST } from '@/lib/date';
+import { getCached, setCached, invalidateCache } from '@/lib/serverCache';
 import {
   normalizePlant,
   isOwnerUser,
@@ -11,12 +12,11 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-// Server-side in-memory cache for stock (TTL: 10s)
-const stockCache = new Map();
-const STOCK_CACHE_TTL = 10 * 1000;
+// Server-side in-memory cache for stock (TTL: 20s, invalidated immediately on writes)
+const STOCK_CACHE_TTL = 20 * 1000;
 
 export function clearStockCache() {
-  stockCache.clear();
+  invalidateCache('stock_', 'dashboard_', 'reports_', 'dispatch_');
 }
 
 /**
@@ -47,10 +47,10 @@ export async function GET(request) {
       : normalizePlant(employee?.plant);
 
     const cacheKey = `stock_${targetPlant}_${modelIdFilter || 'all'}`;
-    if (!forceRefresh && stockCache.has(cacheKey)) {
-      const cached = stockCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        return NextResponse.json(cached.data, {
+    if (!forceRefresh) {
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached, {
           headers: { 'X-Cache': 'HIT' },
         });
       }
@@ -223,11 +223,7 @@ export async function GET(request) {
       timestamp: new Date().toISOString(),
     };
 
-    if (stockCache.size > 50) stockCache.clear();
-    stockCache.set(cacheKey, {
-      data: resultPayload,
-      expiresAt: Date.now() + STOCK_CACHE_TTL,
-    });
+    setCached(cacheKey, resultPayload, STOCK_CACHE_TTL);
 
     return NextResponse.json(resultPayload, { status: 200 });
   } catch (err) {

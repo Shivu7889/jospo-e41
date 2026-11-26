@@ -106,12 +106,29 @@ export default function ModelsPage() {
     setQrManuallyEdited(true);
   };
 
-  // Fetch models from API
+  // Fetch models from API (with SWR sessionStorage preview)
   const fetchModels = useCallback(async (silent = false) => {
+    const plantParam = isOwnerConsolidated ? '' : `&for_plant=${encodeURIComponent(activePlant)}`;
+    const swrKey = `jospo_cached_models_page_${activePlant}_${filterActiveOnly}`;
+    let hasSwr = false;
+
+    if (!silent && typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem(swrKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setModels(parsed);
+            setLoading(false);
+            hasSwr = true;
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
-      if (!silent) setLoading(true);
-      const plantParam = isOwnerConsolidated ? '' : `&for_plant=${encodeURIComponent(activePlant)}`;
-      const url = `/api/models?active_only=${filterActiveOnly}${plantParam}`;
+      if (!silent && !hasSwr) setLoading(true);
+      const url = `/api/models?active_only=${filterActiveOnly}${plantParam}${silent ? '&refresh=true' : ''}`;
       const res = await fetch(url);
       const data = await res.json();
 
@@ -119,7 +136,13 @@ export default function ModelsPage() {
         throw new Error(data.error || 'Failed to load cooler models');
       }
 
-      setModels(data.models || []);
+      const list = data.models || [];
+      setModels(list);
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem(swrKey, JSON.stringify(list));
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Error fetching models:', err);
       showToast(err.message || 'Error loading models', 'error');

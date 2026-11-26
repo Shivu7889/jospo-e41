@@ -104,131 +104,43 @@ export default function DashboardPage() {
       }
       setError(null);
 
-      const supabase = getSupabase();
-      const todayStr = getTodayIST();
+      const res = await fetch(
+        `/api/dashboard?plant=${encodeURIComponent(activePlant)}${isRefresh ? '&refresh=true' : ''}`
+      );
+      const data = await res.json();
 
-      let fetchedStats = {
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not load dashboard data');
+      }
+
+      const fetchedStats = data.stats || {
         total_production_today: 0,
         total_dispatch_today: 0,
         total_stock: 0,
         pending_dispatches: 0,
         total_models: 0,
       };
+      const fetchedBreakdown = data.plantBreakdown || null;
+      const fetchedProd = Array.isArray(data.todayProduction) ? data.todayProduction : [];
+      const fetchedRecent = Array.isArray(data.recentDispatches) ? data.recentDispatches : [];
 
-      // Prepare pending drafts count query
-      let pendingQuery = supabase
-        .from('dispatches')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'draft');
-
-      if (activePlant !== ALL_PLANTS_ID) {
-        pendingQuery = pendingQuery.eq('from_location', activePlant);
-      }
-
-      // Prepare recent dispatches query (last 5)
-      let dispQuery = supabase
-        .from('dispatches')
-        .select(`
-          id,
-          vehicle_number,
-          from_location,
-          destination,
-          destination_plant,
-          transfer_status,
-          dispatch_date,
-          status,
-          created_at,
-          dispatch_items (
-            quantity,
-            cooler_models (name, code)
-          )
-        `)
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (activePlant !== ALL_PLANTS_ID) {
-        dispQuery = dispQuery.eq('from_location', activePlant);
-      }
-
-      // Execute all 4 independent data sources in parallel (cuts dashboard load time by up to 75%)
-      const [stockResult, pendingResult, prodResult, dispResult] = await Promise.allSettled([
-        fetch(`/api/stock?plant=${encodeURIComponent(activePlant)}`).then((r) => (r.ok ? r.json() : null)),
-        pendingQuery,
-        fetch(`/api/production?date=${todayStr}&plant=${encodeURIComponent(activePlant)}`).then((r) => (r.ok ? r.json() : null)),
-        dispQuery,
-      ]);
-
-      // 1. Process Stock API result
-      if (stockResult.status === 'fulfilled' && stockResult.value?.success && stockResult.value?.stats) {
-        const stockJson = stockResult.value;
-        fetchedStats = {
-          total_production_today: stockJson.stats.todayProduction ?? 0,
-          total_dispatch_today: stockJson.stats.todayDispatch ?? 0,
-          total_stock: stockJson.stats.totalStock ?? 0,
-          pending_dispatches: 0,
-          total_models: stockJson.stats.activeModelsCount ?? 0,
-        };
-        if (activePlant === ALL_PLANTS_ID && stockJson.currentStock) {
-          const totals = { 'E41 G2': 0, 'D4': 0, 'C116': 0 };
-          stockJson.currentStock.forEach((m) => {
-            if (m.plant_breakdown) {
-              totals['E41 G2'] += m.plant_breakdown['E41 G2'] || 0;
-              totals['D4'] += m.plant_breakdown['D4'] || 0;
-              totals['C116'] += m.plant_breakdown['C116'] || 0;
-            }
-          });
-          setPlantBreakdown(totals);
-        } else {
-          setPlantBreakdown(null);
-        }
-      }
-
-      // 2. Process Pending Drafts count
-      if (pendingResult.status === 'fulfilled') {
-        const count = pendingResult.value.count || 0;
-        fetchedStats.pending_dispatches = count;
-      }
       setStats(fetchedStats);
+      setPlantBreakdown(fetchedBreakdown);
+      setTodayProduction(fetchedProd);
+      setRecentDispatches(fetchedRecent);
 
-      // 3. Process Production API result
-      if (prodResult.status === 'fulfilled' && prodResult.value?.success && prodResult.value?.entries) {
-        const grouped = {};
-        prodResult.value.entries.forEach((entry) => {
-          const code = entry.model_code || 'Unknown';
-          if (!grouped[code]) {
-            grouped[code] = {
-              model_name: entry.model_name || code,
-              model_code: code,
-              total_quantity: 0,
-              entry_count: 0,
-            };
-          }
-          grouped[code].total_quantity += entry.quantity || 0;
-          grouped[code].entry_count += 1;
-        });
-        setTodayProduction(Object.values(grouped));
-      }
-
-      // 4. Process Recent Dispatches
-      let processedRecent = [];
-      if (dispResult.status === 'fulfilled' && dispResult.value?.data) {
-        processedRecent = dispResult.value.data.map((d) => ({
-          ...d,
-          total_quantity: (d.dispatch_items || []).reduce((sum, item) => sum + (item.quantity || 0), 0),
-        }));
-        setRecentDispatches(processedRecent);
-      }
-
-      // 5. Cache snapshot to sessionStorage for instant 0ms subsequent renders
+      // Cache snapshot to sessionStorage for instant 0ms subsequent renders
       if (typeof window !== 'undefined') {
         try {
-          const prodList = prodResult.status === 'fulfilled' && prodResult.value?.entries ? Object.values(grouped || {}) : [];
-          sessionStorage.setItem('jospo_dashboard_cache', JSON.stringify({
-            stats: fetchedStats,
-            plantBreakdown: plantBreakdown || null,
-            todayProduction: prodList,
-            recentDispatches: processedRecent,
-          }));
+          sessionStorage.setItem(
+            'jospo_dashboard_cache',
+            JSON.stringify({
+              stats: fetchedStats,
+              plantBreakdown: fetchedBreakdown,
+              todayProduction: fetchedProd,
+              recentDispatches: fetchedRecent,
+            })
+          );
         } catch (e) {}
       }
     } catch (err) {

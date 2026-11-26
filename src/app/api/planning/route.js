@@ -2,13 +2,15 @@ import { NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { createAdminSupabase } from '@/lib/supabase-server';
 import { normalizePlant, resolveModelManufacturingPlant, ALL_PLANTS_ID } from '@/lib/plants';
+import { getCached, setCached, invalidateCache } from '@/lib/serverCache';
 
 export const dynamic = 'force-dynamic';
+const PLANNING_CACHE_TTL = 15 * 1000;
 
 /**
  * GET /api/planning
  * Fetch dispatch plans with planned items, plant breakdown, and live loaded counts
- * Query params: date, plant, status
+ * Query params: date, plant, status, id
  */
 export async function GET(request) {
   try {
@@ -21,6 +23,16 @@ export async function GET(request) {
     const dateParam = searchParams.get('date');
     const plantParam = searchParams.get('plant');
     const statusParam = searchParams.get('status');
+    const idParam = searchParams.get('id');
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    const cacheKey = `planning_${idParam || ''}_${dateParam || ''}_${plantParam || ''}_${statusParam || ''}`;
+    if (!forceRefresh) {
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached, { headers: { 'X-Cache': 'HIT' } });
+      }
+    }
 
     let query = adminDb
       .from('dispatch_plans')
@@ -52,7 +64,12 @@ export async function GET(request) {
         )
       `)
       .order('priority', { ascending: false }) // urgent/high first
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (idParam) {
+      query = query.eq('id', idParam);
+    }
 
     if (dateParam && dateParam !== 'ALL') {
       query = query.eq('plan_date', dateParam);
@@ -161,11 +178,14 @@ export async function GET(request) {
       });
     }
 
-    return NextResponse.json({
+    const planningPayload = {
       success: true,
       plans: filteredPlans,
       total: filteredPlans.length,
-    });
+    };
+    setCached(cacheKey, planningPayload, PLANNING_CACHE_TTL);
+
+    return NextResponse.json(planningPayload);
   } catch (error) {
     console.error('API /api/planning GET error:', error);
     return NextResponse.json(
@@ -325,6 +345,8 @@ export async function POST(request) {
 
     if (itemsError) throw itemsError;
 
+    invalidateCache('planning_');
+
     return NextResponse.json(
       {
         success: true,
@@ -431,6 +453,8 @@ export async function PATCH(request) {
       }
     }
 
+    invalidateCache('planning_');
+
     return NextResponse.json({
       success: true,
       message: 'Dispatch plan updated successfully',
@@ -519,6 +543,8 @@ export async function DELETE(request) {
     }
 
     if (delErr) throw delErr;
+
+    invalidateCache('planning_');
 
     return NextResponse.json({
       success: true,

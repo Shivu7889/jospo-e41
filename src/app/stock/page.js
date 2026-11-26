@@ -86,10 +86,32 @@ export default function StockPage() {
 
   const [stockSearchQuery, setStockSearchQuery] = useState('');
 
-  // Stock Ledger State
+  // Stock Ledger State (with SWR instant cache)
   const [ledgerOpen, setLedgerOpen] = useState(true);
-  const [ledgerEntries, setLedgerEntries] = useState([]);
-  const [loadingLedger, setLoadingLedger] = useState(true);
+  const [ledgerEntries, setLedgerEntries] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_ledger');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed.entries) && parsed.entries.length > 0) return parsed.entries;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [loadingLedger, setLoadingLedger] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_ledger');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed.entries) && parsed.entries.length > 0) return false;
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
 
   // Ledger Filter States
   const [selectedModel, setSelectedModel] = useState('');
@@ -98,7 +120,18 @@ export default function StockPage() {
   const [endDate, setEndDate] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
-  const [totalLedgerCount, setTotalLedgerCount] = useState(0);
+  const [totalLedgerCount, setTotalLedgerCount] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_stock_ledger');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (typeof parsed.total === 'number') return parsed.total;
+        }
+      } catch (e) {}
+    }
+    return 0;
+  });
 
   // Active models for dropdown
   const [availableModels, setAvailableModels] = useState(() => {
@@ -153,14 +186,14 @@ export default function StockPage() {
     }
   }, [activePlant, showToast]);
 
-  // 2. Fetch Stock Ledger
+  // 2. Fetch Stock Ledger (uses count: 'estimated' to avoid full-table sequential scan overhead)
   const fetchStockLedger = useCallback(async () => {
     try {
-      setLoadingLedger(true);
+      if (ledgerEntries.length === 0) setLoadingLedger(true);
 
       let query = supabase
         .from('stock_ledger')
-        .select('*', { count: 'exact' })
+        .select('*', { count: 'estimated' })
         .order('created_at', { ascending: false });
 
       if (activePlant && activePlant !== ALL_PLANTS_ID) {
@@ -206,7 +239,7 @@ export default function StockPage() {
             reference_id,
             cooler_models (name, code),
             employees (name)
-          `, { count: 'exact' })
+          `, { count: 'estimated' })
           .order('created_at', { ascending: false });
 
         if (activePlant && activePlant !== ALL_PLANTS_ID) {
@@ -228,15 +261,23 @@ export default function StockPage() {
             employee_name: tx.employees?.name || 'Employee',
             reference_id: tx.reference_id,
           }));
+          const exactOrEst = page === 1 && transformed.length < pageSize ? transformed.length : (rawCount || transformed.length);
           setLedgerEntries(transformed);
-          setTotalLedgerCount(rawCount || transformed.length);
+          setTotalLedgerCount(exactOrEst);
           return;
         }
         throw error;
       }
 
-      setLedgerEntries(data || []);
-      setTotalLedgerCount(count || (data ? data.length : 0));
+      const rows = data || [];
+      const resolvedTotal = page === 1 && rows.length < pageSize ? rows.length : (count || rows.length);
+      setLedgerEntries(rows);
+      setTotalLedgerCount(resolvedTotal);
+      if (typeof window !== 'undefined' && page === 1 && !selectedModel && !selectedType && !startDate && !endDate) {
+        try {
+          sessionStorage.setItem('jospo_cached_stock_ledger', JSON.stringify({ entries: rows, total: resolvedTotal }));
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Error fetching ledger:', err);
       showToast('Could not load stock transaction ledger', 'error');
@@ -470,12 +511,14 @@ export default function StockPage() {
       if (typeof window !== 'undefined') {
         sessionStorage.removeItem('jospo_cached_stock_list');
         sessionStorage.removeItem('jospo_cached_stock_stats');
+        sessionStorage.removeItem('jospo_cached_stock_ledger');
         sessionStorage.removeItem('jospo_dashboard_cache');
       }
 
       showToast(data.message || 'Stock adjustment recorded successfully', 'success');
       setAdjustTargetItem(null);
-      await Promise.all([
+      setSubmittingAdjust(false);
+      Promise.all([
         fetchStockOverview(true),
         fetchStockLedger(),
       ]);

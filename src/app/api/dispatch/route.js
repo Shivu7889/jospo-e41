@@ -5,8 +5,10 @@ import { formatDispatchRemarks } from '@/lib/dispatch';
 import { normalizePlant } from '@/lib/plants';
 import { createAdminSupabase } from '@/lib/supabase-server';
 import { clearStockCache } from '@/app/api/stock/route';
+import { getCached, setCached, invalidateCache } from '@/lib/serverCache';
 
 export const dynamic = 'force-dynamic';
+const DISPATCH_CACHE_TTL = 10 * 1000;
 
 // GET: List dispatches with items, models, and employee info
 export async function GET(request) {
@@ -14,13 +16,24 @@ export async function GET(request) {
     const auth = await authenticateRequest();
     if (auth.error) return auth.error;
     const { supabase } = auth;
+    const adminDb = createAdminSupabase() || supabase;
     const { searchParams } = new URL(request.url);
 
     const status = searchParams.get('status');
     const dateFrom = searchParams.get('date_from');
     const dateTo = searchParams.get('date_to');
+    const limitParam = Math.min(parseInt(searchParams.get('limit') || '150', 10) || 150, 300);
+    const forceRefresh = searchParams.get('refresh') === 'true';
 
-    let query = supabase
+    const cacheKey = `dispatch_${status || 'all'}_${dateFrom || ''}_${dateTo || ''}_${limitParam}`;
+    if (!forceRefresh) {
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached, { headers: { 'X-Cache': 'HIT' } });
+      }
+    }
+
+    let query = adminDb
       .from('dispatches')
       .select(`
         *,
@@ -28,6 +41,8 @@ export async function GET(request) {
           id,
           quantity,
           model_id,
+          loaded_plant,
+          loaded_by,
           cooler_models(
             id,
             name,
@@ -46,7 +61,8 @@ export async function GET(request) {
           name
         )
       `)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(limitParam);
 
     if (status && status !== 'all') {
       query = query.eq('status', status);
@@ -58,13 +74,55 @@ export async function GET(request) {
       query = query.lte('dispatch_date', dateTo);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    if (error && (error.message?.includes('loaded_plant') || error.code === 'PGRST204')) {
+      let fbQuery = adminDb
+        .from('dispatches')
+        .select(`
+          *,
+          dispatch_items(
+            id,
+            quantity,
+            model_id,
+            cooler_models(
+              id,
+              name,
+              code,
+              qr_data
+            )
+          ),
+          employees!dispatches_employee_id_fkey(
+            id,
+            name,
+            email,
+            role
+          ),
+          cancelled_by_employee:employees!dispatches_cancelled_by_fkey(
+            id,
+            name
+          )
+        `)
+        .order('created_at', { ascending: false })
+        .limit(limitParam);
+
+      if (status && status !== 'all') fbQuery = fbQuery.eq('status', status);
+      if (dateFrom) fbQuery = fbQuery.gte('dispatch_date', dateFrom);
+      if (dateTo) fbQuery = fbQuery.lte('dispatch_date', dateTo);
+
+      const fbRes = await fbQuery;
+      data = fbRes.data;
+      error = fbRes.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    return NextResponse.json({ data: data || [] }, { status: 200 });
+    const payload = { data: data || [] };
+    setCached(cacheKey, payload, DISPATCH_CACHE_TTL);
+
+    return NextResponse.json(payload, { status: 200 });
   } catch (err) {
     console.error('API /dispatch GET error:', err);
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
@@ -133,21 +191,24 @@ export async function POST(request) {
       }
     }
 
-    // 2. If auto_confirm is requested, verify model existence (negative stock allowed)
+    // 2. If auto_confirm is requested, verify model existence in ONE batch query (negative stock allowed)
     if (auto_confirm) {
-      for (const item of items) {
-        const { data: stockData, error: stockErr } = await supabase
-          .from('cooler_models')
-          .select('id, name, code')
-          .eq('id', item.model_id)
-          .single();
+      const uniqueModelIds = Array.from(new Set(items.map((it) => it.model_id)));
+      const { data: validModels, error: modelsErr } = await supabase
+        .from('cooler_models')
+        .select('id')
+        .in('id', uniqueModelIds);
 
-        if (stockErr || !stockData) {
-          return NextResponse.json(
-            { error: `Could not verify model ID: ${item.model_id}` },
-            { status: 400 }
-          );
-        }
+      if (modelsErr) {
+        return NextResponse.json({ error: modelsErr.message }, { status: 400 });
+      }
+      const validSet = new Set((validModels || []).map((m) => m.id));
+      const missingId = uniqueModelIds.find((id) => !validSet.has(id));
+      if (missingId) {
+        return NextResponse.json(
+          { error: `Could not verify model ID: ${missingId}` },
+          { status: 400 }
+        );
       }
     }
 
@@ -306,6 +367,8 @@ export async function POST(request) {
         console.warn('Could not update dispatch_plans for plan_id:', plan_id, planErr);
       }
     }
+
+    invalidateCache('dispatch_', 'planning_');
 
     // 6. Return response
     return NextResponse.json(

@@ -28,7 +28,18 @@ export default function AdminPage() {
   const [activeSection, setActiveSection] = useState('users');
 
   // Loading states
-  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [loadingUsers, setLoadingUsers] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_employees');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return false;
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
   const [loadingModels, setLoadingModels] = useState(true);
   const [loadingAdjustments, setLoadingAdjustments] = useState(true);
   const [submittingUser, setSubmittingUser] = useState(false);
@@ -51,7 +62,18 @@ export default function AdminPage() {
   }, []);
 
   // Data states
-  const [employees, setEmployees] = useState([]);
+  const [employees, setEmployees] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = sessionStorage.getItem('jospo_cached_employees');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [models, setModels] = useState([]);
   const [stockMap, setStockMap] = useState({});
   const [recentAdjustments, setRecentAdjustments] = useState([]);
@@ -83,43 +105,50 @@ export default function AdminPage() {
   // 1. Fetch Employees
   const fetchEmployees = useCallback(async () => {
     try {
-      setLoadingUsers(true);
+      if (employees.length === 0) setLoadingUsers(true);
       const { data, error } = await supabase
         .from('employees')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setEmployees(data || []);
+      const list = data || [];
+      setEmployees(list);
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem('jospo_cached_employees', JSON.stringify(list));
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Error fetching employees:', err);
       showToast(err.message || 'Failed to load employees', 'error');
     } finally {
       setLoadingUsers(false);
     }
-  }, [supabase, showToast]);
+  }, [supabase, showToast, employees.length]);
 
-  // 2. Fetch Models & Current Stock for adjustmentPlant
-  const fetchModelsAndStock = useCallback(async (targetPlant = adjustmentPlant) => {
+  // 2. Fetch Models & Current Stock for adjustmentPlant (uses cached /api/stock unless forced)
+  const fetchModelsAndStock = useCallback(async (targetPlant = adjustmentPlant, forceRefresh = false) => {
     try {
       setLoadingModels(true);
-      // Fetch all active cooler models so full model roster is available to admin
-      const { data: modelsData, error: modelsError } = await supabase
-        .from('cooler_models')
-        .select('id, name, code, is_active, manufacturing_plant')
-        .eq('is_active', true)
-        .order('name', { ascending: true });
+      // Fetch models & cached plant stock in parallel instead of sequentially
+      const [modelsRes, stockRes] = await Promise.all([
+        supabase
+          .from('cooler_models')
+          .select('id, name, code, is_active, manufacturing_plant')
+          .eq('is_active', true)
+          .order('name', { ascending: true }),
+        fetch(`/api/stock?plant=${encodeURIComponent(targetPlant)}${forceRefresh ? '&refresh=true' : ''}`),
+      ]);
 
-      if (modelsError) {
-        console.warn('Could not fetch cooler_models with manufacturing_plant:', modelsError);
-      } else if (modelsData) {
-        setModels(modelsData);
+      if (modelsRes.error) {
+        console.warn('Could not fetch cooler_models with manufacturing_plant:', modelsRes.error);
+      } else if (modelsRes.data) {
+        setModels(modelsRes.data);
       }
 
-      // Fetch accurate plant-scoped stock from /api/stock
-      const res = await fetch(`/api/stock?plant=${encodeURIComponent(targetPlant)}&refresh=true`);
-      if (res.ok) {
-        const json = await res.json();
+      if (stockRes.ok) {
+        const json = await stockRes.json();
         if (json.success && json.currentStock) {
           const sm = {};
           json.currentStock.forEach((s) => {
@@ -433,9 +462,11 @@ export default function AdminPage() {
       setAdjustmentQuantity(1);
       setAdjustmentReason('');
 
-      // Refresh data
-      await fetchModelsAndStock(adjustmentPlant);
-      await fetchRecentAdjustments();
+      // Refresh data in parallel
+      await Promise.all([
+        fetchModelsAndStock(adjustmentPlant, true),
+        fetchRecentAdjustments(),
+      ]);
     } catch (err) {
       console.error('Error performing stock adjustment:', err);
       showToast(err.message || 'Failed to record stock adjustment', 'error');

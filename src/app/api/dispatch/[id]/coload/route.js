@@ -8,6 +8,7 @@ import {
   resolveDispatchType,
 } from '@/lib/dispatch';
 import { normalizePlant, isOwnerUser } from '@/lib/plants';
+import { clearStockCache } from '@/app/api/stock/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -333,6 +334,8 @@ export async function POST(request, { params }) {
         ? `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} is now FULLY LOADED (${totalVehicleQty} total units dispatched to party).`
         : `Successfully loaded ${addedQty} cooler(s) from ${loadingPlant} Plant! Vehicle ${dispatch.vehicle_number} has been dispatched to ${nextStopPlant} Plant for final loading (${totalVehicleQty} units loaded so far).`;
     }
+
+    clearStockCache();
 
     return NextResponse.json({
       success: true,
