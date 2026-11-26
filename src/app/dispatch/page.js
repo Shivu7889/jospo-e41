@@ -81,9 +81,9 @@ export default function DispatchListPage() {
   // Tabs: 'outward' (dispatches from this plant) vs 'inbound' (incoming inter-plant shipments)
   const [activeTab, setActiveTab] = useState('outward');
 
-  // Automatically switch back to 'outward' if activePlant does not have inbound enabled (e.g. D4, C116)
+  // Automatically switch back to 'outward' if inbound is disabled
   useEffect(() => {
-    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant) && activeTab === 'inbound') {
+    if (!isInboundEnabledForPlant(activePlant) && activeTab === 'inbound') {
       setActiveTab('outward');
     }
   }, [activePlant, activeTab]);
@@ -93,7 +93,7 @@ export default function DispatchListPage() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('tab') === 'inbound') {
-        if (activePlant === ALL_PLANTS_ID || isInboundEnabledForPlant(activePlant)) {
+        if (isInboundEnabledForPlant(activePlant)) {
           setActiveTab('inbound');
         }
       }
@@ -302,8 +302,8 @@ export default function DispatchListPage() {
 
   // Incoming vehicles waiting for secondary co-loading at this plant
   const incomingCoLoadVehicles = useMemo(() => {
-    // Only show if inbound is enabled for this plant (currently E41 G2 only)
-    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+    // Only show if inbound is enabled for this plant
+    if (!isInboundEnabledForPlant(activePlant)) {
       return [];
     }
 
@@ -326,8 +326,8 @@ export default function DispatchListPage() {
 
   // Inbound transfers list (confirmed local transfers received or in-transit to this plant)
   const filteredInboundTransfers = useMemo(() => {
-    // Only show inbound transfers for plants where inbound is enabled (currently E41 G2 only)
-    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+    // Only show inbound transfers if inbound is enabled
+    if (!isInboundEnabledForPlant(activePlant)) {
       return [];
     }
 
@@ -1079,7 +1079,7 @@ export default function DispatchListPage() {
             <span>Outward Dispatches ({filteredDispatches.length})</span>
           </button>
 
-          {(activePlant === ALL_PLANTS_ID || isInboundEnabledForPlant(activePlant)) && (
+          {isInboundEnabledForPlant(activePlant) && (
             <button
               type="button"
               onClick={() => setActiveTab('inbound')}

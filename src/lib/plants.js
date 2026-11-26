@@ -47,13 +47,14 @@ export const DEFAULT_PLANT_ID = 'E41 G2';
 
 /**
  * Manufacturing plants where Inbound Stock Transfer receipt & tracking is active.
- * Currently active ONLY for 'E41 G2' plant.
- * Other plants (D4, C116) will be enabled once physical receiving terminals are deployed.
+ * Currently disabled across all plants until multi-plant receiving terminals are set up.
  */
-export const INBOUND_ENABLED_PLANTS = ['E41 G2'];
+export const INBOUND_ENABLED_PLANTS = [];
 
 export function isInboundEnabledForPlant(plantId) {
+  if (INBOUND_ENABLED_PLANTS.length === 0) return false;
   if (!plantId) return false;
+  if (plantId === ALL_PLANTS_ID) return true;
   const normalized = normalizePlant(plantId);
   return INBOUND_ENABLED_PLANTS.includes(normalized);
 }

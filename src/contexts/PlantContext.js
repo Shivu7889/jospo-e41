@@ -94,8 +94,8 @@ export function PlantProvider({ children }) {
   // Fetch pending inbound transfers count for activePlant
   const fetchInboundTransfersCount = useCallback(async (forceRefresh = false) => {
     if (!employee) return;
-    // If activePlant is specified and does not have inbound enabled (e.g. D4, C116), do not show inbound count
-    if (activePlant !== ALL_PLANTS_ID && !isInboundEnabledForPlant(activePlant)) {
+    // Skip query completely if inbound tracking is disabled for this plant (or all plants)
+    if (!isInboundEnabledForPlant(activePlant)) {
       setInboundTransfersCount(0);
       return;
     }
