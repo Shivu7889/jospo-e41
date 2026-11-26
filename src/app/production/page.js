@@ -365,7 +365,8 @@ export default function ProductionPage() {
 
       showToast(data.message || 'Production entry updated successfully', 'success');
       setEditingEntry(null);
-      await fetchTodayLog(productionDate);
+      setSavingEdit(false);
+      fetchTodayLog(productionDate);
     } catch (err) {
       console.error('Error saving production edit:', err);
       showToast(err.message || 'Failed to update entry', 'error');
@@ -391,7 +392,8 @@ export default function ProductionPage() {
 
       showToast(data.message || 'Production entry deleted successfully', 'success');
       setDeletingEntry(null);
-      await fetchTodayLog(productionDate);
+      setDeleting(false);
+      fetchTodayLog(productionDate);
     } catch (err) {
       console.error('Error deleting production entry:', err);
       showToast(err.message || 'Failed to delete entry', 'error');
@@ -508,7 +510,8 @@ export default function ProductionPage() {
 
       showToast(data.message || `Production sheet for ${thekedarSheetEdit.thekedar} updated successfully!`, 'success');
       setThekedarSheetEdit(null);
-      await fetchTodayLog(productionDate);
+      setSavingSheetEdit(false);
+      fetchTodayLog(productionDate);
     } catch (err) {
       console.error('Error saving Thekedar production sheet:', err);
       showToast(err.message || 'Failed to update production sheet', 'error');
@@ -708,18 +711,24 @@ export default function ProductionPage() {
         } catch (e) {}
       }
 
+      // Optimistically prepend newly created entries into local log
+      if (Array.isArray(result.entries) && result.entries.length > 0) {
+        setLogEntries((prev) => [...result.entries, ...prev]);
+      }
+
       showToast(
         `Successfully logged ${totalQuantity} units under "${finalThekedar}" across ${validEntries.length} model(s)!`,
         'success'
       );
 
-      // Reset form rows & remarks & manpower (keep selected Thekedar for rapid consecutive batch logging)
+      // Reset form rows & remarks & manpower immediately (keep selected Thekedar for rapid consecutive batch logging)
       setRows([{ id: `item-${Date.now()}`, model_id: '', quantity: '' }]);
       setRemarks('');
       setManpower('');
+      setSubmitting(false);
 
-      // Refresh production log
-      await fetchTodayLog(productionDate);
+      // Refresh production log in background without blocking the UI
+      fetchTodayLog(productionDate);
     } catch (err) {
       console.error('Production submission error:', err);
       showToast(err.message || 'Error recording production', 'error');

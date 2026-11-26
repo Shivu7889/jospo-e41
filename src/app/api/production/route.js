@@ -271,48 +271,14 @@ export async function GET(request) {
  */
 export async function POST(request) {
   try {
-    const userSupabase = await createServerSupabase();
-    const adminSupabase = createAdminSupabase();
-    const supabase = adminSupabase || userSupabase;
+    // 1. Fast in-memory cached authentication (0ms on warm connection vs 1000ms+ cold)
+    const auth = await authenticateRequest({
+      allowedRoles: ['owner', 'admin', 'production'],
+    });
+    if (auth.error) return auth.error;
+    const { employee, supabase } = auth;
 
-    // 1. Authenticate user
-    const {
-      data: { user },
-      error: authError,
-    } = await userSupabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized. Please log in.' },
-        { status: 401 }
-      );
-    }
-
-    // 2. Validate employee & role
-    const { data: employee, error: empError } = await supabase
-      .from('employees')
-      .select('id, name, role, is_active')
-      .eq('id', user.id)
-      .single();
-
-    if (empError || !employee) {
-      return NextResponse.json(
-        { success: false, error: 'Employee record not found for this account.' },
-        { status: 403 }
-      );
-    }
-
-    if (!['owner', 'admin', 'production'].includes(employee.role)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Forbidden. Only Production, Admin, or Owner staff may log production entries.',
-        },
-        { status: 403 }
-      );
-    }
-
-    // 3. Parse payload
+    // 2. Parse payload
     const body = await request.json();
     const todayStr = getTodayIST();
     const defaultContractor = (body.contractor_name || body.thekedar_name || body.thekedar || '').trim();
@@ -332,6 +298,7 @@ export async function POST(request) {
         manpower: item.manpower !== undefined && item.manpower !== '' && !isNaN(Number(item.manpower))
           ? parseInt(item.manpower, 10)
           : defaultManpower,
+        plant: item.plant || body.plant,
       }));
     } else if (body.model_id) {
       rawItems = [
@@ -342,6 +309,7 @@ export async function POST(request) {
           remarks: body.remarks || null,
           contractor_name: defaultContractor,
           manpower: defaultManpower,
+          plant: body.plant,
         },
       ];
     } else {
@@ -351,7 +319,7 @@ export async function POST(request) {
       );
     }
 
-    // 4. Validate all items
+    // 3. Validate all items
     for (const item of rawItems) {
       if (!item.model_id) {
         return NextResponse.json(
@@ -370,25 +338,15 @@ export async function POST(request) {
       }
     }
 
-    // Fetch all cooler models referenced to verify they exist, are active, and belong to this plant
+    // 4. Fetch cooler models referenced to verify they exist, are active, and belong to this plant
     const modelIds = [...new Set(rawItems.map((i) => i.model_id))];
-    let modelsData = null;
-    const { data: mDataWithPlant, error: mErrWithPlant } = await supabase
+    const { data: modelsData, error: mErr } = await supabase
       .from('cooler_models')
       .select('id, name, code, is_active, description, manufacturing_plant')
       .in('id', modelIds);
 
-    if (mErrWithPlant && (mErrWithPlant.code === 'PGRST204' || mErrWithPlant.message?.includes('manufacturing_plant'))) {
-      const { data: fbData, error: fbErr } = await supabase
-        .from('cooler_models')
-        .select('id, name, code, is_active, description')
-        .in('id', modelIds);
-      if (fbErr || !fbData) throw new Error('Failed to verify cooler models.');
-      modelsData = fbData;
-    } else if (mErrWithPlant || !mDataWithPlant) {
+    if (mErr || !modelsData) {
       throw new Error('Failed to verify cooler models.');
-    } else {
-      modelsData = mDataWithPlant;
     }
 
     const modelsMap = Object.fromEntries(modelsData.map((m) => [m.id, m]));
@@ -418,21 +376,17 @@ export async function POST(request) {
         return NextResponse.json(
           {
             success: false,
-            error: `Model "${model.code}" is manufactured exclusively at plant "${modelMfgPlant}". Plant "${targetPlant}" cannot assemble or record production for this model. (Material must be transferred via dispatch).`,
+            error: `Model "${model.code}" is manufactured exclusively at plant "${modelMfgPlant}". Plant "${targetPlant}" cannot record production for this model. (Material must be transferred via dispatch).`,
           },
           { status: 400 }
         );
       }
     }
 
-    // 5. Insert production entries and create stock transactions
-    const createdEntries = [];
-
-    for (const item of rawItems) {
-      const model = modelsMap[item.model_id];
+    // 5. Prepare batch payloads for production entries
+    const insertPayloads = rawItems.map((item) => {
       const thekedarName = item.contractor_name || 'General Assembly';
 
-      // Ensure Thekedar and Manpower tags are in remarks for 100% backward-compatible persistence
       let combinedRemarks = item.remarks ? item.remarks.trim() : '';
       if (thekedarName && !combinedRemarks.includes(`[Thekedar: ${thekedarName}]`)) {
         combinedRemarks = combinedRemarks
@@ -447,98 +401,125 @@ export async function POST(request) {
         }
       }
 
-      const targetPlant = normalizePlant(item.plant || body.plant || employee.plant || 'E41 G2');
-      if (targetPlant) {
-        combinedRemarks = `[Plant: ${targetPlant}] ${combinedRemarks}`.trim();
+      const itemPlant = normalizePlant(item.plant || targetPlant);
+      if (itemPlant) {
+        combinedRemarks = `[Plant: ${itemPlant}] ${combinedRemarks}`.trim();
       }
 
-      const insertPayload = {
+      return {
         model_id: item.model_id,
         quantity: item.quantity,
         production_date: item.production_date,
         remarks: combinedRemarks || null,
         employee_id: employee.id,
         contractor_name: thekedarName,
-        plant: targetPlant,
+        plant: itemPlant,
         ...(item.manpower && item.manpower > 0 ? { manpower: item.manpower } : {}),
       };
+    });
 
-      const selectFields = `
-        id,
-        model_id,
-        quantity,
-        production_date,
-        remarks,
-        created_at,
-        cooler_models (id, name, code),
-        employees (id, name)
-      `;
+    const selectFields = `
+      id,
+      model_id,
+      quantity,
+      production_date,
+      remarks,
+      contractor_name,
+      manpower,
+      plant,
+      created_at,
+      cooler_models (id, name, code),
+      employees (id, name)
+    `;
 
-      // Try inserting with contractor_name, manpower, and plant columns
-      let { data: prodEntry, error: prodErr } = await supabase
+    // High-performance single batch insert for all production entries
+    let { data: insertedEntries, error: prodErr } = await supabase
+      .from('production_entries')
+      .insert(insertPayloads)
+      .select(selectFields);
+
+    // Fallback if schema cache issue on optional columns
+    if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.message?.includes('manpower') || prodErr.message?.includes('plant') || prodErr.code === 'PGRST204')) {
+      const fbPayloads = insertPayloads.map((p) => {
+        const c = { ...p };
+        delete c.contractor_name;
+        delete c.manpower;
+        delete c.plant;
+        return c;
+      });
+      const retryResult = await supabase
         .from('production_entries')
-        .insert(insertPayload)
-        .select(selectFields)
-        .single();
+        .insert(fbPayloads)
+        .select(selectFields);
+      insertedEntries = retryResult.data;
+      prodErr = retryResult.error;
+    }
 
-      // If contractor_name, manpower, or plant column doesn't exist yet, retry without them
-      if (prodErr && (prodErr.message?.includes('contractor_name') || prodErr.message?.includes('manpower') || prodErr.message?.includes('plant') || prodErr.code === 'PGRST204')) {
-        delete insertPayload.contractor_name;
-        delete insertPayload.manpower;
-        delete insertPayload.plant;
-        const retryResult = await supabase
-          .from('production_entries')
-          .insert(insertPayload)
-          .select(selectFields)
-          .single();
-        prodEntry = retryResult.data;
-        prodErr = retryResult.error;
-      }
+    if (prodErr || !insertedEntries || insertedEntries.length === 0) {
+      throw new Error(prodErr?.message || 'Failed to insert production entries');
+    }
 
-      if (prodErr || !prodEntry) {
-        throw new Error(prodErr?.message || 'Failed to insert production entry');
-      }
+    // 6. High-performance single batch insert for all corresponding stock transactions
+    const stockPayloads = insertedEntries.map((entry) => {
+      const model = modelsMap[entry.model_id] || { code: entry.cooler_models?.code || 'Units' };
+      const thekedarName = entry.contractor_name || 'General Assembly';
+      const itemPlant = entry.plant || targetPlant;
+      const stockNote = `Production: +${entry.quantity} units of ${model.code} at ${itemPlant} (Thekedar: ${thekedarName}${entry.manpower ? `, Manpower: ${entry.manpower}` : ''})`;
 
-      // Insert into stock_transactions with plant
-      const stockNote = `Production: +${item.quantity} units of ${model.code} at ${targetPlant} (Thekedar: ${thekedarName}${item.manpower ? `, Manpower: ${item.manpower}` : ''})`;
-
-      let stockPayload = {
-        model_id: item.model_id,
+      return {
+        model_id: entry.model_id,
         transaction_type: 'production',
-        quantity: item.quantity,
-        reference_id: prodEntry.id,
+        quantity: entry.quantity,
+        reference_id: entry.id,
         employee_id: employee.id,
-        plant: targetPlant,
+        plant: itemPlant,
         notes: stockNote,
       };
+    });
 
-      let { error: stockErr } = await supabase
-        .from('stock_transactions')
-        .insert(stockPayload);
+    let { error: stockErr } = await supabase
+      .from('stock_transactions')
+      .insert(stockPayloads);
 
-      if (stockErr && (stockErr.message?.includes('plant') || stockErr.code === 'PGRST204')) {
-        delete stockPayload.plant;
-        stockPayload.notes = `[Plant: ${targetPlant}] ${stockNote}`;
-        const fbStock = await supabase.from('stock_transactions').insert(stockPayload);
-        stockErr = fbStock.error;
-      }
-
-      if (stockErr) {
-        // Rollback production entry
-        await supabase.from('production_entries').delete().eq('id', prodEntry.id);
-        throw new Error(`Stock ledger error: ${stockErr.message}`);
-      }
-
-      createdEntries.push({
-        ...prodEntry,
-        contractor_name: thekedarName,
-        thekedar_name: thekedarName,
-        manpower: item.manpower || null,
-        model_name: prodEntry.cooler_models?.name || model.name,
-        model_code: prodEntry.cooler_models?.code || model.code,
-        employee_name: prodEntry.employees?.name || employee.name,
+    if (stockErr && (stockErr.message?.includes('plant') || stockErr.code === 'PGRST204')) {
+      const fbStockPayloads = stockPayloads.map((sp) => {
+        const c = { ...sp };
+        delete c.plant;
+        c.notes = `[Plant: ${sp.plant}] ${sp.notes}`;
+        return c;
       });
+      const fbStock = await supabase.from('stock_transactions').insert(fbStockPayloads);
+      stockErr = fbStock.error;
     }
+
+    if (stockErr) {
+      // Rollback inserted production entries if stock transactions failed
+      const insertedIds = insertedEntries.map((e) => e.id);
+      await supabase.from('production_entries').delete().in('id', insertedIds);
+      throw new Error(`Stock ledger error: ${stockErr.message}`);
+    }
+
+    // 7. Format clean response
+    const createdEntries = insertedEntries.map((entry) => {
+      const thekedar = entry.contractor_name || extractThekedar(entry) || 'General Assembly';
+      const manpower = entry.manpower || extractManpower(entry) || null;
+      const model = modelsMap[entry.model_id];
+
+      return {
+        ...entry,
+        contractor_name: thekedar,
+        thekedar_name: thekedar,
+        manpower,
+        display_remarks: (entry.remarks || '')
+          .replace(/\[(?:Thekedar|Contractor):\s*[^\]]+\]/gi, '')
+          .replace(/\[(?:Manpower|Workers|Labors|Labour):\s*[^\]]+\]/gi, '')
+          .replace(/\[Plant:\s*[^\]]+\]/gi, '')
+          .trim(),
+        model_name: entry.cooler_models?.name || model?.name || 'Cooler',
+        model_code: entry.cooler_models?.code || model?.code || 'N/A',
+        employee_name: entry.employees?.name || employee.name,
+      };
+    });
 
     clearProductionCache();
     clearStockCache();
@@ -570,40 +551,14 @@ export async function POST(request) {
  */
 export async function PUT(request) {
   try {
-    const userSupabase = await createServerSupabase();
-    const adminSupabase = createAdminSupabase();
-    const db = adminSupabase || userSupabase;
-
-    // 1. Authenticate user
-    const {
-      data: { user },
-      error: authErr,
-    } = await userSupabase.auth.getUser();
-
-    if (authErr || !user) {
-      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
-    }
-
-    // 2. Fetch employee details
-    const { data: employee, error: empErr } = await db
-      .from('employees')
-      .select('id, name, role, is_active')
-      .eq('id', user.id)
-      .single();
-
-    if (empErr || !employee) {
-      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
-    }
+    const auth = await authenticateRequest({
+      allowedRoles: ['owner', 'admin', 'production'],
+    });
+    if (auth.error) return auth.error;
+    const { employee, supabase: db } = auth;
 
     const isAdmin = employee.role === 'admin' || employee.role === 'owner';
     const isProduction = employee.role === 'production';
-
-    if (!isAdmin && !isProduction) {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden. Only Production or Admin staff may edit production sheets.' },
-        { status: 403 }
-      );
-    }
 
     const body = await request.json();
     const {
@@ -832,40 +787,14 @@ export async function PUT(request) {
  */
 export async function PATCH(request) {
   try {
-    const userSupabase = await createServerSupabase();
-    const adminSupabase = createAdminSupabase();
-    const db = adminSupabase || userSupabase;
-
-    // 1. Authenticate user
-    const {
-      data: { user },
-      error: authErr,
-    } = await userSupabase.auth.getUser();
-
-    if (authErr || !user) {
-      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
-    }
-
-    // 2. Fetch employee details
-    const { data: employee, error: empErr } = await userSupabase
-      .from('employees')
-      .select('id, name, role, is_active')
-      .eq('id', user.id)
-      .single();
-
-    if (empErr || !employee) {
-      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
-    }
+    const auth = await authenticateRequest({
+      allowedRoles: ['owner', 'admin', 'production'],
+    });
+    if (auth.error) return auth.error;
+    const { employee, supabase: db } = auth;
 
     const isAdmin = employee.role === 'admin' || employee.role === 'owner';
     const isProduction = employee.role === 'production';
-
-    if (!isAdmin && !isProduction) {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden. Only Production or Admin staff may edit production entries.' },
-        { status: 403 }
-      );
-    }
 
     const body = await request.json();
     const { id, ids, contractor_name, model_id, quantity, remarks, manpower } = body;
@@ -1156,40 +1085,14 @@ export async function PATCH(request) {
  */
 export async function DELETE(request) {
   try {
-    const userSupabase = await createServerSupabase();
-    const adminSupabase = createAdminSupabase();
-    const db = adminSupabase || userSupabase;
-
-    // 1. Authenticate user
-    const {
-      data: { user },
-      error: authErr,
-    } = await userSupabase.auth.getUser();
-
-    if (authErr || !user) {
-      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
-    }
-
-    // 2. Fetch employee details
-    const { data: employee, error: empErr } = await userSupabase
-      .from('employees')
-      .select('id, name, role, is_active')
-      .eq('id', user.id)
-      .single();
-
-    if (empErr || !employee) {
-      return NextResponse.json({ success: false, error: 'Employee account not found.' }, { status: 403 });
-    }
+    const auth = await authenticateRequest({
+      allowedRoles: ['owner', 'admin', 'production'],
+    });
+    if (auth.error) return auth.error;
+    const { employee, supabase: db } = auth;
 
     const isAdmin = employee.role === 'admin' || employee.role === 'owner';
     const isProduction = employee.role === 'production';
-
-    if (!isAdmin && !isProduction) {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden. Only Production or Admin staff may delete production entries.' },
-        { status: 403 }
-      );
-    }
 
     // Get entry ID from URL search params or request body
     const { searchParams } = new URL(request.url);
